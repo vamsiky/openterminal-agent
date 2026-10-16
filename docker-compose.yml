@@ -32,6 +32,10 @@ services:
       - API_URL=http://api:4000
       - API_KEY=${API_KEY:-}
       - API_KEY_FILE=/app/data/.api-key
+      # Required (with WEB_ALLOWED_HOSTS) before publishing port 3000 beyond
+      # 127.0.0.1 — see README > Security defaults.
+      - WEB_PASSWORD=${WEB_PASSWORD:-}
+      - WEB_ALLOWED_HOSTS=${WEB_ALLOWED_HOSTS:-}
     volumes:
       - terminal-data:/app/data:ro
     depends_on:

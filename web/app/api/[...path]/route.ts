@@ -6,7 +6,13 @@ import { getApiKey } from "@/lib/api-key";
 // must never reach the browser, only travel server-to-server.
 const API_URL = process.env.API_URL ?? "http://localhost:4000";
 
+// Requests only reach this handler after middleware.ts has checked the Host
+// header and, when configured, WEB_PASSWORD — that gate is what stands
+// between the network and the API key attached below.
 async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
+  if (path.some((segment) => segment === "." || segment === ".." || segment.includes("/"))) {
+    return NextResponse.json({ error: "invalid path" }, { status: 400 });
+  }
   const url = `${API_URL}/api/${path.join("/")}${req.nextUrl.search}`;
   const apiKey = getApiKey();
 
@@ -44,11 +50,5 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
   return proxy(req, (await ctx.params).path);
 }
 export async function DELETE(req: NextRequest, ctx: RouteContext) {
-  return proxy(req, (await ctx.params).path);
-}
-export async function PATCH(req: NextRequest, ctx: RouteContext) {
-  return proxy(req, (await ctx.params).path);
-}
-export async function PUT(req: NextRequest, ctx: RouteContext) {
   return proxy(req, (await ctx.params).path);
 }
