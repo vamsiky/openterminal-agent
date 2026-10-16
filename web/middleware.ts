@@ -9,7 +9,8 @@ import { NextRequest, NextResponse } from "next/server";
 //   calls this app from the victim's browser under that domain.
 // - WEB_ALLOWED_HOSTS (comma-separated hostnames) opts into serving more
 //   names, and then WEB_PASSWORD is required: a non-loopback name means
-//   other machines can reach the app.
+//   other machines can reach the app. The same goes for a loopback name
+//   that arrives through a proxy for a non-loopback client (see below).
 // - WEB_PASSWORD, when set, puts the whole app behind HTTP Basic auth (any
 //   username). The browser then sends it on every same-origin fetch too.
 
@@ -20,6 +21,16 @@ function hostname(host: string): string {
   // "[::1]:3000" -> "[::1]", "localhost:3000" -> "localhost"
   const end = host.startsWith("[") ? host.indexOf("]") + 1 : host.lastIndexOf(":");
   return (end > 0 ? host.slice(0, end) : host).toLowerCase();
+}
+
+// Next fills X-Forwarded-For with the socket address when the client sent
+// none, and keeps (and appends to) whatever a proxy in front sent. A local
+// tunnel or reverse proxy (ngrok with --host-header=rewrite, Caddy, etc.)
+// can therefore present Host: localhost for a remote caller; its
+// X-Forwarded-For entry is what gives that caller away.
+function fromLoopbackOnly(req: NextRequest): boolean {
+  const chain = (req.headers.get("x-forwarded-for") ?? "").split(",").map((a) => a.trim());
+  return chain.every((addr) => addr === "" || /^(::ffff:)?127\./.test(addr) || addr === "::1");
 }
 
 function extraHosts(): Set<string> {
@@ -56,14 +67,15 @@ function forbidden(message: string): NextResponse {
 
 export function middleware(req: NextRequest): NextResponse {
   const host = hostname(req.headers.get("host") ?? "");
-  const loopback = LOOPBACK_HOSTS.has(host);
-  if (!loopback && !extraHosts().has(host)) {
+  const loopbackHost = LOOPBACK_HOSTS.has(host);
+  if (!loopbackHost && !extraHosts().has(host)) {
     return forbidden(`Host "${host}" is not allowed. Add it to WEB_ALLOWED_HOSTS (and set WEB_PASSWORD).`);
   }
 
+  const loopback = loopbackHost && fromLoopbackOnly(req);
   const password = process.env.WEB_PASSWORD;
   if (!loopback && !password) {
-    return forbidden("WEB_PASSWORD must be set to serve this app beyond localhost.");
+    return forbidden("WEB_PASSWORD must be set to serve this app beyond localhost (including through a tunnel).");
   }
   if (password) {
     const provided = basicAuthPassword(req);
