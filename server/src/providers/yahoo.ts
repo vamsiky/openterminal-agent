@@ -48,6 +48,7 @@ export type Quote = {
   marketState: string | null;
   time: number | null;
   source: string;
+  asOf?: string; // ISO time this server fetched it (set in routes/market.ts)
 };
 
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };

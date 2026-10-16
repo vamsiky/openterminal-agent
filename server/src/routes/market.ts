@@ -199,7 +199,14 @@ async function getQuotes(symbols: string[]): Promise<yahoo.Quote[]> {
     }
   }
 
-  for (const [sym, q] of fetched) cacheStore(`quote:${sym}`, q, QUOTE_TTL);
+  // asOf records when this server fetched the quote. Cached and stale
+  // fallbacks keep their original asOf, so research notes can say how fresh
+  // the data behind them was.
+  const asOf = new Date().toISOString();
+  for (const [sym, q] of fetched) {
+    q.asOf = asOf;
+    cacheStore(`quote:${sym}`, q, QUOTE_TTL);
+  }
 
   const out: yahoo.Quote[] = [];
   for (const sym of symbols) {

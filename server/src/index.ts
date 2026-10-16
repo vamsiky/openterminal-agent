@@ -1,8 +1,13 @@
+import "./env.js";
 import express from "express";
 import cors from "cors";
 import { marketRouter } from "./routes/market.js";
 import { portfolioRouter } from "./routes/portfolio.js";
 import { aiRouter } from "./routes/ai.js";
+import { watchlistsRouter } from "./routes/watchlists.js";
+import { barsRouter } from "./routes/bars.js";
+import { startHistoryScheduler } from "./history/scheduler.js";
+import * as alpaca from "./providers/alpaca.js";
 import { allStats } from "./providers/registry.js";
 import { requireApiKey } from "./auth.js";
 import { rateLimit } from "./rateLimit.js";
@@ -37,6 +42,9 @@ app.use(express.json());
 app.use("/api", rateLimit({ windowMs: 60_000, max: 240 }), marketRouter);
 // Portfolio data and the paid AI endpoint require a shared secret; see auth.ts.
 app.use("/api/portfolios", requireApiKey, portfolioRouter);
+app.use("/api/watchlists", requireApiKey, watchlistsRouter);
+// Locally stored price history (history/); read-only, no provider calls.
+app.use("/api/bars", barsRouter);
 app.use(
   "/api/ai",
   requireApiKey,
@@ -50,6 +58,7 @@ app.get("/api/status", (_req, res) => {
     time: new Date().toISOString(),
     providers: allStats(),
     ai: Boolean(process.env.ANTHROPIC_API_KEY),
+    alpaca: alpaca.isConfigured(),
   });
 });
 
@@ -61,3 +70,5 @@ const HOST = process.env.API_HOST ?? "127.0.0.1";
 app.listen(PORT, HOST, () => {
   console.log(`OpenTerminal API listening on http://${HOST}:${PORT}`);
 });
+
+startHistoryScheduler();

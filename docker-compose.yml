@@ -18,6 +18,13 @@ services:
       # the web service (see README > Security defaults) — otherwise a caller
       # could forge X-Forwarded-For to dodge the /api/ai rate limit.
       - TRUST_PROXY=${TRUST_PROXY:-}
+      # Alpaca market data and the nightly history sync; set these in .env
+      # next to this file (see .env.example).
+      - ALPACA_API_KEY_ID=${ALPACA_API_KEY_ID:-}
+      - ALPACA_API_SECRET_KEY=${ALPACA_API_SECRET_KEY:-}
+      - ALPACA_FEED=${ALPACA_FEED:-sip}
+      - ALPACA_MAX_REQ_PER_MIN=${ALPACA_MAX_REQ_PER_MIN:-180}
+      - HISTORY_SYNC=${HISTORY_SYNC:-0}
     volumes:
       - terminal-data:/app/data
     restart: unless-stopped

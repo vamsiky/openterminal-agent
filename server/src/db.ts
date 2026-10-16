@@ -29,6 +29,17 @@ CREATE TABLE IF NOT EXISTS transactions (
   price REAL NOT NULL CHECK (price >= 0),
   executed_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS watchlists (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS watchlist_items (
+  watchlist_id INTEGER NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
+  symbol TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  PRIMARY KEY (watchlist_id, symbol)
+);
 `);
 
 const defaultPortfolio = db.prepare("SELECT id FROM portfolios LIMIT 1").get();

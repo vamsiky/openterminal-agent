@@ -126,6 +126,25 @@ npm run dev
 
 That's it — no `.env` file required to get a fully working terminal.
 
+### Optional: Alpaca market data and price history
+
+With an Alpaca market-data subscription, the API keeps its own price history for research and swing studies:
+
+- 10 years of daily bars for every US-listed stock and ETF (about 1–2 GB).
+- 2 years of 1-minute bars, including extended hours, for your watchlist, the S&P 500, the Nasdaq-100 and the market/sector ETFs (SPY, QQQ, XLK…). Expect roughly 15–30 GB in `data/minute_bars.db`.
+- Prices are split-adjusted. When a split lands, that symbol's history is re-downloaded so it never shows up as a fake swing.
+- Delisted symbols are kept (marked inactive) from the day the app first sees them.
+
+Setup:
+
+1. `cp .env.example .env` and fill in `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY`. `.env` is gitignored. Only Alpaca's market-data API is ever called, never the trading API.
+2. Run the first backfill: `npm run history -w server -- all`. It is resumable, so you can stop it and run it again. `npm run history -w server -- status` shows progress.
+3. To keep it current on an always-on machine, set `HISTORY_SYNC=1` in `.env`. The API then syncs every weekday after 18:00 New York time.
+
+The stored bars are served read-only at `/api/bars/daily/:symbol?from=YYYY-MM-DD&to=YYYY-MM-DD`, `/api/bars/minute/:symbol?from=YYYY-MM-DD` and `/api/bars/status`.
+
+S&P 500 membership comes from Wikipedia and Nasdaq-100 from Nasdaq's index list. If either source changes format, put one symbol per line in `data/universe/sp500.txt` or `data/universe/nasdaq100.txt` to override it.
+
 ### Optional: AI assistant
 
 ```bash
