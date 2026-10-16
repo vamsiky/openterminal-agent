@@ -36,6 +36,10 @@ services:
       # 127.0.0.1 — see README > Security defaults.
       - WEB_PASSWORD=${WEB_PASSWORD:-}
       - WEB_ALLOWED_HOSTS=${WEB_ALLOWED_HOSTS:-}
+      # Requests through the published port arrive from Docker's bridge
+      # gateway rather than 127.0.0.1; count those as local (Linux bridge
+      # ranges and Docker Desktop's VM network).
+      - WEB_LOCAL_PEERS=172.16.0.0/12,192.168.65.0/24
     volumes:
       - terminal-data:/app/data:ro
     depends_on:

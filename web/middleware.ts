@@ -28,9 +28,36 @@ function hostname(host: string): string {
 // tunnel or reverse proxy (ngrok with --host-header=rewrite, Caddy, etc.)
 // can therefore present Host: localhost for a remote caller; its
 // X-Forwarded-For entry is what gives that caller away.
+//
+// In Docker, a direct request through the port published on 127.0.0.1
+// arrives from the bridge gateway instead, so docker-compose.yml lists the
+// Docker address ranges in WEB_LOCAL_PEERS (comma-separated IPv4 CIDRs).
+function ipv4ToInt(addr: string): number | null {
+  const parts = addr.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return null;
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+function inCidr(addr: string, cidr: string): boolean {
+  const [base, bits] = cidr.split("/");
+  const ip = ipv4ToInt(addr);
+  const net = ipv4ToInt(base);
+  const len = Number(bits ?? 32);
+  if (ip === null || net === null || !Number.isInteger(len) || len < 0 || len > 32) return false;
+  const mask = len === 0 ? 0 : (~0 << (32 - len)) >>> 0;
+  return (ip & mask) === (net & mask);
+}
+
+function isLocalPeer(addr: string): boolean {
+  if (addr === "" || addr === "::1") return true;
+  const v4 = addr.replace(/^::ffff:/, "");
+  const localRanges = ["127.0.0.0/8", ...(process.env.WEB_LOCAL_PEERS ?? "").split(",").map((c) => c.trim())];
+  return localRanges.some((cidr) => cidr !== "" && inCidr(v4, cidr));
+}
+
 function fromLoopbackOnly(req: NextRequest): boolean {
   const chain = (req.headers.get("x-forwarded-for") ?? "").split(",").map((a) => a.trim());
-  return chain.every((addr) => addr === "" || /^(::ffff:)?127\./.test(addr) || addr === "::1");
+  return chain.every(isLocalPeer);
 }
 
 function extraHosts(): Set<string> {
