@@ -132,7 +132,8 @@ describe("live stream", () => {
     expect(sub).toMatchObject({ trades: expect.arrayContaining(["TSLA"]), quotes: expect.arrayContaining(["TSLA"]) });
 
     ws.receive([{ T: "t", S: "TSLA", p: 250, s: 1, t: "2026-10-16T15:00:00Z", c: ["@"] }]);
-    expect(feed.liveQuote("TSLA")).toMatchObject({ price: 250, live: true });
+    expect(feed.liveQuote("TSLA", "TSLA", new Date("2026-10-16T15:00:05Z"))).toMatchObject({ price: 250, live: true, marketState: "REGULAR" });
+    expect(feed.liveQuote("TSLA", "TSLA", new Date("2026-10-17T15:00:00Z"))).toMatchObject({ live: false, marketState: "CLOSED" });
 
     vi.unstubAllGlobals();
     delete process.env.ALPACA_API_KEY_ID;

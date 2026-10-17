@@ -11,14 +11,16 @@ function resolveApiKey(): string {
   if (existsSync(keyFile)) return readFileSync(keyFile, "utf8").trim();
   const generated = randomBytes(24).toString("hex");
   writeFileSync(keyFile, generated, { mode: 0o600 });
+  generatedKey = true;
   return generated;
 }
 
+let generatedKey = false;
 export const apiKey = resolveApiKey();
 
 if (!process.env.API_KEY) {
   console.warn(
-    `No API_KEY set — generated one and saved it to ${keyFile}. ` +
+    `No API_KEY set — ${generatedKey ? "generated one and saved it to" : "using the key in"} ${keyFile}. ` +
       "The bundled web app reads this file automatically for local use. " +
       "For any deployment reachable beyond localhost, set API_KEY explicitly " +
       "on both the api and web services and keep this file private."

@@ -208,8 +208,9 @@ export function isRealtime(symbol: string): boolean {
 export type LiveQuote = Quote & { live: boolean };
 
 /** A quote from memory, or null when nothing is known yet. `asOf` is the last trade's time. */
-export function liveQuote(symbol: string, requestedAs = symbol): LiveQuote | null {
+export function liveQuote(symbol: string, requestedAs = symbol, now = new Date()): LiveQuote | null {
   const e = entries.get(symbol);
+  const state = marketState(now);
   if (!e || e.price === null) return null;
   const change = e.prevClose !== null ? e.price - e.prevClose : null;
   return {
@@ -236,11 +237,12 @@ export function liveQuote(symbol: string, requestedAs = symbol): LiveQuote | nul
     sharesOutstanding: null,
     currency: "USD",
     exchange: null,
-    marketState: marketState(new Date()),
+    marketState: state,
     time: e.tradeTime ? Math.floor(Date.parse(e.tradeTime) / 1000) : null,
     source: "alpaca",
     asOf: e.tradeTime ?? undefined,
-    live: isRealtime(symbol),
+    // Overnight and on weekends nothing trades, so the price is "as of" the last trade.
+    live: state !== "CLOSED" && isRealtime(symbol),
   } as LiveQuote;
 }
 
