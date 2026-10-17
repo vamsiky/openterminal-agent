@@ -40,7 +40,7 @@ function fakeSource(data: Record<string, Bar[]>) {
 }
 
 describe("daily history sync", () => {
-  it("backfills new symbols, then resumes from the last stored day", async () => {
+  it("backfills new symbols, then resumes from the second-newest stored day", async () => {
     const data = { AAA: [day("2026-10-13", 10), day("2026-10-14", 11)] };
     const first = fakeSource(data);
     const r1 = await sync.syncDaily(["AAA"], { years: 1, now: new Date("2026-10-15T00:00:00Z"), source: first.source });
@@ -51,7 +51,7 @@ describe("daily history sync", () => {
     data.AAA.push(day("2026-10-15", 12));
     const second = fakeSource(data);
     await sync.syncDaily(["AAA"], { years: 1, now: new Date("2026-10-16T00:00:00Z"), source: second.source });
-    expect(second.calls[0].start).toBe("2026-10-14");
+    expect(second.calls[0].start).toBe("2026-10-13");
     expect(store.dailyBars("AAA", "2026-01-01", "2026-12-31").map((b) => b.close)).toEqual([10, 11, 12]);
   });
 
@@ -64,6 +64,32 @@ describe("daily history sync", () => {
     const r = await sync.syncDaily(["SPL"], { years: 1, now: new Date("2026-10-16T00:00:00Z"), source: after.source });
     expect(r.resplit).toEqual(["SPL"]);
     expect(store.dailyBars("SPL", "2026-01-01", "2026-12-31").map((b) => b.close)).toEqual([100, 105, 104]);
+    expect(store.minuteReloads()).toContain("SPL");
+  });
+
+  it("keeps the old bars when the split reload fails", async () => {
+    const before = fakeSource({ KEEP: [day("2026-10-13", 50), day("2026-10-14", 52)] });
+    await sync.syncDaily(["KEEP"], { years: 1, now: new Date("2026-10-15T00:00:00Z"), source: before.source });
+
+    let calls = 0;
+    const flaky = async function* (opts: { symbols: string[]; start: string }) {
+      if (++calls > 1) throw new Error("alpaca 503");
+      yield { KEEP: [day("2026-10-13", 25), day("2026-10-14", 26)].filter((b) => b.t >= opts.start) };
+    } as any;
+    const r = await sync.syncDaily(["KEEP"], { years: 1, now: new Date("2026-10-16T00:00:00Z"), source: flaky });
+    expect(r.errors[0]).toContain("daily reload KEEP");
+    expect(store.dailyBars("KEEP", "2026-01-01", "2026-12-31").map((b) => b.close)).toEqual([50, 52]);
+  });
+
+  it("retries a failed batch one symbol at a time", async () => {
+    const good = fakeSource({ GOOD: [day("2026-10-14", 5)] });
+    const picky = async function* (opts: { symbols: string[]; start: string; timeframe: string }) {
+      if (opts.symbols.includes("BAD")) throw new Error("alpaca 400 invalid symbol");
+      yield* good.source(opts);
+    } as any;
+    const r = await sync.syncDaily(["BAD", "GOOD"], { years: 1, now: new Date("2026-10-15T00:00:00Z"), source: picky });
+    expect(r.errors).toEqual(["daily BAD: alpaca 400 invalid symbol"]);
+    expect(store.lastDailyBar("GOOD")?.close).toBe(5);
   });
 });
 
@@ -82,11 +108,37 @@ describe("minute history sync", () => {
   });
 });
 
+describe("minute reload after a split", () => {
+  it("re-downloads the stored minute range for a flagged symbol, even after a daily-only run", async () => {
+    const bar = (t: string, c: number): Bar => ({ t, o: c, h: c, l: c, c, v: 5 });
+    const old = fakeSource({ RSP: [bar("2026-09-01T13:30:00Z", 200), bar("2026-10-14T13:30:00Z", 210)] });
+    await sync.syncMinute(["RSP"], { years: 1, now: new Date("2026-10-15T00:00:00Z"), source: old.source });
+
+    store.flagMinuteReload("RSP");
+    const adjusted = fakeSource({ RSP: [bar("2026-09-01T13:30:00Z", 100), bar("2026-10-14T13:30:00Z", 105)] });
+    const r = await sync.syncMinute(["RSP"], { years: 1, now: new Date("2026-10-16T00:00:00Z"), source: adjusted.source });
+    expect(adjusted.calls[0].start).toBe("2026-09-01T13:30:00.000Z");
+    expect(r.resplit).toEqual(["RSP"]);
+    expect(store.minuteBars("RSP", 0, 2e9).map((b) => b.close)).toEqual([100, 105]);
+    expect(store.minuteReloads()).not.toContain("RSP");
+  });
+});
+
+describe("run bookkeeping", () => {
+  it("closes out a run whose process stopped sending heartbeats", () => {
+    const id = store.startRun("all");
+    expect(store.liveRun(30)?.id).toBe(id);
+    store.abandonStaleRuns(0); // every run counts as stale
+    expect(store.liveRun(30)).toBeUndefined();
+  });
+});
+
 describe("universes", () => {
   it("keeps watchlist symbols and context ETFs at minute resolution", () => {
-    watchlists.setWatchlist("default", ["NVDA", "TSLA"]);
+    watchlists.setWatchlist("default", ["NVDA", "TSLA", "BRK-B", "^GSPC", "EURUSD=X", "BTC-USD", "0700.HK"]);
     const minute = sync.minuteUniverse();
-    expect(minute).toEqual(expect.arrayContaining(["NVDA", "TSLA", "SPY", "QQQ", "XLK"]));
+    expect(minute).toEqual(expect.arrayContaining(["NVDA", "TSLA", "BRK.B", "SPY", "QQQ", "XLK"]));
+    expect(minute.filter((s) => /[\^=]|-|HK/.test(s))).toEqual([]);
     expect(sync.dailyUniverse()).toEqual(expect.arrayContaining(minute));
   });
 

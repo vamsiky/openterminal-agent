@@ -50,11 +50,15 @@ export function startHistoryScheduler(): void {
   }
   let busy = false;
   const tick = async () => {
-    if (busy || !syncDue(new Date(), lastFinishedRun("all")?.started_at)) return;
+    if (busy) return;
     busy = true;
     try {
+      if (!syncDue(new Date(), lastFinishedRun("all")?.started_at)) return;
       const result = await runJob("all", { minute: minuteEnabled(), log: (m) => console.log(`[history] ${m}`) });
       console.log(`[history] nightly sync ${result.status}`);
+    } catch (err) {
+      // e.g. SQLITE_BUSY while the CLI holds the lock; try again next tick.
+      console.error("[history] nightly sync failed:", err);
     } finally {
       busy = false;
     }

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetThrottle, stockBars, stockBarsPage } from "./alpaca.js";
+import { maxRequestsPerMinute, resetThrottle, stockBars, stockBarsPage } from "./alpaca.js";
 
 function mockPages(pages: unknown[]) {
   const fetchMock = vi.fn();
@@ -58,5 +58,15 @@ describe("alpaca provider", () => {
   it("refuses to run without keys", async () => {
     delete process.env.ALPACA_API_KEY_ID;
     await expect(stockBarsPage({ symbols: ["AAPL"], timeframe: "1Day", start: "2024-01-01" })).rejects.toThrow(/ALPACA_API_KEY_ID/);
+  });
+});
+
+describe("alpaca request budget", () => {
+  it("falls back to the default for blank or invalid settings", () => {
+    expect(maxRequestsPerMinute(undefined)).toBe(180);
+    expect(maxRequestsPerMinute("")).toBe(180);
+    expect(maxRequestsPerMinute("10k")).toBe(180);
+    expect(maxRequestsPerMinute("0")).toBe(180);
+    expect(maxRequestsPerMinute(" 1000 ")).toBe(1000);
   });
 });

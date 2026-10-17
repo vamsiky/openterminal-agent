@@ -53,9 +53,14 @@ CREATE TABLE IF NOT EXISTS history_runs (
   status TEXT NOT NULL DEFAULT 'running',
   symbols INTEGER NOT NULL DEFAULT 0,
   bars INTEGER NOT NULL DEFAULT 0,
-  error TEXT
+  error TEXT,
+  heartbeat_at TEXT
 );
 `);
+// Databases created before heartbeat_at existed.
+if (!(db.prepare("PRAGMA table_info(history_runs)").all() as Array<{ name: string }>).some((c) => c.name === "heartbeat_at")) {
+  db.exec("ALTER TABLE history_runs ADD COLUMN heartbeat_at TEXT");
+}
 
 export const minuteDb = new Database(join(dataDir, "minute_bars.db"));
 minuteDb.pragma("journal_mode = WAL");
@@ -110,18 +115,23 @@ export const upsertMinuteBars = minuteDb.transaction((bars: MinuteBar[]) => {
   for (const b of bars) upsertMinuteStmt.run(b);
 });
 
-export function deleteDailyHistory(symbol: string): void {
-  db.prepare("DELETE FROM daily_bars WHERE symbol = ?").run(symbol);
-}
-
-export function deleteMinuteHistory(symbol: string): void {
-  minuteDb.prepare("DELETE FROM minute_bars WHERE symbol = ?").run(symbol);
-}
-
 export function lastDailyBar(symbol: string): DailyBar | undefined {
   return db
     .prepare("SELECT * FROM daily_bars WHERE symbol = ? ORDER BY day DESC LIMIT 1")
     .get(symbol) as DailyBar | undefined;
+}
+
+/** The second-newest daily bar (or the only one): a day whose bar is final. */
+export function settledDailyBar(symbol: string): DailyBar | undefined {
+  const rows = db
+    .prepare("SELECT * FROM daily_bars WHERE symbol = ? ORDER BY day DESC LIMIT 2")
+    .all(symbol) as DailyBar[];
+  return rows[rows.length - 1];
+}
+
+export function firstDailyDay(symbol: string): string | null {
+  const row = db.prepare("SELECT MIN(day) AS day FROM daily_bars WHERE symbol = ?").get(symbol) as { day: string | null };
+  return row.day;
 }
 
 export function lastMinuteTs(symbol: string): number | null {
@@ -129,7 +139,12 @@ export function lastMinuteTs(symbol: string): number | null {
   return row.ts;
 }
 
-export function dailyBars(symbol: string, from: string, to: string, limit = 5000): DailyBar[] {
+export function firstMinuteTs(symbol: string): number | null {
+  const row = minuteDb.prepare("SELECT MIN(ts) AS ts FROM minute_bars WHERE symbol = ?").get(symbol) as { ts: number | null };
+  return row.ts;
+}
+
+export function dailyBars(symbol: string, from: string, to: string, limit = 20_000): DailyBar[] {
   return db
     .prepare("SELECT * FROM daily_bars WHERE symbol = ? AND day >= ? AND day <= ? ORDER BY day LIMIT ?")
     .all(symbol, from, to, limit) as DailyBar[];
@@ -194,7 +209,28 @@ export function indexSymbols(): string[] {
 // ---- run bookkeeping ----
 
 export function startRun(job: string): number {
-  return Number(db.prepare("INSERT INTO history_runs (job) VALUES (?)").run(job).lastInsertRowid);
+  return Number(db.prepare("INSERT INTO history_runs (job, heartbeat_at) VALUES (?, datetime('now'))").run(job).lastInsertRowid);
+}
+
+/** Marks a run as alive; a run whose heartbeat stops is treated as dead. */
+export function heartbeat(id: number): void {
+  db.prepare("UPDATE history_runs SET heartbeat_at = datetime('now') WHERE id = ?").run(id);
+}
+
+/** A run still marked 'running' that has sent a heartbeat in the last `minutes`. */
+export function liveRun(minutes: number): { id: number } | undefined {
+  return db
+    .prepare(
+      "SELECT id FROM history_runs WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) > datetime('now', ?) LIMIT 1"
+    )
+    .get(`-${minutes} minutes`) as { id: number } | undefined;
+}
+
+/** Close out runs whose process died without finishing them. */
+export function abandonStaleRuns(minutes: number): void {
+  db.prepare(
+    "UPDATE history_runs SET status = 'error', finished_at = datetime('now'), error = COALESCE(error, 'abandoned: process stopped') WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) <= datetime('now', ?)"
+  ).run(`-${minutes} minutes`);
 }
 
 export function finishRun(id: number, result: { status: "ok" | "partial" | "error"; symbols: number; bars: number; error?: string }): void {
@@ -219,6 +255,18 @@ export function markSynced(job: string, symbol: string, lastBar: string): void {
 
 export function clearSynced(job: string, symbol: string): void {
   db.prepare("DELETE FROM history_sync WHERE job = ? AND symbol = ?").run(job, symbol);
+}
+
+// A split found by the daily sync means the symbol's minute bars must be
+// re-downloaded too. The flag is stored so it survives daily-only runs.
+export function flagMinuteReload(symbol: string): void {
+  markSynced("minute_reload", symbol, new Date().toISOString());
+}
+
+export function minuteReloads(): string[] {
+  return (db.prepare("SELECT symbol FROM history_sync WHERE job = 'minute_reload'").all() as Array<{ symbol: string }>).map(
+    (r) => r.symbol
+  );
 }
 
 // Read from the per-symbol sync bookkeeping, not the bar tables: counting

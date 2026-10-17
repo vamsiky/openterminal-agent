@@ -126,3 +126,14 @@ export async function nasdaq100(): Promise<string[]> {
   if (symbols.length < 90) throw new Error(`nasdaq100: parsed only ${symbols.length} symbols; add data/universe/nasdaq100.txt`);
   return symbols;
 }
+
+/**
+ * Map a Yahoo-style ticker to Alpaca's stock symbol, or null when Alpaca has
+ * no US stock bars for it: share classes use a dot (BRK-B → BRK.B), and
+ * indices (^GSPC), FX (EURUSD=X), futures (GC=F), foreign listings (0700.HK)
+ * and crypto pairs (BTC-USD) are not US stocks.
+ */
+export function alpacaSymbol(raw: string): string | null {
+  const s = raw.toUpperCase().replace(/^([A-Z]+)-([A-Z])$/, "$1.$2");
+  return /^[A-Z][A-Z0-9]{0,6}(\.[A-Z])?$/.test(s) ? s : null;
+}

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { series } from "./fred.js";
 
-const CSV = "observation_date,VIXCLS\n2026-10-14,18.2\n2026-10-15,.\n2026-10-16,21.5\n";
+const CSV = "observation_date,VIXCLS\r\n2026-10-14,18.2\r\n2026-10-15,.\r\n2026-10-15,\r\n2026-10-16,21.5\r\n";
 
 describe("fred provider", () => {
   afterEach(() => vi.unstubAllGlobals());

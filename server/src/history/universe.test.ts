@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseNasdaq100, parseSp500Wikitext, parseSymbolDirectory } from "./universe.js";
+import { alpacaSymbol, parseNasdaq100, parseSp500Wikitext, parseSymbolDirectory } from "./universe.js";
 
 describe("symbol directory parsing", () => {
   it("reads Nasdaq-listed symbols and skips test issues and the footer", () => {
@@ -55,5 +55,14 @@ describe("index membership parsing", () => {
 
   it("reads Nasdaq-100 rows", () => {
     expect(parseNasdaq100({ data: { data: { rows: [{ symbol: "aapl" }, { symbol: "MSFT" }, {}] } } })).toEqual(["AAPL", "MSFT"]);
+  });
+});
+
+describe("alpacaSymbol", () => {
+  it("maps Yahoo class shares and drops what Alpaca has no stock bars for", () => {
+    expect(alpacaSymbol("brk-b")).toBe("BRK.B");
+    expect(alpacaSymbol("AAPL")).toBe("AAPL");
+    expect(alpacaSymbol("BF.B")).toBe("BF.B");
+    for (const s of ["^GSPC", "EURUSD=X", "GC=F", "0700.HK", "BTC-USD", "M&M.NS"]) expect(alpacaSymbol(s)).toBeNull();
   });
 });

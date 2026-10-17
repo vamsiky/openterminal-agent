@@ -15,8 +15,10 @@ export async function series(seriesId: string, lastN = 260): Promise<SeriesPoint
   const lines = text.trim().split("\n").slice(1); // drop header row
   const points: SeriesPoint[] = [];
   for (const line of lines) {
-    const [date, raw] = line.split(",");
-    const value = Number(raw);
+    const [date, raw = ""] = line.trim().split(",");
+    // Missing observations are "." in older files and empty in newer ones;
+    // Number("") is 0, so check for an actual value first.
+    const value = raw.trim() === "" ? NaN : Number(raw);
     if (!date || !isFinite(value)) continue;
     points.push({ date, value });
   }

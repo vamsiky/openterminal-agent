@@ -26,7 +26,13 @@ export function isConfigured(): boolean {
 }
 
 function feed(): string {
-  return process.env.ALPACA_FEED ?? "sip";
+  return process.env.ALPACA_FEED?.trim() || "sip";
+}
+
+/** Requests per minute from ALPACA_MAX_REQ_PER_MIN; blank or invalid means the default. */
+export function maxRequestsPerMinute(raw = process.env.ALPACA_MAX_REQ_PER_MIN): number {
+  const n = Number(raw?.trim() || NaN);
+  return Number.isFinite(n) && n >= 1 ? n : 180;
 }
 
 // A simple spacing limiter: requests are released no faster than
@@ -34,8 +40,7 @@ function feed(): string {
 // plan; paid plans allow far more and can raise it).
 let nextSlot = 0;
 async function throttle(): Promise<void> {
-  const perMin = Math.max(1, Number(process.env.ALPACA_MAX_REQ_PER_MIN ?? 180));
-  const gap = 60_000 / perMin;
+  const gap = 60_000 / maxRequestsPerMinute();
   const now = Date.now();
   const wait = Math.max(0, nextSlot - now);
   nextSlot = Math.max(now, nextSlot) + gap;

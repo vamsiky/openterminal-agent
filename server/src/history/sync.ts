@@ -1,19 +1,24 @@
 import * as alpaca from "../providers/alpaca.js";
 import * as fred from "../providers/fred.js";
 import { allWatchlistSymbols } from "../routes/watchlists.js";
-import { db } from "../db.js";
 import {
+  abandonStaleRuns,
   activeSymbols,
   clearSynced,
-  deleteDailyHistory,
-  deleteMinuteHistory,
   finishRun,
+  firstDailyDay,
+  firstMinuteTs,
+  flagMinuteReload,
+  heartbeat,
   indexSymbols,
   lastDailyBar,
   lastMinuteTs,
+  liveRun,
   markSynced,
+  minuteReloads,
   saveIndexMembers,
   saveUniverse,
+  settledDailyBar,
   startRun,
   upsertDailyBars,
   upsertMinuteBars,
@@ -21,7 +26,7 @@ import {
   type MinuteBar,
 } from "./store.js";
 import { tradingDay } from "./time.js";
-import { CONTEXT_ETFS, nasdaq100, sp500, usListings } from "./universe.js";
+import { alpacaSymbol, CONTEXT_ETFS, nasdaq100, sp500, usListings } from "./universe.js";
 
 export type BarSource = typeof alpaca.stockBars;
 
@@ -30,6 +35,13 @@ const MINUTE_BATCH = 10;
 // A stored close that moves by more than this when re-fetched means Alpaca
 // re-adjusted the history (a new split), so the symbol is reloaded in full.
 const SPLIT_TOLERANCE = 0.005;
+// A run that hasn't sent a heartbeat for this long is assumed dead.
+const RUN_STALE_MINUTES = 30;
+
+let currentRun: number | null = null;
+function beat(): void {
+  if (currentRun !== null) heartbeat(currentRun);
+}
 
 function yearsAgo(years: number, now: Date): string {
   const d = new Date(now);
@@ -54,12 +66,53 @@ function groupBy<T>(items: T[], key: (t: T) => string): Map<string, T[]> {
   return map;
 }
 
+const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/**
+ * Run `fn` on each batch. A failed batch is retried one symbol at a time, so
+ * one symbol Alpaca rejects doesn't hold back the rest of its batch.
+ */
+async function eachBatch(
+  label: string,
+  symbols: string[],
+  size: number,
+  fn: (batch: string[]) => Promise<void>,
+  errors: string[]
+): Promise<void> {
+  for (const batch of chunk(symbols, size)) {
+    try {
+      await fn(batch);
+    } catch (err) {
+      if (batch.length === 1) {
+        errors.push(`${label} ${batch[0]}: ${message(err)}`);
+        continue;
+      }
+      for (const s of batch) {
+        try {
+          await fn([s]);
+        } catch (e) {
+          errors.push(`${label} ${s}: ${message(e)}`);
+        }
+      }
+    }
+  }
+}
+
+const toDaily = (symbol: string, b: alpaca.Bar): DailyBar => ({
+  symbol, day: tradingDay(b.t), open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v, vwap: b.vw ?? null, trades: b.n ?? null,
+});
+
+const toMinute = (symbol: string, b: alpaca.Bar): MinuteBar => ({
+  symbol, ts: Math.floor(Date.parse(b.t) / 1000), open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v, vwap: b.vw ?? null, trades: b.n ?? null,
+});
+
 export type SyncResult = { symbols: number; bars: number; resplit: string[]; errors: string[] };
 
 /**
  * Bring daily bars up to date. New symbols get `years` of history; known ones
- * re-fetch from their last stored day, which also catches splits: if that
- * overlapping day's close changed, the symbol's history is reloaded.
+ * re-fetch from their second-newest stored day, a bar that is final. If that
+ * day's close changed, Alpaca re-adjusted the history for a split, and the
+ * symbol's whole stored range is downloaded again and overwritten in place.
  */
 export async function syncDaily(
   symbols: string[],
@@ -70,110 +123,110 @@ export async function syncDaily(
   const backfillStart = yearsAgo(opts.years ?? 10, now);
   const result: SyncResult = { symbols: 0, bars: 0, resplit: [], errors: [] };
 
-  const lastBySymbol = new Map(symbols.map((s) => [s, lastDailyBar(s)]));
-  const groups = groupBy(symbols, (s) => lastBySymbol.get(s)?.day ?? backfillStart);
+  const settled = new Map(symbols.map((s) => [s, settledDailyBar(s)]));
+  const groups = groupBy(symbols, (s) => settled.get(s)?.day ?? backfillStart);
+  const reload = new Set<string>();
 
-  const reload: string[] = [];
   for (const [start, group] of groups) {
-    for (const batch of chunk(group, DAILY_BATCH)) {
-      try {
-        const seen = new Set<string>();
-        for await (const page of source({ symbols: batch, timeframe: "1Day", start })) {
-          const rows: DailyBar[] = [];
-          for (const [symbol, bars] of Object.entries(page)) {
-            const prev = lastBySymbol.get(symbol);
-            for (const b of bars) {
-              const day = tradingDay(b.t);
-              if (prev && day === prev.day && Math.abs(b.c - prev.close) / prev.close > SPLIT_TOLERANCE) {
-                reload.push(symbol);
-                break;
-              }
-              rows.push({ symbol, day, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v, vwap: b.vw ?? null, trades: b.n ?? null });
-            }
-            if (bars.length > 0) seen.add(symbol);
+    await eachBatch("daily", group, DAILY_BATCH, async (batch) => {
+      const seen = new Set<string>();
+      for await (const page of source({ symbols: batch, timeframe: "1Day", start })) {
+        beat();
+        const rows: DailyBar[] = [];
+        for (const [symbol, bars] of Object.entries(page)) {
+          if (reload.has(symbol)) continue;
+          const prev = settled.get(symbol);
+          const moved = prev && bars.some((b) => tradingDay(b.t) === prev.day && Math.abs(b.c - prev.close) / prev.close > SPLIT_TOLERANCE);
+          if (moved) {
+            reload.add(symbol);
+            continue;
           }
-          const kept = rows.filter((r) => !reload.includes(r.symbol));
-          upsertDailyBars(kept);
-          result.bars += kept.length;
+          for (const b of bars) rows.push(toDaily(symbol, b));
+          if (bars.length > 0) seen.add(symbol);
         }
-        for (const s of seen) {
-          if (reload.includes(s)) continue;
-          const last = lastDailyBar(s);
-          if (last) markSynced("daily", s, last.day);
-          result.symbols++;
-        }
-      } catch (err) {
-        result.errors.push(`daily ${batch[0]}..${batch[batch.length - 1]}: ${err instanceof Error ? err.message : String(err)}`);
+        upsertDailyBars(rows);
+        result.bars += rows.length;
       }
-    }
+      for (const s of seen) {
+        if (reload.has(s)) continue;
+        const last = lastDailyBar(s);
+        if (last) markSynced("daily", s, last.day);
+        result.symbols++;
+      }
+    }, result.errors);
   }
 
-  for (const symbol of [...new Set(reload)]) {
-    deleteDailyHistory(symbol);
-    clearSynced("daily", symbol);
-    result.resplit.push(symbol);
-    const again = await syncDaily([symbol], { ...opts, now });
-    result.bars += again.bars;
-    result.errors.push(...again.errors);
+  // Overwrite rather than delete first, so a failed download leaves the old
+  // bars in place; the next run sees the same mismatch and tries again.
+  for (const symbol of reload) {
+    flagMinuteReload(symbol);
+    const from = firstDailyDay(symbol) ?? backfillStart;
+    try {
+      for await (const page of source({ symbols: [symbol], timeframe: "1Day", start: from < backfillStart ? from : backfillStart })) {
+        beat();
+        const rows = (page[symbol] ?? []).map((b) => toDaily(symbol, b));
+        upsertDailyBars(rows);
+        result.bars += rows.length;
+      }
+      const last = lastDailyBar(symbol);
+      if (last) markSynced("daily", symbol, last.day);
+      result.resplit.push(symbol);
+      result.symbols++;
+    } catch (err) {
+      result.errors.push(`daily reload ${symbol}: ${message(err)}`);
+    }
   }
   return result;
 }
 
 /**
  * Bring minute bars up to date (regular and extended hours). New symbols get
- * `years` of history. Symbols in `reload` (re-split by syncDaily) start over.
+ * `years` of history. Symbols the daily sync flagged for a split are
+ * downloaded again over their whole stored range.
  */
 export async function syncMinute(
   symbols: string[],
-  opts: { years?: number; now?: Date; source?: BarSource; reload?: string[] } = {}
+  opts: { years?: number; now?: Date; source?: BarSource } = {}
 ): Promise<SyncResult> {
   const now = opts.now ?? new Date();
   const source = opts.source ?? alpaca.stockBars;
   const backfillStart = `${yearsAgo(opts.years ?? 2, now)}T00:00:00Z`;
   const result: SyncResult = { symbols: 0, bars: 0, resplit: [], errors: [] };
-
-  for (const s of opts.reload ?? []) {
-    if (!symbols.includes(s)) continue;
-    deleteMinuteHistory(s);
-    clearSynced("minute", s);
-  }
+  const pending = new Set(minuteReloads());
 
   // Resume each symbol from the start of the New York day of its last bar, so
   // a sync that died mid-day refills that day; upserts make the overlap harmless.
   const startFor = (s: string) => {
+    if (pending.has(s)) {
+      const first = firstMinuteTs(s);
+      return first === null ? backfillStart : new Date(first * 1000).toISOString();
+    }
     const ts = lastMinuteTs(s);
     return ts === null ? backfillStart : `${tradingDay(ts)}T00:00:00-05:00`;
   };
   const groups = groupBy(symbols, startFor);
 
   for (const [start, group] of groups) {
-    for (const batch of chunk(group, MINUTE_BATCH)) {
-      try {
-        for await (const page of source({ symbols: batch, timeframe: "1Min", start: new Date(start).toISOString() })) {
-          const rows: MinuteBar[] = [];
-          for (const [symbol, bars] of Object.entries(page)) {
-            for (const b of bars) {
-              rows.push({
-                symbol,
-                ts: Math.floor(Date.parse(b.t) / 1000),
-                open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v, vwap: b.vw ?? null, trades: b.n ?? null,
-              });
-            }
-          }
-          upsertMinuteBars(rows);
-          result.bars += rows.length;
-        }
-        for (const s of batch) {
-          const ts = lastMinuteTs(s);
-          if (ts !== null) {
-            markSynced("minute", s, new Date(ts * 1000).toISOString());
-            result.symbols++;
-          }
-        }
-      } catch (err) {
-        result.errors.push(`minute ${batch[0]}..${batch[batch.length - 1]}: ${err instanceof Error ? err.message : String(err)}`);
+    await eachBatch("minute", group, MINUTE_BATCH, async (batch) => {
+      for await (const page of source({ symbols: batch, timeframe: "1Min", start: new Date(start).toISOString() })) {
+        beat();
+        const rows: MinuteBar[] = [];
+        for (const [symbol, bars] of Object.entries(page)) for (const b of bars) rows.push(toMinute(symbol, b));
+        upsertMinuteBars(rows);
+        result.bars += rows.length;
       }
-    }
+      for (const s of batch) {
+        if (pending.has(s)) {
+          clearSynced("minute_reload", s);
+          result.resplit.push(s);
+        }
+        const ts = lastMinuteTs(s);
+        if (ts !== null) {
+          markSynced("minute", s, new Date(ts * 1000).toISOString());
+          result.symbols++;
+        }
+      }
+    }, result.errors);
   }
   return result;
 }
@@ -193,8 +246,12 @@ export async function refreshUniverse(): Promise<{ listings: number; sp500: numb
   let listings = 0;
   try {
     const rows = await usListings();
-    // A truncated download must not mark thousands of symbols inactive.
-    if (rows.length < 5000) throw new Error(`only ${rows.length} listings returned`);
+    // A truncated download must not mark thousands of symbols inactive: the
+    // list may shrink by a few delistings, not by a tenth of the market.
+    const known = activeSymbols().length;
+    if (rows.length < 5000 || rows.length < known * 0.9) {
+      throw new Error(`only ${rows.length} listings returned (${known} active); keeping the current list`);
+    }
     saveUniverse(rows);
     listings = rows.length;
   } catch (err) {
@@ -218,9 +275,15 @@ export async function refreshUniverse(): Promise<{ listings: number; sp500: numb
   };
 }
 
-/** Symbols kept at minute resolution: watchlists, S&P 500, Nasdaq-100, context ETFs. */
+/**
+ * Symbols kept at minute resolution: watchlists, S&P 500, Nasdaq-100, context
+ * ETFs. Watchlists hold Yahoo-style tickers, so they are mapped to Alpaca's
+ * (BRK-B → BRK.B) and those Alpaca has no stock bars for (^GSPC, EURUSD=X,
+ * GC=F, 0700.HK, BTC-USD) are left out.
+ */
 export function minuteUniverse(): string[] {
-  return [...new Set([...allWatchlistSymbols(), ...indexSymbols(), ...CONTEXT_ETFS])].filter((s) => !s.startsWith("^")).sort();
+  const watched = allWatchlistSymbols().map(alpacaSymbol).filter((s): s is string => s !== null);
+  return [...new Set([...watched, ...indexSymbols(), ...CONTEXT_ETFS])].sort();
 }
 
 /** Symbols kept at daily resolution: everything active plus the minute set. */
@@ -228,13 +291,11 @@ export function dailyUniverse(): string[] {
   return [...new Set([...activeSymbols(), ...minuteUniverse()])].sort();
 }
 
-function isRunning(): boolean {
-  // Another process (the CLI or the server's nightly job) may be syncing; a
-  // run older than 12 hours is assumed dead.
-  const row = db
-    .prepare("SELECT id FROM history_runs WHERE status = 'running' AND started_at > datetime('now', '-12 hours') LIMIT 1")
-    .get();
-  return Boolean(row);
+/** Record the current run as stopped (the CLI calls this on Ctrl-C). */
+export function interruptRun(reason: string): void {
+  if (currentRun === null) return;
+  finishRun(currentRun, { status: "error", symbols: 0, bars: 0, error: reason });
+  currentRun = null;
 }
 
 export type JobName = "universe" | "daily" | "minute" | "all";
@@ -248,10 +309,15 @@ export async function runJob(
   opts: { dailyYears?: number; minuteYears?: number; minute?: boolean; log?: (msg: string) => void } = {}
 ): Promise<{ status: "ok" | "partial" | "error" | "skipped"; detail: unknown }> {
   const log = opts.log ?? (() => {});
-  if (isRunning()) return { status: "skipped", detail: "another history sync is running" };
+  // Another process (the CLI or the server's nightly job) may be syncing. A
+  // run that stopped sending heartbeats (killed, crashed) is closed out.
+  abandonStaleRuns(RUN_STALE_MINUTES);
+  if (liveRun(RUN_STALE_MINUTES)) return { status: "skipped", detail: "another history sync is running" };
   const id = startRun(job);
+  currentRun = id;
   let symbols = 0;
   let bars = 0;
+  let alpacaBars = 0;
   const errors: string[] = [];
   try {
     if (job === "universe" || job === "all") {
@@ -259,14 +325,13 @@ export async function runJob(
       log(`universe: ${u.listings} listings, ${u.sp500} S&P 500, ${u.nasdaq100} Nasdaq-100`);
       errors.push(...u.errors);
     }
-    let resplit: string[] = [];
     if (job === "daily" || job === "all") {
       const list = dailyUniverse();
       log(`daily: syncing ${list.length} symbols`);
       const d = await syncDaily(list, { years: opts.dailyYears });
       symbols += d.symbols;
       bars += d.bars;
-      resplit = d.resplit;
+      alpacaBars += d.bars;
       errors.push(...d.errors);
       try {
         bars += await syncVix(opts.dailyYears);
@@ -278,20 +343,23 @@ export async function runJob(
     if (job === "minute" || (job === "all" && opts.minute !== false)) {
       const list = minuteUniverse();
       log(`minute: syncing ${list.length} symbols`);
-      const m = await syncMinute(list, { years: opts.minuteYears, reload: resplit });
+      const m = await syncMinute(list, { years: opts.minuteYears });
       symbols += m.symbols;
       bars += m.bars;
+      alpacaBars += m.bars;
       errors.push(...m.errors);
       log(`minute: ${m.bars} bars`);
     }
-    // "partial": some steps or batches failed but others stored bars.
-    const status = errors.length === 0 ? "ok" : bars === 0 ? "error" : "partial";
+    // "partial": some steps or symbols failed but Alpaca bars were stored.
+    // VIX alone doesn't count: it re-stores the same ~2,600 FRED points daily.
+    const status = errors.length === 0 ? "ok" : alpacaBars === 0 ? "error" : "partial";
     finishRun(id, { status, symbols, bars, error: errors.length ? errors.slice(0, 20).join("\n") : undefined });
     for (const e of errors) log(`error: ${e}`);
     return { status, detail: { symbols, bars, errors } };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    finishRun(id, { status: "error", symbols, bars, error: message });
-    return { status: "error", detail: message };
+    finishRun(id, { status: "error", symbols, bars, error: message(err) });
+    return { status: "error", detail: message(err) };
+  } finally {
+    currentRun = null;
   }
 }

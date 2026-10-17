@@ -2,7 +2,7 @@ import "../env.js";
 import * as alpaca from "../providers/alpaca.js";
 import { historyStatus } from "./store.js";
 import { minuteEnabled } from "./scheduler.js";
-import { runJob, type JobName } from "./sync.js";
+import { interruptRun, runJob, type JobName } from "./sync.js";
 
 // Usage (from the repo root):
 //   npm run history -w server -- universe          refresh the symbol lists
@@ -38,13 +38,20 @@ async function main(): Promise<void> {
     console.error("Set ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY in .env at the repo root (see .env.example).");
     process.exit(2);
   }
+  // Ctrl-C: record the run as stopped so the next run can start right away.
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      interruptRun(`interrupted (${signal})`);
+      process.exit(130);
+    });
+  }
   const result = await runJob(command as JobName, {
     dailyYears: option("--daily-years"),
     minuteYears: option("--minute-years"),
     minute: minuteEnabled(),
     log: (m) => console.log(`[${new Date().toISOString()}] ${m}`),
   });
-  console.log(`${command}: ${result.status}`);
+  console.log(`${command}: ${result.status}${result.status === "skipped" ? ` (${result.detail})` : ""}`);
   if (result.status === "partial") console.log("Some steps failed (see the error lines above); rerun to retry them.");
   if (result.status !== "ok" && result.status !== "partial") process.exit(1);
 }

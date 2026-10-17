@@ -11,7 +11,8 @@ export const watchlistsRouter = Router();
 const nameSchema = z.string().regex(/^[A-Za-z0-9_-]{1,32}$/);
 const symbolsSchema = z.object({
   symbols: z
-    .array(z.string().regex(/^[A-Za-z0-9.^=-]{1,15}$/).transform((s) => s.toUpperCase()))
+    // Same characters as the web's normalizeSymbol (web/lib/symbol.ts).
+    .array(z.string().regex(/^(?=.*[A-Za-z0-9])[A-Za-z0-9.\-^=&]{1,20}$/).transform((s) => s.toUpperCase()))
     .max(500),
 });
 
