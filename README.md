@@ -126,6 +126,27 @@ npm run dev
 
 That's it — no `.env` file required to get a fully working terminal.
 
+### Optional: Alpaca market data and price history
+
+With an Alpaca market-data subscription, the API keeps its own price history for research and swing studies:
+
+- 10 years of daily bars for every US-listed stock and ETF (about 1–2 GB).
+- 2 years of 1-minute bars, including extended hours, for your watchlist, the S&P 500, the Nasdaq-100 and the market/sector ETFs (SPY, QQQ, XLK…). Expect roughly 15–30 GB in `data/minute_bars.db`.
+- Prices are split-adjusted. When a split lands, that symbol's history is re-downloaded so it never shows up as a fake swing.
+- Delisted symbols are kept (marked inactive) from the day the app first sees them.
+
+Setup:
+
+1. `cp .env.example .env` and fill in `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY`. `.env` is gitignored. Only Alpaca's market-data API is ever called, never the trading API.
+2. Run the first backfill: `npm run history -w server -- all`. It is resumable, so you can stop it and run it again. `npm run history -w server -- status` shows progress.
+3. To keep it current on an always-on machine, set `HISTORY_SYNC=1` in `.env`. The API then syncs every weekday after 18:00 New York time. Add `HISTORY_SYNC_MINUTE=0` to keep daily bars only; the sync and `history all` then skip the minute bars.
+
+Every problem in a run is logged as it happens and stored per symbol with its reason for 90 days: `error` (a request failed, with Alpaca's or the network's message), `no_bars` (the request worked but nothing came back, e.g. a typo or a delisted name) and `skipped` (a watchlist ticker that isn't a US stock, such as `^GSPC` or `EURUSD=X`). `npm run history -w server -- issues` lists the latest run's issues; add `--symbol AAPL`, `--kind error` or `--run N` to narrow it. The same list is at `/api/bars/issues`, and `status` shows the counts per run.
+
+The stored bars are served read-only at `/api/bars/daily/:symbol?from=YYYY-MM-DD&to=YYYY-MM-DD`, `/api/bars/minute/:symbol?from=YYYY-MM-DD` and `/api/bars/status`.
+
+S&P 500 membership comes from Wikipedia and Nasdaq-100 from Nasdaq's index list. If either source changes format, put one symbol per line in `data/universe/sp500.txt` or `data/universe/nasdaq100.txt` to override it.
+
 ### Optional: AI assistant
 
 ```bash

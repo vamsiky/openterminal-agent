@@ -3,15 +3,22 @@
 
 export type SeriesPoint = { date: string; value: number };
 
+// FRED resets HTTP/2 streams for some default client User-Agents (seen with
+// Node 26's fetch: ERR_HTTP2_STREAM_ERROR) and stalls browser-like ones, so
+// identify as a plain non-browser client.
+const HEADERS = { "User-Agent": "openterminal/0.1" };
+
 export async function series(seriesId: string, lastN = 260): Promise<SeriesPoint[]> {
-  const res = await fetch(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${seriesId}`);
+  const res = await fetch(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${seriesId}`, { headers: HEADERS });
   if (!res.ok) throw new Error(`fred ${res.status} for ${seriesId}`);
   const text = await res.text();
   const lines = text.trim().split("\n").slice(1); // drop header row
   const points: SeriesPoint[] = [];
   for (const line of lines) {
-    const [date, raw] = line.split(",");
-    const value = Number(raw);
+    const [date, raw = ""] = line.trim().split(",");
+    // Missing observations are "." in older files and empty in newer ones;
+    // Number("") is 0, so check for an actual value first.
+    const value = raw.trim() === "" ? NaN : Number(raw);
     if (!date || !isFinite(value)) continue;
     points.push({ date, value });
   }
