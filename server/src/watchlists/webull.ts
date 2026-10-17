@@ -1,10 +1,9 @@
-import { CRYPTO_SYMBOLS } from "../providers/binance.js";
-
 // Webull's watchlist export: one row per symbol, in list order.
 //   Watchlist,#,Symbol,Name,Exchange
 //   AI,1,CRDO,CREDO TECHNOLOGY GROUP HOLDING,NASDAQ
-// Crypto rows have exchange CCC. The app quotes the main coins by their plain
-// ticker (BTC) and anything else in Yahoo's form (SHIB-USD).
+// Crypto rows (exchange CCC) are saved in Yahoo's form (BTC-USD): the plain
+// ticker would be quoted as a stock (BTC is a Bitcoin ETF), and Binance, which
+// knows the plain form, refuses US connections. Webull's VIX is the index (^VIX).
 
 export type ImportedList = { name: string; symbols: string[] };
 
@@ -33,8 +32,10 @@ function fields(line: string): string[] {
 
 export function appSymbol(symbol: string, exchange: string): string {
   const s = symbol.toUpperCase();
-  if (exchange.toUpperCase() !== "CCC") return s;
-  return CRYPTO_SYMBOLS.has(s) ? s : `${s}-USD`;
+  const ex = exchange.toUpperCase();
+  if (ex === "CCC") return `${s}-USD`;
+  if (ex === "CBOE" && s === "VIX") return "^VIX";
+  return s;
 }
 
 /** Lists in the order they appear in the file; throws when the header isn't Webull's. */
