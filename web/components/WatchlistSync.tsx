@@ -1,93 +1,113 @@
 "use client";
 
 import { useEffect } from "react";
-import { apiGet, apiPost } from "../lib/api";
-import { useTerminal } from "../store/terminal";
+import { apiDelete, apiGet, apiPost } from "../lib/api";
+import { listPath, WATCHLISTS_CHANGED } from "../lib/watchlist";
+import { useTerminal, type Watchlist } from "../store/terminal";
 
-type ServerWatchlist = { name: string; symbols: string[] | null };
-
-const PATH = "/api/watchlists/default";
 const SAVE_DELAY_MS = 500;
 const RETRY_MS = 10_000;
 
 /**
- * Keeps the watchlist on the server, where agents and the history sync can
- * see it. On load the server copy wins, unless this browser has edits the
- * server hasn't seen (made before the load finished, or while the API was
- * unreachable); if the server has no list yet, this browser's list seeds it.
- * Failed saves are retried, a pending save is flushed when the tab closes,
- * and a tab coming back into view picks up changes made elsewhere.
- * localStorage stays as a cache, so the terminal still works if the API is down.
+ * Keeps the watchlists on the server, where agents and the history sync can
+ * see them. On load the server copy wins, except for lists this browser has
+ * changed or deleted and the server hasn't stored yet (edits made before the
+ * load finished, or while the API was unreachable); if the server has no lists
+ * yet, this browser's lists seed it. Failed saves are retried, pending saves
+ * are flushed when the tab closes, and a tab coming back into view (or an
+ * import) picks up changes made elsewhere. localStorage stays as a cache, so
+ * the terminal still works if the API is down.
  */
 export default function WatchlistSync() {
   useEffect(() => {
     let stopped = false;
     let applying = false; // true while writing the server copy into the store
-    let unsaved: string[] | null = null; // local list the server hasn't stored yet
+    // Lists the server hasn't stored yet: symbols to save, or null to delete.
+    const unsaved = new Map<string, string[] | null>();
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     let loadTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const apply = (symbols: string[]) => {
+    const apply = (lists: Watchlist[]) => {
       applying = true;
-      useTerminal.getState().setWatchlist(symbols);
+      useTerminal.getState().setWatchlists(lists);
       applying = false;
     };
+
+    const send = (name: string, symbols: string[] | null) =>
+      symbols === null ? apiDelete(listPath(name)) : apiPost(listPath(name), { symbols });
 
     const save = (delay = SAVE_DELAY_MS) => {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
-        const symbols = unsaved;
-        if (!symbols || stopped) return;
-        apiPost(PATH, { symbols })
-          .then(() => {
-            if (unsaved === symbols) unsaved = null;
-          })
-          .catch(() => {
-            if (!stopped) save(RETRY_MS);
-          });
+        if (stopped) return;
+        for (const [name, symbols] of unsaved) {
+          send(name, symbols)
+            .then(() => {
+              if (unsaved.get(name) === symbols) unsaved.delete(name);
+            })
+            .catch(() => {
+              if (!stopped) save(RETRY_MS);
+            });
+        }
       }, delay);
     };
 
     const load = () => {
       clearTimeout(loadTimer);
-      apiGet<ServerWatchlist>(PATH)
+      apiGet<Watchlist[]>("/api/watchlists")
         .then((server) => {
           if (stopped) return;
-          if (unsaved || server.symbols === null) {
-            unsaved = unsaved ?? useTerminal.getState().watchlist;
+          if (server.length === 0) {
+            for (const l of useTerminal.getState().watchlists) unsaved.set(l.name, l.symbols);
             save(0);
-          } else {
-            apply(server.symbols);
+            return;
           }
+          // Server lists, with this browser's unsaved edits and new lists on top.
+          const lists = server
+            .filter((l) => unsaved.get(l.name) !== null)
+            .map((l) => ({ name: l.name, symbols: unsaved.get(l.name) ?? l.symbols }));
+          for (const [name, symbols] of unsaved) {
+            if (symbols && !lists.some((l) => l.name === name)) lists.push({ name, symbols });
+          }
+          apply(lists);
+          if (unsaved.size) save(0);
         })
         .catch(() => {
-          // API unreachable: keep the local list and try again shortly.
-          if (!stopped && !unsaved) loadTimer = setTimeout(load, RETRY_MS);
+          // API unreachable: keep the local lists and try again shortly.
+          if (!stopped) loadTimer = setTimeout(load, RETRY_MS);
         });
     };
 
     const unsubscribe = useTerminal.subscribe((state, prev) => {
-      if (applying || state.watchlist === prev.watchlist) return;
-      unsaved = state.watchlist;
+      if (applying || state.watchlists === prev.watchlists) return;
+      for (const l of state.watchlists) {
+        const before = prev.watchlists.find((p) => p.name === l.name);
+        if (!before || before.symbols !== l.symbols) unsaved.set(l.name, l.symbols);
+      }
+      for (const p of prev.watchlists) {
+        if (!state.watchlists.some((l) => l.name === p.name)) unsaved.set(p.name, null);
+      }
       save();
     });
 
-    // Closing the tab cancels timers, so send a pending save right away.
+    // Closing the tab cancels timers, so send pending saves right away.
     const flush = () => {
-      if (!unsaved) return;
       clearTimeout(saveTimer);
-      fetch(PATH, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbols: unsaved }),
-        keepalive: true,
-      }).catch(() => {});
+      for (const [name, symbols] of unsaved) {
+        fetch(listPath(name), {
+          method: symbols === null ? "DELETE" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: symbols === null ? undefined : JSON.stringify({ symbols }),
+          keepalive: true,
+        }).catch(() => {});
+      }
     };
     const onVisibility = () => {
       if (document.visibilityState === "hidden") flush();
-      else if (!unsaved) load();
+      else load();
     };
     window.addEventListener("pagehide", flush);
+    window.addEventListener(WATCHLISTS_CHANGED, load);
     document.addEventListener("visibilitychange", onVisibility);
 
     load();
@@ -99,6 +119,7 @@ export default function WatchlistSync() {
       clearTimeout(loadTimer);
       unsubscribe();
       window.removeEventListener("pagehide", flush);
+      window.removeEventListener(WATCHLISTS_CHANGED, load);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);

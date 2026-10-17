@@ -13,7 +13,8 @@ async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
   if (path.some((segment) => segment === "." || segment === ".." || segment.includes("/"))) {
     return NextResponse.json({ error: "invalid path" }, { status: 400 });
   }
-  const url = `${API_URL}/api/${path.join("/")}${req.nextUrl.search}`;
+  // Segments arrive decoded; re-encode them so names with spaces ("To buy") survive.
+  const url = `${API_URL}/api/${path.map(encodeURIComponent).join("/")}${req.nextUrl.search}`;
   const apiKey = getApiKey();
 
   const headers = new Headers();

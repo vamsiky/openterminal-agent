@@ -145,6 +145,8 @@ Every problem in a run is logged as it happens and stored per symbol with its re
 
 The stored bars are served read-only at `/api/bars/daily/:symbol?from=YYYY-MM-DD&to=YYYY-MM-DD`, `/api/bars/minute/:symbol?from=YYYY-MM-DD` and `/api/bars/status`.
 
+**Watchlists.** The watchlist widget holds any number of named lists (pick one from its menu, or New / Del). Import brings in a Webull export (Watchlists → ⋯ → Export, a CSV with every list): each list is saved under its Webull name, replacing a list with the same name and leaving the rest alone. From the command line: `npm run watchlists -w server -- import path/to/webull_watchlists.csv`, and `-- list` to see what is stored. Every symbol on any list gets live prices and minute history.
+
 **Live prices.** With the Alpaca keys set, the API also keeps real-time prices in memory, so clicking a ticker doesn't wait on the web:
 
 - Every trade and quote for the watchlist, S&P 500, Nasdaq-100, sector ETFs and any ticker open on screen (subscribed on the first request, dropped 10 minutes after the last).

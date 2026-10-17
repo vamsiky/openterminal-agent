@@ -1,14 +1,22 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { apiGet, fmt, fmtBig, pctClass, type Quote } from "../../lib/api";
+import { useRef, useState } from "react";
+import { apiGet, apiPost, fmt, fmtBig, pctClass, type Quote } from "../../lib/api";
 import { normalizeSymbol, symbolsParam } from "../../lib/symbol";
+import { normalizeListName, WATCHLISTS_CHANGED } from "../../lib/watchlist";
 import { useTerminal } from "../../store/terminal";
 import Flash from "../Flash";
 
 export default function WatchlistWidget() {
   const watchlist = useTerminal((s) => s.watchlist);
+  const lists = useTerminal((s) => s.watchlists);
+  const active = useTerminal((s) => s.activeWatchlist);
+  const setActiveWatchlist = useTerminal((s) => s.setActiveWatchlist);
+  const createWatchlist = useTerminal((s) => s.createWatchlist);
+  const deleteWatchlist = useTerminal((s) => s.deleteWatchlist);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const addToWatchlist = useTerminal((s) => s.addToWatchlist);
   const removeFromWatchlist = useTerminal((s) => s.removeFromWatchlist);
   const setActiveSymbol = useTerminal((s) => s.setActiveSymbol);
@@ -22,8 +30,73 @@ export default function WatchlistWidget() {
     refetchInterval: 1_000,
   });
 
+  const newList = () => {
+    const raw = window.prompt("Name for the new watchlist");
+    if (raw === null) return;
+    const name = normalizeListName(raw);
+    if (!name) {
+      setNotice("Names can use letters, digits, spaces, - and _ (up to 40).");
+      return;
+    }
+    createWatchlist(name);
+    setNotice(null);
+  };
+
+  const removeList = () => {
+    if (window.confirm(`Delete the watchlist "${active}"?`)) deleteWatchlist(active);
+  };
+
+  // Webull: Watchlists → ⋯ → Export saves a CSV with every list.
+  const importCsv = async (file: File) => {
+    setNotice("Importing…");
+    try {
+      const result = await apiPost<{ saved: Array<{ name: string }>; skipped: string[] }>("/api/watchlists/import", {
+        csv: await file.text(),
+      });
+      window.dispatchEvent(new Event(WATCHLISTS_CHANGED));
+      setNotice(
+        `Imported ${result.saved.length} watchlists` +
+          (result.skipped.length ? `; skipped ${result.skipped.join(", ")}` : "") +
+          "."
+      );
+    } catch (err) {
+      setNotice(`Import failed: ${(err as Error).message}`);
+    }
+  };
+
   return (
     <div>
+      <div className="flex gap-1 p-1">
+        <select
+          value={active}
+          onChange={(e) => setActiveWatchlist(e.target.value)}
+          className="flex-1 min-w-0"
+          title="Watchlist"
+        >
+          {lists.map((l) => (
+            <option key={l.name} value={l.name}>
+              {l.name} ({l.symbols.length})
+            </option>
+          ))}
+        </select>
+        <button className="term-btn" onClick={newList} title="New watchlist">New</button>
+        <button className="term-btn" onClick={removeList} title="Delete this watchlist">Del</button>
+        <button className="term-btn" onClick={() => fileInput.current?.click()} title="Import a Webull watchlist export (.csv)">
+          Import
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".csv,text/csv"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) void importCsv(file);
+          }}
+        />
+      </div>
+      {notice && <div className="dim px-1 text-xs">{notice}</div>}
       <form
         className="flex gap-1 p-1"
         onSubmit={(e) => {

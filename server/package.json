@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "history": "tsx src/history/cli.ts"
+    "history": "tsx src/history/cli.ts",
+    "watchlists": "tsx src/watchlists/cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
