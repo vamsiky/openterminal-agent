@@ -197,7 +197,7 @@ export function startRun(job: string): number {
   return Number(db.prepare("INSERT INTO history_runs (job) VALUES (?)").run(job).lastInsertRowid);
 }
 
-export function finishRun(id: number, result: { status: "ok" | "error"; symbols: number; bars: number; error?: string }): void {
+export function finishRun(id: number, result: { status: "ok" | "partial" | "error"; symbols: number; bars: number; error?: string }): void {
   db.prepare(
     "UPDATE history_runs SET finished_at = datetime('now'), status = ?, symbols = ?, bars = ?, error = ? WHERE id = ?"
   ).run(result.status, result.symbols, result.bars, result.error ?? null, id);

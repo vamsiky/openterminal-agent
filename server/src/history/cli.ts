@@ -45,7 +45,8 @@ async function main(): Promise<void> {
     log: (m) => console.log(`[${new Date().toISOString()}] ${m}`),
   });
   console.log(`${command}: ${result.status}`);
-  if (result.status !== "ok") process.exit(1);
+  if (result.status === "partial") console.log("Some steps failed (see the error lines above); rerun to retry them.");
+  if (result.status !== "ok" && result.status !== "partial") process.exit(1);
 }
 
 main().catch((err) => {
