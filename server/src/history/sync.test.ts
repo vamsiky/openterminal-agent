@@ -77,7 +77,7 @@ describe("daily history sync", () => {
       yield { KEEP: [day("2026-10-13", 25), day("2026-10-14", 26)].filter((b) => b.t >= opts.start) };
     } as any;
     const r = await sync.syncDaily(["KEEP"], { years: 1, now: new Date("2026-10-16T00:00:00Z"), source: flaky });
-    expect(r.errors[0]).toContain("daily reload KEEP");
+    expect(r.errors[0]).toContain("daily KEEP: split reload failed, old bars kept: alpaca 503");
     expect(store.dailyBars("KEEP", "2026-01-01", "2026-12-31").map((b) => b.close)).toEqual([50, 52]);
   });
 
@@ -90,6 +90,18 @@ describe("daily history sync", () => {
     const r = await sync.syncDaily(["BAD", "GOOD"], { years: 1, now: new Date("2026-10-15T00:00:00Z"), source: picky });
     expect(r.errors).toEqual(["daily BAD: alpaca 400 invalid symbol"]);
     expect(store.lastDailyBar("GOOD")?.close).toBe(5);
+    expect(store.listIssues({ symbol: "BAD" })).toEqual([
+      expect.objectContaining({ job: "daily", kind: "error", reason: "alpaca 400 invalid symbol" }),
+    ]);
+  });
+
+  it("records symbols Alpaca returns no bars for", async () => {
+    const empty = fakeSource({});
+    const r = await sync.syncDaily(["GHOST"], { years: 1, now: new Date("2026-10-15T00:00:00Z"), source: empty.source });
+    expect(r.errors).toEqual([]);
+    const [issue] = store.listIssues({ symbol: "GHOST" });
+    expect(issue).toMatchObject({ kind: "no_bars", job: "daily" });
+    expect(issue.reason).toContain("unknown symbol");
   });
 });
 
@@ -139,6 +151,7 @@ describe("universes", () => {
     const minute = sync.minuteUniverse();
     expect(minute).toEqual(expect.arrayContaining(["NVDA", "TSLA", "BRK.B", "SPY", "QQQ", "XLK"]));
     expect(minute.filter((s) => /[\^=]|-|HK/.test(s))).toEqual([]);
+    expect(sync.unsupportedWatchlistSymbols()).toEqual(["0700.HK", "BTC-USD", "EURUSD=X", "^GSPC"].sort());
     expect(sync.dailyUniverse()).toEqual(expect.arrayContaining(minute));
   });
 

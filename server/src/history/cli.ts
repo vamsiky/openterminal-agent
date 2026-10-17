@@ -1,6 +1,6 @@
 import "../env.js";
 import * as alpaca from "../providers/alpaca.js";
-import { historyStatus } from "./store.js";
+import { historyStatus, listIssues, type IssueKind } from "./store.js";
 import { minuteEnabled } from "./scheduler.js";
 import { interruptRun, runJob, type JobName } from "./sync.js";
 
@@ -10,11 +10,18 @@ import { interruptRun, runJob, type JobName } from "./sync.js";
 //   npm run history -w server -- minute            minute bars (2 years on first run)
 //   npm run history -w server -- all               all of the above, in order
 //   npm run history -w server -- status            what is stored so far
+//   npm run history -w server -- issues            problems in the latest run, one line per symbol
+//        --run N, --symbol AAPL, --kind error|no_bars|skipped narrow the list
 // Options: --daily-years N, --minute-years N
 // HISTORY_SYNC_MINUTE=0 in .env makes "all" skip the minute bars.
 // Runs are resumable: stopping and re-running picks up where each symbol left off.
 
 const JOBS = new Set(["universe", "daily", "minute", "all"]);
+
+function text(name: string): string | undefined {
+  const i = process.argv.indexOf(name);
+  return i < 0 ? undefined : process.argv[i + 1];
+}
 
 function option(name: string): number | undefined {
   const i = process.argv.indexOf(name);
@@ -30,8 +37,16 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(historyStatus(), null, 2));
     return;
   }
+  if (command === "issues") {
+    const kind = text("--kind");
+    if (kind && !["error", "no_bars", "skipped"].includes(kind)) throw new Error("--kind is error, no_bars or skipped");
+    const issues = listIssues({ runId: option("--run"), symbol: text("--symbol")?.toUpperCase(), kind: kind as IssueKind | undefined });
+    if (issues.length === 0) console.log("No issues recorded.");
+    for (const i of issues) console.log(`${i.at}  run ${i.run_id ?? "-"}  ${i.kind.padEnd(7)}  ${i.job.padEnd(9)}  ${(i.symbol ?? "").padEnd(8)}  ${i.reason}`);
+    return;
+  }
   if (!JOBS.has(command)) {
-    console.error(`unknown command "${command}" (use universe, daily, minute, all or status)`);
+    console.error(`unknown command "${command}" (use universe, daily, minute, all, status or issues)`);
     process.exit(2);
   }
   if (command !== "universe" && !alpaca.isConfigured()) {

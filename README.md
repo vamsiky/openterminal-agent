@@ -141,6 +141,8 @@ Setup:
 2. Run the first backfill: `npm run history -w server -- all`. It is resumable, so you can stop it and run it again. `npm run history -w server -- status` shows progress.
 3. To keep it current on an always-on machine, set `HISTORY_SYNC=1` in `.env`. The API then syncs every weekday after 18:00 New York time. Add `HISTORY_SYNC_MINUTE=0` to keep daily bars only; the sync and `history all` then skip the minute bars.
 
+Every problem in a run is logged as it happens and stored per symbol with its reason for 90 days: `error` (a request failed, with Alpaca's or the network's message), `no_bars` (the request worked but nothing came back, e.g. a typo or a delisted name) and `skipped` (a watchlist ticker that isn't a US stock, such as `^GSPC` or `EURUSD=X`). `npm run history -w server -- issues` lists the latest run's issues; add `--symbol AAPL`, `--kind error` or `--run N` to narrow it. The same list is at `/api/bars/issues`, and `status` shows the counts per run.
+
 The stored bars are served read-only at `/api/bars/daily/:symbol?from=YYYY-MM-DD&to=YYYY-MM-DD`, `/api/bars/minute/:symbol?from=YYYY-MM-DD` and `/api/bars/status`.
 
 S&P 500 membership comes from Wikipedia and Nasdaq-100 from Nasdaq's index list. If either source changes format, put one symbol per line in `data/universe/sp500.txt` or `data/universe/nasdaq100.txt` to override it.

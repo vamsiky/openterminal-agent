@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { dailyBars, historyStatus, minuteBars } from "../history/store.js";
+import { dailyBars, historyStatus, listIssues, minuteBars } from "../history/store.js";
 import { tradingDay } from "../history/time.js";
 import { alpacaSymbol } from "../history/universe.js";
 
@@ -21,6 +21,19 @@ const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 barsRouter.get("/status", (_req, res) => {
   res.json(historyStatus());
+});
+
+/** Problems recorded by the sync: ?run=N (default latest), ?symbol=AAPL (all runs), ?kind=error|no_bars|skipped. */
+barsRouter.get("/issues", (req, res) => {
+  const q = z
+    .object({
+      run: z.coerce.number().int().positive().optional(),
+      symbol: z.string().regex(/^[A-Za-z0-9.^=&-]{1,20}$/).transform((s) => s.toUpperCase()).optional(),
+      kind: z.enum(["error", "no_bars", "skipped"]).optional(),
+    })
+    .safeParse(req.query);
+  if (!q.success) return res.status(400).json({ error: "run as a number, symbol, kind as error|no_bars|skipped" });
+  res.json(listIssues({ runId: q.data.run, symbol: q.data.symbol, kind: q.data.kind }));
 });
 
 barsRouter.get("/daily/:symbol", (req, res) => {

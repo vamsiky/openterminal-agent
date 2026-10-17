@@ -11,11 +11,13 @@ import {
   flagMinuteReload,
   heartbeat,
   indexSymbols,
+  issueCounts,
   lastDailyBar,
   lastMinuteTs,
   liveRun,
   markSynced,
   minuteReloads,
+  recordIssue,
   saveIndexMembers,
   saveUniverse,
   settledDailyBar,
@@ -23,6 +25,7 @@ import {
   upsertDailyBars,
   upsertMinuteBars,
   type DailyBar,
+  type IssueKind,
   type MinuteBar,
 } from "./store.js";
 import { tradingDay } from "./time.js";
@@ -39,8 +42,21 @@ const SPLIT_TOLERANCE = 0.005;
 const RUN_STALE_MINUTES = 30;
 
 let currentRun: number | null = null;
+let logLine: (msg: string) => void = () => {};
 function beat(): void {
   if (currentRun !== null) heartbeat(currentRun);
+}
+
+/**
+ * Record a problem against the current run (see history_issues in store.ts)
+ * and log it as it happens. Errors also go into `errors`, which decides the
+ * run's status; no_bars and skipped are warnings.
+ */
+function report(job: string, symbol: string | null, kind: IssueKind, reason: string, errors?: string[]): void {
+  recordIssue(currentRun, job, symbol, kind, reason);
+  const line = `${job}${symbol ? ` ${symbol}` : ""}: ${reason}`;
+  if (kind === "error") errors?.push(line);
+  logLine(`${kind === "error" ? "error" : "warning"}: ${line}`);
 }
 
 function yearsAgo(years: number, now: Date): string {
@@ -66,7 +82,13 @@ function groupBy<T>(items: T[], key: (t: T) => string): Map<string, T[]> {
   return map;
 }
 
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
+/** An error's message, plus its cause (fetch reports "fetch failed" with the real reason, e.g. ECONNRESET, there). */
+function message(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = err.cause as { code?: string; message?: string } | undefined;
+  const detail = cause?.code ?? cause?.message;
+  return detail && !err.message.includes(detail) ? `${err.message} (${detail})` : err.message;
+}
 
 /**
  * Run `fn` on each batch. A failed batch is retried one symbol at a time, so
@@ -84,14 +106,15 @@ async function eachBatch(
       await fn(batch);
     } catch (err) {
       if (batch.length === 1) {
-        errors.push(`${label} ${batch[0]}: ${message(err)}`);
+        report(label, batch[0], "error", message(err), errors);
         continue;
       }
+      logLine(`${label}: batch ${batch[0]}..${batch[batch.length - 1]} failed (${message(err)}); retrying one symbol at a time`);
       for (const s of batch) {
         try {
           await fn([s]);
         } catch (e) {
-          errors.push(`${label} ${s}: ${message(e)}`);
+          report(label, s, "error", message(e), errors);
         }
       }
     }
@@ -147,8 +170,20 @@ export async function syncDaily(
         upsertDailyBars(rows);
         result.bars += rows.length;
       }
-      for (const s of seen) {
+      for (const s of batch) {
         if (reload.has(s)) continue;
+        if (!seen.has(s)) {
+          const prev = settled.get(s);
+          report(
+            "daily",
+            s,
+            "no_bars",
+            prev
+              ? `Alpaca returned no bars since ${prev.day} (delisted, halted or renamed?)`
+              : `Alpaca returned no bars since ${start} (unknown symbol, or not on the ${alpaca.feed()} feed)`
+          );
+          continue;
+        }
         const last = lastDailyBar(s);
         if (last) markSynced("daily", s, last.day);
         result.symbols++;
@@ -173,7 +208,7 @@ export async function syncDaily(
       result.resplit.push(symbol);
       result.symbols++;
     } catch (err) {
-      result.errors.push(`daily reload ${symbol}: ${message(err)}`);
+      report("daily", symbol, "error", `split reload failed, old bars kept: ${message(err)}`, result.errors);
     }
   }
   return result;
@@ -208,14 +243,22 @@ export async function syncMinute(
 
   for (const [start, group] of groups) {
     await eachBatch("minute", group, MINUTE_BATCH, async (batch) => {
+      const seen = new Set<string>();
       for await (const page of source({ symbols: batch, timeframe: "1Min", start: new Date(start).toISOString() })) {
         beat();
         const rows: MinuteBar[] = [];
-        for (const [symbol, bars] of Object.entries(page)) for (const b of bars) rows.push(toMinute(symbol, b));
+        for (const [symbol, bars] of Object.entries(page)) {
+          for (const b of bars) rows.push(toMinute(symbol, b));
+          if (bars.length > 0) seen.add(symbol);
+        }
         upsertMinuteBars(rows);
         result.bars += rows.length;
       }
       for (const s of batch) {
+        if (!seen.has(s)) {
+          report("minute", s, "no_bars", `Alpaca returned no minute bars since ${new Date(start).toISOString()}`);
+          continue;
+        }
         if (pending.has(s)) {
           clearSynced("minute_reload", s);
           result.resplit.push(s);
@@ -282,11 +325,18 @@ export async function refreshUniverse(): Promise<{ listings: number; sp500: numb
  * GC=F, 0700.HK, BTC-USD) are left out.
  */
 export function minuteUniverse(): string[] {
-  const watched = allWatchlistSymbols().map(alpacaSymbol).filter((s): s is string => s !== null);
+  const watched = allWatchlistSymbols()
+    .map(alpacaSymbol)
+    .filter((s): s is string => s !== null);
   return [...new Set([...watched, ...indexSymbols(), ...CONTEXT_ETFS])].sort();
 }
 
 /** Symbols kept at daily resolution: everything active plus the minute set. */
+/** Watchlist tickers the history sync can't request from Alpaca. */
+export function unsupportedWatchlistSymbols(): string[] {
+  return allWatchlistSymbols().filter((s) => alpacaSymbol(s) === null);
+}
+
 export function dailyUniverse(): string[] {
   return [...new Set([...activeSymbols(), ...minuteUniverse()])].sort();
 }
@@ -294,6 +344,7 @@ export function dailyUniverse(): string[] {
 /** Record the current run as stopped (the CLI calls this on Ctrl-C). */
 export function interruptRun(reason: string): void {
   if (currentRun === null) return;
+  report("run", null, "error", reason);
   finishRun(currentRun, { status: "error", symbols: 0, bars: 0, error: reason });
   currentRun = null;
 }
@@ -315,6 +366,7 @@ export async function runJob(
   if (liveRun(RUN_STALE_MINUTES)) return { status: "skipped", detail: "another history sync is running" };
   const id = startRun(job);
   currentRun = id;
+  logLine = log;
   let symbols = 0;
   let bars = 0;
   let alpacaBars = 0;
@@ -323,7 +375,12 @@ export async function runJob(
     if (job === "universe" || job === "all") {
       const u = await refreshUniverse();
       log(`universe: ${u.listings} listings, ${u.sp500} S&P 500, ${u.nasdaq100} Nasdaq-100`);
-      errors.push(...u.errors);
+      for (const e of u.errors) report("universe", null, "error", e, errors);
+    }
+    if (job !== "universe") {
+      for (const s of unsupportedWatchlistSymbols()) {
+        report("watchlist", s, "skipped", "not a US stock or ETF ticker, so Alpaca has no bars for it (index, FX, futures, crypto or foreign listing)");
+      }
     }
     if (job === "daily" || job === "all") {
       const list = dailyUniverse();
@@ -336,7 +393,7 @@ export async function runJob(
       try {
         bars += await syncVix(opts.dailyYears);
       } catch (err) {
-        errors.push(`vix: ${err instanceof Error ? err.message : String(err)}`);
+        report("daily", "^VIX", "error", `FRED download failed: ${message(err)}`, errors);
       }
       log(`daily: ${d.bars} bars, ${d.resplit.length} re-split`);
     }
@@ -354,12 +411,17 @@ export async function runJob(
     // VIX alone doesn't count: it re-stores the same ~2,600 FRED points daily.
     const status = errors.length === 0 ? "ok" : alpacaBars === 0 ? "error" : "partial";
     finishRun(id, { status, symbols, bars, error: errors.length ? errors.slice(0, 20).join("\n") : undefined });
-    for (const e of errors) log(`error: ${e}`);
-    return { status, detail: { symbols, bars, errors } };
+    const counts = issueCounts(id);
+    if (counts.error + counts.no_bars + counts.skipped > 0) {
+      log(`issues: ${counts.error} errors, ${counts.no_bars} with no bars, ${counts.skipped} skipped (details: npm run history -w server -- issues)`);
+    }
+    return { status, detail: { symbols, bars, errors, issues: counts } };
   } catch (err) {
+    report(job, null, "error", `run stopped: ${message(err)}`);
     finishRun(id, { status: "error", symbols, bars, error: message(err) });
     return { status: "error", detail: message(err) };
   } finally {
     currentRun = null;
+    logLine = () => {};
   }
 }

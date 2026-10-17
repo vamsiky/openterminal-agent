@@ -57,6 +57,19 @@ CREATE TABLE IF NOT EXISTS history_runs (
   heartbeat_at TEXT
 );
 `);
+db.exec(`
+CREATE TABLE IF NOT EXISTS history_issues (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER,
+  job TEXT NOT NULL,
+  symbol TEXT,
+  kind TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS history_issues_run ON history_issues (run_id);
+CREATE INDEX IF NOT EXISTS history_issues_symbol ON history_issues (symbol);
+`);
 // Databases created before heartbeat_at existed.
 if (!(db.prepare("PRAGMA table_info(history_runs)").all() as Array<{ name: string }>).some((c) => c.name === "heartbeat_at")) {
   db.exec("ALTER TABLE history_runs ADD COLUMN heartbeat_at TEXT");
@@ -209,6 +222,7 @@ export function indexSymbols(): string[] {
 // ---- run bookkeeping ----
 
 export function startRun(job: string): number {
+  db.prepare("DELETE FROM history_issues WHERE at < datetime('now', '-90 days')").run();
   return Number(db.prepare("INSERT INTO history_runs (job, heartbeat_at) VALUES (?, datetime('now'))").run(job).lastInsertRowid);
 }
 
@@ -278,6 +292,70 @@ export function historyStatus() {
   const universe = db
     .prepare("SELECT SUM(active) AS active, COUNT(*) AS total, SUM(in_sp500) AS sp500, SUM(in_nasdaq100) AS nasdaq100 FROM symbols")
     .get();
-  const runs = db.prepare("SELECT * FROM history_runs ORDER BY id DESC LIMIT 10").all();
+  const runs = db
+    .prepare(
+      `SELECT r.*,
+        (SELECT COUNT(*) FROM history_issues i WHERE i.run_id = r.id AND i.kind = 'error') AS issue_errors,
+        (SELECT COUNT(*) FROM history_issues i WHERE i.run_id = r.id AND i.kind = 'no_bars') AS issue_no_bars,
+        (SELECT COUNT(*) FROM history_issues i WHERE i.run_id = r.id AND i.kind = 'skipped') AS issue_skipped
+      FROM history_runs r ORDER BY r.id DESC LIMIT 10`
+    )
+    .all();
   return { universe, jobs: perJob, runs };
+}
+
+// ---- issues ----
+//
+// One row per problem in a run, so a missing symbol can be traced: "error"
+// (a request failed; the reason is Alpaca's or the network's message),
+// "no_bars" (the request worked but nothing came back) and "skipped" (never
+// requested, e.g. a watchlist ticker that isn't a US stock). Kept 90 days.
+
+export type IssueKind = "error" | "no_bars" | "skipped";
+
+export type Issue = {
+  id: number;
+  run_id: number | null;
+  job: string;
+  symbol: string | null;
+  kind: IssueKind;
+  reason: string;
+  at: string;
+};
+
+export function recordIssue(runId: number | null, job: string, symbol: string | null, kind: IssueKind, reason: string): void {
+  db.prepare("INSERT INTO history_issues (run_id, job, symbol, kind, reason) VALUES (?, ?, ?, ?, ?)").run(runId, job, symbol, kind, reason);
+}
+
+/** Issues for one run (default: the latest run that has any), optionally one symbol or kind. */
+export function listIssues(filter: { runId?: number; symbol?: string; kind?: IssueKind; limit?: number } = {}): Issue[] {
+  const where: string[] = [];
+  const params: Array<string | number> = [];
+  if (filter.symbol) {
+    where.push("symbol = ?");
+    params.push(filter.symbol);
+  } else {
+    const runId = filter.runId ?? (db.prepare("SELECT MAX(run_id) AS id FROM history_issues").get() as { id: number | null }).id;
+    if (runId === null) return [];
+    where.push("run_id = ?");
+    params.push(runId);
+  }
+  if (filter.kind) {
+    where.push("kind = ?");
+    params.push(filter.kind);
+  }
+  params.push(filter.limit ?? 1000);
+  return db
+    .prepare(`SELECT * FROM history_issues WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`)
+    .all(...params) as Issue[];
+}
+
+export function issueCounts(runId: number): Record<IssueKind, number> {
+  const rows = db.prepare("SELECT kind, COUNT(*) AS n FROM history_issues WHERE run_id = ? GROUP BY kind").all(runId) as Array<{
+    kind: IssueKind;
+    n: number;
+  }>;
+  const counts: Record<IssueKind, number> = { error: 0, no_bars: 0, skipped: 0 };
+  for (const r of rows) counts[r.kind] = r.n;
+  return counts;
 }

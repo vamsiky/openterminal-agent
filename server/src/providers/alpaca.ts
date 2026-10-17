@@ -25,7 +25,7 @@ export function isConfigured(): boolean {
   return Boolean(process.env.ALPACA_API_KEY_ID && process.env.ALPACA_API_SECRET_KEY);
 }
 
-function feed(): string {
+export function feed(): string {
   return process.env.ALPACA_FEED?.trim() || "sip";
 }
 
