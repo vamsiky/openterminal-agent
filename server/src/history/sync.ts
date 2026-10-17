@@ -239,10 +239,13 @@ function isRunning(): boolean {
 
 export type JobName = "universe" | "daily" | "minute" | "all";
 
-/** Run a job with run bookkeeping and a cross-process guard. */
+/**
+ * Run a job with run bookkeeping and a cross-process guard. `minute: false`
+ * makes "all" stop after universe + daily (HISTORY_SYNC_MINUTE=0).
+ */
 export async function runJob(
   job: JobName,
-  opts: { dailyYears?: number; minuteYears?: number; log?: (msg: string) => void } = {}
+  opts: { dailyYears?: number; minuteYears?: number; minute?: boolean; log?: (msg: string) => void } = {}
 ): Promise<{ status: "ok" | "error" | "skipped"; detail: unknown }> {
   const log = opts.log ?? (() => {});
   if (isRunning()) return { status: "skipped", detail: "another history sync is running" };
@@ -272,7 +275,7 @@ export async function runJob(
       }
       log(`daily: ${d.bars} bars, ${d.resplit.length} re-split`);
     }
-    if (job === "minute" || job === "all") {
+    if (job === "minute" || (job === "all" && opts.minute !== false)) {
       const list = minuteUniverse();
       log(`minute: syncing ${list.length} symbols`);
       const m = await syncMinute(list, { years: opts.minuteYears, reload: resplit });

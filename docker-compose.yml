@@ -25,6 +25,7 @@ services:
       - ALPACA_FEED=${ALPACA_FEED:-sip}
       - ALPACA_MAX_REQ_PER_MIN=${ALPACA_MAX_REQ_PER_MIN:-180}
       - HISTORY_SYNC=${HISTORY_SYNC:-0}
+      - HISTORY_SYNC_MINUTE=${HISTORY_SYNC_MINUTE:-1}
     volumes:
       - terminal-data:/app/data
     restart: unless-stopped

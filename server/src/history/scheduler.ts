@@ -6,6 +6,7 @@ import { runJob } from "./sync.js";
 // Opt in with HISTORY_SYNC=1 (and Alpaca keys). Every 15 minutes it checks
 // whether today's New York session has closed (after 18:00 ET, Mon–Fri) and
 // whether today's sync already ran; if not, it runs universe + daily + minute.
+// HISTORY_SYNC_MINUTE=0 leaves out the minute bars (daily only).
 // The first run on an empty database is the full backfill, which can take
 // hours; `npm run history -w server -- all` does the same from a terminal.
 
@@ -37,6 +38,10 @@ export function syncDue(now: Date, lastRunStartedUtc: string | undefined): boole
   return last.date !== ny.date || last.hour < SYNC_AFTER_HOUR_ET;
 }
 
+export function minuteEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.HISTORY_SYNC_MINUTE !== "0";
+}
+
 export function startHistoryScheduler(): void {
   if (process.env.HISTORY_SYNC !== "1") return;
   if (!alpaca.isConfigured()) {
@@ -48,7 +53,7 @@ export function startHistoryScheduler(): void {
     if (busy || !syncDue(new Date(), lastFinishedRun("all")?.started_at)) return;
     busy = true;
     try {
-      const result = await runJob("all", { log: (m) => console.log(`[history] ${m}`) });
+      const result = await runJob("all", { minute: minuteEnabled(), log: (m) => console.log(`[history] ${m}`) });
       console.log(`[history] nightly sync ${result.status}`);
     } finally {
       busy = false;
@@ -56,5 +61,5 @@ export function startHistoryScheduler(): void {
   };
   setInterval(tick, CHECK_EVERY_MS).unref();
   void tick();
-  console.log("[history] nightly sync enabled (after 18:00 New York time, weekdays)");
+  console.log(`[history] nightly sync enabled (after 18:00 New York time, weekdays${minuteEnabled() ? "" : ", daily bars only"})`);
 }

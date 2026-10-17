@@ -1,6 +1,7 @@
 import "../env.js";
 import * as alpaca from "../providers/alpaca.js";
 import { historyStatus } from "./store.js";
+import { minuteEnabled } from "./scheduler.js";
 import { runJob, type JobName } from "./sync.js";
 
 // Usage (from the repo root):
@@ -10,6 +11,7 @@ import { runJob, type JobName } from "./sync.js";
 //   npm run history -w server -- all               all of the above, in order
 //   npm run history -w server -- status            what is stored so far
 // Options: --daily-years N, --minute-years N
+// HISTORY_SYNC_MINUTE=0 in .env makes "all" skip the minute bars.
 // Runs are resumable: stopping and re-running picks up where each symbol left off.
 
 const JOBS = new Set(["universe", "daily", "minute", "all"]);
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
   const result = await runJob(command as JobName, {
     dailyYears: option("--daily-years"),
     minuteYears: option("--minute-years"),
+    minute: minuteEnabled(),
     log: (m) => console.log(`[${new Date().toISOString()}] ${m}`),
   });
   console.log(`${command}: ${result.status}`);

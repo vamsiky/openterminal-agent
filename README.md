@@ -139,7 +139,7 @@ Setup:
 
 1. `cp .env.example .env` and fill in `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY`. `.env` is gitignored. Only Alpaca's market-data API is ever called, never the trading API.
 2. Run the first backfill: `npm run history -w server -- all`. It is resumable, so you can stop it and run it again. `npm run history -w server -- status` shows progress.
-3. To keep it current on an always-on machine, set `HISTORY_SYNC=1` in `.env`. The API then syncs every weekday after 18:00 New York time.
+3. To keep it current on an always-on machine, set `HISTORY_SYNC=1` in `.env`. The API then syncs every weekday after 18:00 New York time. Add `HISTORY_SYNC_MINUTE=0` to keep daily bars only; the sync and `history all` then skip the minute bars.
 
 The stored bars are served read-only at `/api/bars/daily/:symbol?from=YYYY-MM-DD&to=YYYY-MM-DD`, `/api/bars/minute/:symbol?from=YYYY-MM-DD` and `/api/bars/status`.
 

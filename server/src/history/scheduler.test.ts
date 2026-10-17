@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nyClock, syncDue } from "./scheduler.js";
+import { minuteEnabled, nyClock, syncDue } from "./scheduler.js";
 
 describe("nightly sync timing", () => {
   it("reads New York time across daylight saving", () => {
@@ -18,5 +18,11 @@ describe("nightly sync timing", () => {
   it("is not due before 18:00 New York time or on weekends", () => {
     expect(syncDue(new Date("2026-10-16T20:00:00Z"), undefined)).toBe(false); // Fri 16:00 ET
     expect(syncDue(new Date("2026-10-17T23:00:00Z"), undefined)).toBe(false); // Sat
+  });
+
+  it("syncs minute bars unless HISTORY_SYNC_MINUTE=0", () => {
+    expect(minuteEnabled({})).toBe(true);
+    expect(minuteEnabled({ HISTORY_SYNC_MINUTE: "1" })).toBe(true);
+    expect(minuteEnabled({ HISTORY_SYNC_MINUTE: "0" })).toBe(false);
   });
 });
