@@ -145,6 +145,14 @@ Every problem in a run is logged as it happens and stored per symbol with its re
 
 The stored bars are served read-only at `/api/bars/daily/:symbol?from=YYYY-MM-DD&to=YYYY-MM-DD`, `/api/bars/minute/:symbol?from=YYYY-MM-DD` and `/api/bars/status`.
 
+**Live prices.** With the Alpaca keys set, the API also keeps real-time prices in memory, so clicking a ticker doesn't wait on the web:
+
+- Every trade and quote for the watchlist, S&P 500, Nasdaq-100, sector ETFs and any ticker open on screen (subscribed on the first request, dropped 10 minutes after the last).
+- Minute and daily bars for every other US ticker, so they are at most a minute old, plus snapshots every 5 minutes.
+- Charts for US tickers come from the stored history plus today's live bar (daily ranges) or Alpaca's intraday bars (1D, 5D, 1M).
+- The quote panel shows **● Live** while a ticker gets every trade, **● As of** a time when it doesn't (stream down, market closed), or the web source's name.
+- Crypto, indices, FX, futures, foreign listings, news and options keep their web sources. `/api/status` shows the stream's state. Set `LIVE_STREAM=0` to turn it off. Alpaca allows one stream connection per account, so another app using the same keys' stream makes this one fail with error 406.
+
 S&P 500 membership comes from Wikipedia and Nasdaq-100 from Nasdaq's index list. If either source changes format, put one symbol per line in `data/universe/sp500.txt` or `data/universe/nasdaq100.txt` to override it.
 
 ### Optional: AI assistant

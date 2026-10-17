@@ -52,6 +52,8 @@ export type Quote = {
   marketState: string | null;
   source: string;
   asOf?: string;
+  /** Alpaca quotes only: true while this ticker gets every trade from the live stream. */
+  live?: boolean;
   sector?: string;
   label?: string;
 };

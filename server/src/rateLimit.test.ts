@@ -37,6 +37,15 @@ describe("rateLimit", () => {
     expect(res.status).toHaveBeenCalledWith(429);
   });
 
+  it("lets requests the skip test accepts through without counting them", () => {
+    const limiter = rateLimit({ windowMs: 60_000, max: 1, skip: (req) => req.ip === "trusted" });
+    const next = vi.fn() as NextFunction;
+    const res = fakeRes();
+    for (let i = 0; i < 5; i++) limiter(fakeReq("trusted"), res, next);
+    expect(next).toHaveBeenCalledTimes(5);
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
   it("sweeps expired entries out of the internal hits map so it does not grow unbounded", () => {
     const windowMs = 60_000;
     const limiter = rateLimit({ windowMs, max: 10 }) as unknown as ((

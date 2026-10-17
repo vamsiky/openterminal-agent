@@ -25,11 +25,15 @@ if (!process.env.API_KEY) {
   );
 }
 
-export function requireApiKey(req: Request, res: Response, next: NextFunction): void {
-  const provided = req.header("x-api-key") ?? "";
+/** True when the request carries this server's API key (the bundled web app's proxy always does). */
+export function hasApiKey(req: Request): boolean {
   const expected = Buffer.from(apiKey);
-  const actual = Buffer.from(provided);
-  if (actual.length === expected.length && timingSafeEqual(actual, expected)) {
+  const actual = Buffer.from(req.header("x-api-key") ?? "");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+export function requireApiKey(req: Request, res: Response, next: NextFunction): void {
+  if (hasApiKey(req)) {
     next();
     return;
   }

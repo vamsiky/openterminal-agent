@@ -7,6 +7,8 @@
 // app places orders.
 
 const DATA_BASE = "https://data.alpaca.markets";
+// Real-time stream for the same market data (trades, quotes, bars).
+const STREAM_BASE = "wss://stream.data.alpaca.markets";
 
 export type Bar = {
   t: string; // RFC 3339 bar start time
@@ -19,7 +21,7 @@ export type Bar = {
   vw?: number; // volume-weighted average price
 };
 
-export type Timeframe = "1Min" | "5Min" | "1Hour" | "1Day";
+export type Timeframe = "1Min" | "5Min" | "15Min" | "1Hour" | "1Day";
 
 export function isConfigured(): boolean {
   return Boolean(process.env.ALPACA_API_KEY_ID && process.env.ALPACA_API_SECRET_KEY);
@@ -117,4 +119,48 @@ export async function* stockBars(opts: Omit<Parameters<typeof stockBarsPage>[0],
     yield page.bars;
     pageToken = page.nextPageToken ?? undefined;
   } while (pageToken);
+}
+
+export type Snapshot = {
+  latestTrade?: { t: string; p: number; s: number } | null;
+  latestQuote?: { t: string; bp: number; ap: number; bs: number; as: number } | null;
+  minuteBar?: Bar | null;
+  dailyBar?: Bar | null;
+  prevDailyBar?: Bar | null;
+};
+
+/** Latest trade, quote and today's/yesterday's bars for up to a few hundred symbols in one call. */
+export async function snapshots(symbols: string[]): Promise<Record<string, Snapshot | null>> {
+  if (symbols.length === 0) return {};
+  const data = await dataFetch("/v2/stocks/snapshots", { symbols: symbols.join(","), feed: feed() });
+  return data ?? {};
+}
+
+/**
+ * Open the real-time stream and authenticate once Alpaca says it's connected.
+ * The caller subscribes after the "authenticated" message. Uses the global
+ * WebSocket (Node 22+).
+ */
+export function openStream(): WebSocket {
+  if (!isConfigured()) throw new Error("alpaca: ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY not set");
+  const ws = new WebSocket(`${STREAM_BASE}/v2/${feed()}`);
+  ws.addEventListener("message", (ev) => {
+    const msgs = parseStream(ev.data);
+    if (msgs.some((m) => m.T === "success" && m.msg === "connected")) {
+      ws.send(JSON.stringify({ action: "auth", key: process.env.ALPACA_API_KEY_ID, secret: process.env.ALPACA_API_SECRET_KEY }));
+    }
+  });
+  return ws;
+}
+
+export type StreamMessage = { T: string; S?: string; msg?: string; code?: number; [k: string]: unknown };
+
+/** Stream frames are JSON arrays of messages. */
+export function parseStream(data: unknown): StreamMessage[] {
+  try {
+    const parsed = JSON.parse(typeof data === "string" ? data : Buffer.from(data as ArrayBuffer).toString("utf8"));
+    return Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    return [];
+  }
 }

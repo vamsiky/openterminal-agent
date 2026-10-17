@@ -53,7 +53,7 @@ export default function QuoteWidget({ widget }: { widget: WidgetInstance }) {
           {fmt(data.change)} ({fmt(data.changePercent)}%)
         </Flash>
         <span className="dim text-[10px] ml-auto">
-          {data.exchange ?? ""} · {data.currency ?? ""} · {data.source}
+          {data.exchange ?? ""} · {data.currency ?? ""} · <Freshness quote={data} />
         </span>
       </div>
       <div className="dim text-[11px] mb-2 truncate">{data.name}</div>
@@ -67,4 +67,12 @@ export default function QuoteWidget({ widget }: { widget: WidgetInstance }) {
       </div>
     </div>
   );
+}
+
+/** Where the price came from: live from Alpaca, Alpaca's last trade time, or a web source. */
+function Freshness({ quote }: { quote: Quote }) {
+  if (quote.source !== "alpaca") return <span title="free web source, cached briefly">web · {quote.source}</span>;
+  if (quote.live) return <span className="up" title="every trade from Alpaca's live stream">● Live</span>;
+  const at = quote.asOf ? new Date(quote.asOf).toLocaleTimeString() : "—";
+  return <span style={{ color: "var(--amber)" }} title="last trade Alpaca reported for this ticker">● As of {at}</span>;
 }

@@ -13,6 +13,10 @@ import * as news from "../providers/news.js";
 import * as econcalendar from "../providers/econcalendar.js";
 import * as finra from "../providers/finra.js";
 import * as secedgar from "../providers/secedgar.js";
+import * as alpaca from "../providers/alpaca.js";
+import * as live from "../live/feed.js";
+import { alpacaHistory } from "../live/history.js";
+import { alpacaSymbol } from "../history/universe.js";
 
 export const marketRouter = Router();
 
@@ -111,7 +115,64 @@ async function vixHistory(rangeKey: string): Promise<yahoo.Candle[]> {
  * per-IP rate limit (see index.ts).
  */
 const FALLBACK_PER_SYMBOL_CAP = 20;
+
+/** The Alpaca symbol for a US stock or ETF ticker, or null for crypto, VIX, indices, FX, futures and foreign listings. */
+function usStock(symbol: string): string | null {
+  if (binance.CRYPTO_SYMBOLS.has(symbol) || isVix(symbol)) return null;
+  return alpacaSymbol(symbol);
+}
+
+// Name, exchange and fundamentals for live quotes. These barely change during
+// a day, so they are fetched from the web sources in the background, at most
+// hourly per ticker, and never hold up a price.
+type StaticFields = Pick<
+  yahoo.Quote,
+  "name" | "exchange" | "avgVolume" | "marketCap" | "pe" | "eps" | "dividendYield" | "week52High" | "week52Low" | "beta" | "sharesOutstanding"
+>;
+const STATIC_TTL = 3_600_000;
+const staticFields = new Map<string, { at: number; fields: StaticFields }>();
+const staticInFlight = new Set<string>();
+
+function refreshStatic(symbol: string): void {
+  const known = staticFields.get(symbol);
+  if ((known && Date.now() - known.at < STATIC_TTL) || staticInFlight.has(symbol)) return;
+  staticInFlight.add(symbol);
+  webQuotes([symbol])
+    .then(([q]) => {
+      if (!q) return;
+      const { name, exchange, avgVolume, marketCap, pe, eps, dividendYield, week52High, week52Low, beta, sharesOutstanding } = q;
+      staticFields.set(symbol, { at: Date.now(), fields: { name, exchange, avgVolume, marketCap, pe, eps, dividendYield, week52High, week52Low, beta, sharesOutstanding } });
+    })
+    .catch(() => {})
+    .finally(() => staticInFlight.delete(symbol));
+}
+
+/**
+ * Quotes: US stocks and ETFs from the live Alpaca feed in memory (real time
+ * for anything on screen), everything else, or anything Alpaca doesn't know,
+ * from the web sources below.
+ */
 async function getQuotes(symbols: string[]): Promise<yahoo.Quote[]> {
+  if (!live.enabled()) return webQuotes(symbols);
+  const mapped = new Map(symbols.map((s) => [s, usStock(s)]));
+  await live.focusOn([...new Set([...mapped.values()].filter((a): a is string => a !== null))]);
+  const out = new Map<string, yahoo.Quote>();
+  const rest: string[] = [];
+  for (const s of symbols) {
+    const a = mapped.get(s);
+    const q = a ? live.liveQuote(a, s) : null;
+    if (!q) {
+      rest.push(s);
+      continue;
+    }
+    refreshStatic(s);
+    out.set(s, { ...q, ...staticFields.get(s)?.fields });
+  }
+  if (rest.length > 0) for (const q of await webQuotes(rest)) out.set(q.symbol, q);
+  return symbols.map((s) => out.get(s)).filter((q): q is yahoo.Quote => Boolean(q));
+}
+
+async function webQuotes(symbols: string[]): Promise<yahoo.Quote[]> {
   const fresh = new Map<string, yahoo.Quote>();
   const missing: string[] = [];
   for (const sym of symbols) {
@@ -234,9 +295,21 @@ marketRouter.get("/quotes", async (req, res) => {
 
 // ---- history / candles ----
 
+// Alpaca candles end with the live price, so they're cached only briefly.
+const ALPACA_HISTORY_TTL = 2_000;
+
 marketRouter.get("/history/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const rangeKey = String(req.query.range ?? "6M");
+  const a = usStock(symbol);
+  if (a && alpaca.isConfigured()) {
+    try {
+      const data = await cached(`alpaca-history:${a}:${rangeKey}`, ALPACA_HISTORY_TTL, () => alpacaHistory(a, rangeKey));
+      if (data && data.length > 0) return res.json(data);
+    } catch (err) {
+      console.warn("[market] alpaca history failed, using web sources:", err instanceof Error ? err.message : err);
+    }
+  }
   try {
     const data = await cached(`history:${symbol}:${rangeKey}`, HISTORY_TTL, () =>
       binance.CRYPTO_SYMBOLS.has(symbol)
