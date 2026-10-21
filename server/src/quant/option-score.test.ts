@@ -100,6 +100,22 @@ describe("buildSetups", () => {
     expect(os.buildSetups({ ...i, momentum: { m5: 40, m15: 45, h1: 40, d1: 10 } }).map((s) => s.strategy)).not.toContain("covered_call");
   });
 
+  it("ex-dividend before expiry: a big penalty on a covered call, a small one on a short put", () => {
+    const call = inputs({ momentum: { m5: -10, m15: -5, h1: 10, d1: 0 }, metrics: metrics({ ivRank: 80 }), composite: 40, sharesHeld: 100 });
+    const plain = os.buildSetups(call)[0];
+    const warned = os.buildSetups({ ...call, nextExDividend: "2026-11-05" })[0];
+    expect(warned.score).toBe(Math.round((plain.score - os.EX_DIVIDEND_PENALTY.covered_call) * 10) / 10);
+    expect(warned.reasons).toContain("ex-dividend 2026-11-05 before expiry: early assignment risk");
+    expect(os.buildSetups({ ...call, nextExDividend: "2026-12-05" })[0].score).toBe(plain.score);
+    expect(os.buildSetups({ ...call, nextExDividend: "2026-10-01" })[0].score).toBe(plain.score);
+
+    const put = inputs({ momentum: { m5: 0, m15: 5, h1: 0, d1: -10 }, metrics: metrics({ ivRank: 75 }), composite: 72 });
+    const p0 = os.buildSetups(put)[0];
+    const p1 = os.buildSetups({ ...put, nextExDividend: "2026-11-05" })[0];
+    expect(p0.score - p1.score).toBeCloseTo(os.EX_DIVIDEND_PENALTY.short_put, 1);
+    expect(p1.reasons.join(" ")).toMatch(/ex-dividend 2026-11-05/);
+  });
+
   it("offers nothing without option metrics", () => {
     expect(os.buildSetups(inputs({ metrics: null }))).toEqual([]);
   });

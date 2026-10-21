@@ -5,6 +5,7 @@ import { minuteBars } from "../history/store.js";
 import { tradingDay } from "../history/time.js";
 import type { OptionMetrics, OptionScorecard, OptionSetup } from "../scan/contracts.js";
 import { atr, ema, rollup, rsi, vwap, type Bar } from "./indicators.js";
+import { nextExDividends } from "./dividends.js";
 import { sharesHeld } from "./positions.js";
 import { compositeMap, getLiveScorecard, loadDaily } from "./stock-score.js";
 
@@ -38,6 +39,8 @@ export const WOULD_OWN_COMPOSITE = 60;
 export const SHARES_PER_CONTRACT = 100;
 /** Points taken off a setup when earnings fall before its expiry. */
 export const EARNINGS_PENALTY = { long_call: 25, short_put: 15, covered_call: 10 } as const;
+/** Points taken off when an ex-dividend date falls before expiry: early assignment risk for a short call, a small note for a short put. */
+export const EX_DIVIDEND_PENALTY = { covered_call: 30, short_put: 3 } as const;
 /** Every setup that passes its gates starts here and earns the rest from its factors. */
 const SETUP_BASE = 40;
 /** Minute-bar history used for the intraday trend scores (calendar days). */
@@ -117,6 +120,8 @@ export type SetupInputs = {
   sharesHeld: number;
   /** Next report date (YYYY-MM-DD) or null when unknown. */
   nextEarnings: string | null;
+  /** Next ex-dividend date (YYYY-MM-DD) within the calendar's window, or null. */
+  nextExDividend?: string | null;
   today: string;
 };
 
@@ -151,6 +156,13 @@ function earningsNote(i: SetupInputs): { before: boolean | null; text: string | 
   if (!expiry || !i.nextEarnings) return { before: i.nextEarnings === null ? null : false, text: null };
   const before = i.nextEarnings >= i.today && i.nextEarnings <= expiry;
   return { before, text: before ? `earnings on ${i.nextEarnings} fall before the ${expiry} expiry` : null };
+}
+
+/** The ex-dividend date if it falls from today up to the contract's expiry. */
+function exDividendBefore(i: SetupInputs): string | null {
+  const expiry = i.metrics?.atmExpiry;
+  const ex = i.nextExDividend;
+  return expiry && ex && ex >= i.today && ex <= expiry ? ex : null;
 }
 
 /** The three setups that pass their gates, best first. */
@@ -198,6 +210,11 @@ export function buildSetups(i: SetupInputs): OptionSetup[] {
       score -= EARNINGS_PENALTY.short_put;
       reasons.push(`caution: ${earn.text}`);
     }
+    const exDiv = exDividendBefore(i);
+    if (exDiv) {
+      score -= EX_DIVIDEND_PENALTY.short_put;
+      reasons.push(`note: ex-dividend ${exDiv} before expiry`);
+    }
     out.push({ strategy: "short_put", score: round1(clamp(score, 0, 100)), contract: m.atmPut, reasons });
   }
 
@@ -213,6 +230,11 @@ export function buildSetups(i: SetupInputs): OptionSetup[] {
     if (earn.text) {
       score -= EARNINGS_PENALTY.covered_call;
       reasons.push(`caution: ${earn.text}`);
+    }
+    const exDiv = exDividendBefore(i);
+    if (exDiv) {
+      score -= EX_DIVIDEND_PENALTY.covered_call;
+      reasons.push(`ex-dividend ${exDiv} before expiry: early assignment risk`);
     }
     out.push({ strategy: "covered_call", score: round1(clamp(score, 0, 100)), contract: m.atmCall, reasons });
   }
@@ -231,6 +253,7 @@ export function runOptionScan(symbols: string[], optionMetrics: (symbols: string
   const metrics = optionMetrics(symbols);
   const composites = compositeMap(symbols);
   const nowSec = Math.floor(now.getTime() / 1000);
+  const exDivs = nextExDividends(symbols, today);
   const earnings = new Map(calendarFor(symbols, today).map((e) => [e.symbol, e.nextEarningsDate ? new Date(e.nextEarningsDate * 1000).toISOString().slice(0, 10) : null]));
   const asOf = now.toISOString();
 
@@ -247,7 +270,7 @@ export function runOptionScan(symbols: string[], optionMetrics: (symbols: string
     const nextEarnings = earnings.get(symbol) ?? null;
     const live = getLiveScorecard(symbol);
     const rv = live?.factors.find((f) => f.key === "rel_volume")?.value ?? null;
-    const setups = buildSetups({ momentum, metrics: m, composite: composites.get(symbol) ?? null, relVolume: rv, sharesHeld: sharesHeld(symbol), nextEarnings, today });
+    const setups = buildSetups({ momentum, metrics: m, composite: composites.get(symbol) ?? null, relVolume: rv, sharesHeld: sharesHeld(symbol), nextEarnings, nextExDividend: exDivs.get(symbol) ?? null, today });
     const earn = m ? earningsNote({ momentum, metrics: m, composite: null, relVolume: null, sharesHeld: 0, nextEarnings, today }) : { before: null };
     cards.push({
       underlying: symbol,

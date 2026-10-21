@@ -3,6 +3,7 @@ import { nyClock } from "../history/scheduler.js";
 import { nyInstant } from "../live/session.js";
 import { ensureCalendar, isTradingDay, sessionClose } from "../providers/alpaca-calendar.js";
 import type { QuantDeps } from "../scan/contracts.js";
+import { refreshDividends } from "./dividends.js";
 import { refreshStockIdeas, runStockScreen, updateOptionIdeas } from "./ideas.js";
 import { optionScores, runOptionScan } from "./option-score.js";
 import { heldSymbols } from "./positions.js";
@@ -210,6 +211,7 @@ export function startQuantJobs(d: QuantDeps): { stop: () => void } | null {
     try {
       const now = new Date();
       await ensureYears(now);
+      await refreshDividends(now);
       // A fresh install has no scorecards: build them once without waiting for 07:00.
       const jobs: JobName[] = latestScorecardDay() === null && lastStart("stock-nightly") === null ? ["stock-nightly", "ideas-screen"] : dueJobs(now, (j) => lastStart(j));
       for (const job of jobs) {
