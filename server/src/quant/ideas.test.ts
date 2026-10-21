@@ -20,9 +20,9 @@ function seedCards(scores: Record<string, number>, day = "2026-10-21", coverage 
   }
 }
 
-function optionCard(underlying: string, score: number | null): OptionScorecard {
+function optionCard(underlying: string, score: number | null, ivHistoryDays = 200): OptionScorecard {
   return {
-    underlying, asOf: NOW.toISOString(), score, momentum: { m5: 1, m15: 2, h1: 3, d1: 4 }, metrics: null, earningsBeforeExpiry: null, nextEarnings: null,
+    underlying, asOf: NOW.toISOString(), score, momentum: { m5: 1, m15: 2, h1: 3, d1: 4 }, metrics: { ivHistoryDays } as OptionScorecard["metrics"], earningsBeforeExpiry: null, nextEarnings: null,
     setups: score === null ? [] : [{ strategy: "long_call", score, contract: `${underlying}261120C00100000`, reasons: ["r"] }],
   };
 }
@@ -105,9 +105,22 @@ describe("option ideas", () => {
     expect(back.rank).toBe(1);
   });
 
+  it("uses 60 while IV history is under 20 days, with the reason", () => {
+    seedOptions([optionCard("NEW1", 65, 5), optionCard("NEW2", 55, 5), optionCard("OLD1", 65, 200), optionCard("EDGE", 62, 20)]);
+    ideas.updateOptionIdeas(later(30));
+    const list = ideas.listIdeas({ kind: "option", limit: 100 });
+    const new1 = list.find((i) => i.symbol === "NEW1")!;
+    expect(new1.reasons).toEqual(["r", ideas.EARLY_IV_REASON]);
+    expect(list.map((i) => i.symbol)).not.toContain("NEW2"); // under 60
+    expect(list.map((i) => i.symbol)).not.toContain("OLD1"); // enough history, so 70 applies
+    expect(list.map((i) => i.symbol)).not.toContain("EDGE"); // exactly 20 days counts as enough
+  });
+
   it("caps the list at 20", () => {
     seedOptions(Array.from({ length: 30 }, (_, i) => optionCard(`X${String(i).padStart(2, "0")}`, 99 - i / 2)));
     ideas.updateOptionIdeas(later(20));
-    expect(ideas.listIdeas({ kind: "option", limit: 100 })).toHaveLength(22); // 20 new, AAA and BBB missing once each
+    const list = ideas.listIdeas({ kind: "option", limit: 100 });
+    expect(list.slice(0, 20).map((i) => i.symbol)).toEqual(Array.from({ length: 20 }, (_, i) => `X${String(i).padStart(2, "0")}`));
+    expect(list.slice(20).every((i) => !i.symbol.startsWith("X"))).toBe(true); // ideas that missed this scan once are carried below
   });
 });
