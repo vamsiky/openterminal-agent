@@ -16,3 +16,16 @@ export function guardrail(t: GuardrailInput, day: string, opts: { sharesHeld?: n
   if (t.strategy === "covered_call" && (opts.sharesHeld ?? 0) < 100) return "covered call without at least 100 shares held";
   return null;
 }
+
+export const PRICE_DISTANCE_WARN = 0.5;
+
+/**
+ * Sanity check on the judge's prices: entry, target and invalidation more than 50% away from the current price are
+ * flagged (a typo, a unit slip or an invented level). Returns a warning, or null; it never rejects.
+ */
+export function priceWarning(t: { entry: { low: number | null; high: number | null } | null; target: { price: number | null } | null; invalidation: { price: number | null } | null }, price: number | null): string | null {
+  if (price === null || !(price > 0)) return null;
+  const far = (label: string, v: number | null | undefined) => (typeof v === "number" && Math.abs(v / price - 1) > PRICE_DISTANCE_WARN ? [`${label} ${v}`] : []);
+  const hits = [...far("entry low", t.entry?.low), ...far("entry high", t.entry?.high), ...far("target", t.target?.price), ...far("invalidation", t.invalidation?.price)];
+  return hits.length ? `warning: ${hits.join(", ")} more than 50% from the current price ${price}` : null;
+}

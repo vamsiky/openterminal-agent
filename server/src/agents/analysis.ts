@@ -9,7 +9,7 @@ import { getLiveScorecard, getStockScorecard } from "../quant/stock-score.js";
 import type { Idea } from "../scan/contracts.js";
 import { capUsd, judgeModel, MAX_TURNS, model } from "./config.js";
 import type { Case, MacroReport, Thesis, ThesisStrategy } from "./contracts.js";
-import { guardrail } from "./guardrail.js";
+import { guardrail, priceWarning } from "./guardrail.js";
 import { loadPrompt } from "./prompts.js";
 import { runAgent, type RunResult } from "./runtime.js";
 import { caseJson, caseOutput, judgeJson, judgeOutput, type CaseOutput } from "./schemas.js";
@@ -120,10 +120,11 @@ export async function analyze(item: AnalysisTarget, now = new Date()): Promise<A
 
   const j = judgeRun.output;
   const rejected = guardrail({ verdict: j.verdict, invalidation: j.invalidation, catalysts: j.catalysts, strategy: item.strategy }, day, { sharesHeld: ctx.held.shares });
+  const warning = priceWarning(j, ctx.quote?.price ?? null);
   return {
     outcome: "done",
     thesis: insertThesis(day, {
-      ...base, ...j, status: rejected ? "rejected" : "ok", statusReason: rejected, costUsd: cost, models: { ...base.models, judge: judgeModel() },
+      ...base, ...j, status: rejected ? "rejected" : "ok", statusReason: [rejected, warning].filter(Boolean).join("; ") || null, costUsd: cost, models: { ...base.models, judge: judgeModel() },
     }),
   };
 }
