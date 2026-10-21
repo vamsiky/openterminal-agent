@@ -102,6 +102,8 @@ export type Quote = {
   extended?: ExtendedHours;
   sector?: string;
   label?: string;
+  /** A foreign symbol priced from its US listing on Alpaca; an ADR's price is per ADR, not per local share. */
+  listing?: { symbol: string; exchange: string; kind: "interlisted" | "adr" };
 };
 
 export type SessionPrice = {

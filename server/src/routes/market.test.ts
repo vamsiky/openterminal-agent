@@ -21,6 +21,7 @@ vi.mock("../providers/fred.js", () => ({ series: vi.fn(), latest: vi.fn() }));
 vi.mock("../providers/ecb.js", () => ({ series: vi.fn(), latest: vi.fn() }));
 vi.mock("../providers/stooq.js", () => ({ quote: vi.fn(), history: vi.fn() }));
 vi.mock("../providers/calendars.js", () => ({ econEvents: vi.fn() }));
+vi.mock("./us-listing.js", async (orig) => ({ ...(await orig<object>()), lookup: vi.fn() }));
 vi.mock("../providers/fmp.js", async (orig) => ({
   ...(await orig<object>()),
   isConfigured: vi.fn(),
@@ -45,6 +46,7 @@ let ecb: typeof import("../providers/ecb.js");
 let stooq: typeof import("../providers/stooq.js");
 let calendars: typeof import("../providers/calendars.js");
 let fmp: typeof import("../providers/fmp.js");
+let usListing: typeof import("./us-listing.js");
 
 beforeAll(async () => {
   tmpDir = mkdtempSync(join(tmpdir(), "openterminal-market-test-"));
@@ -60,6 +62,7 @@ beforeAll(async () => {
   stooq = await import("../providers/stooq.js");
   calendars = await import("../providers/calendars.js");
   fmp = await import("../providers/fmp.js");
+  usListing = await import("./us-listing.js");
   vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new Error("no network in tests"))));
 });
 
@@ -78,6 +81,7 @@ beforeEach(() => {
   vi.mocked(stooq.quote).mockReset().mockRejectedValue(new Error("stooq down"));
   vi.mocked(stooq.history).mockReset().mockRejectedValue(new Error("stooq down"));
   vi.mocked(crypto.quote).mockReset();
+  vi.mocked(usListing.lookup).mockReset().mockResolvedValue(new Map());
 });
 
 type Res = { statusCode: number; body: any; headers: Record<string, string> };
@@ -186,6 +190,27 @@ describe("quote routing", () => {
     }
   });
 
+  it("prices a foreign listing FMP refuses from its US listing, labelled as such", async () => {
+    vi.mocked(fmp.isConfigured).mockReturnValue(true);
+    vi.mocked(fmp.quotes).mockRejectedValue(new Error("fmp: 402"));
+    vi.mocked(usListing.lookup).mockResolvedValue(
+      new Map([
+        ["SHOP.TO", { symbol: "SHOP", exchange: "Nasdaq", kind: "interlisted" as const }],
+        ["2330.TW", { symbol: "TSM", exchange: "NYSE", kind: "adr" as const }],
+      ])
+    );
+    vi.mocked(alpaca.snapshots).mockResolvedValue({ SHOP: snap(150, 140), TSM: snap(300, 290) });
+    const { body } = await call("/quotes", { query: { symbols: "SHOP.TO,2330.TW,9999.HK" } });
+    expect(usListing.lookup).toHaveBeenCalledWith(["SHOP.TO", "2330.TW", "9999.HK"]);
+    expect(alpaca.snapshots).toHaveBeenCalledWith(["SHOP", "TSM"]);
+    expect(body).toEqual([
+      expect.objectContaining({ symbol: "SHOP.TO", price: 150, currency: "USD", source: "alpaca", listing: { symbol: "SHOP", exchange: "Nasdaq", kind: "interlisted" } }),
+      expect.objectContaining({ symbol: "2330.TW", price: 300, currency: "USD", listing: { symbol: "TSM", exchange: "NYSE", kind: "adr" } }),
+    ]);
+    // A symbol with no US listing still goes to Stooq.
+    expect(vi.mocked(stooq.quote).mock.calls.map((c) => c[0])).toEqual(["9999.HK"]);
+  });
+
   it("falls through Alpaca to Stooq for a US stock Alpaca doesn't answer", async () => {
     vi.mocked(alpaca.isConfigured).mockReturnValue(false);
     vi.mocked(stooq.quote).mockResolvedValue(quote("MSFT", 400, "stooq"));
@@ -216,6 +241,17 @@ describe("history routing", () => {
     expect((await call("/history/:symbol", { params: { symbol: "BMW.DE" }, query: { range: "1Y" } })).body).toEqual(candles);
     expect(stooq.history).toHaveBeenCalledWith("BMW.DE");
   });
+
+  it("charts a foreign listing FMP refuses from its US listing's Alpaca bars, before Stooq", async () => {
+    vi.mocked(fmp.isConfigured).mockReturnValue(true);
+    vi.mocked(fmp.historical).mockRejectedValue(new Error("fmp: 402"));
+    vi.mocked(usListing.lookup).mockResolvedValue(new Map([["7203.T", { symbol: "TM", exchange: "NYSE", kind: "adr" as const }]]));
+    const { alpacaHistory } = await import("../live/history.js");
+    vi.mocked(alpacaHistory).mockResolvedValue(candles);
+    expect((await call("/history/:symbol", { params: { symbol: "7203.T" }, query: { range: "1M" } })).body).toEqual(candles);
+    expect(alpacaHistory).toHaveBeenCalledWith("TM", "1M");
+    expect(stooq.history).not.toHaveBeenCalled();
+  });
 });
 
 describe("features that need FMP_API_KEY", () => {
@@ -227,6 +263,24 @@ describe("features that need FMP_API_KEY", () => {
     expect(hist.statusCode).toBe(503);
     expect(hist.body).toEqual({ error: "needs FMP_API_KEY", feature: "/earnings-history/AAPL" });
     expect(fmp.earningsInfo).not.toHaveBeenCalled();
+  });
+
+  it("adds the day-after move to reported quarters and skips the upcoming row", async () => {
+    vi.mocked(fmp.isConfigured).mockReturnValue(true);
+    const d = (n: number) => Date.UTC(2026, 7, n) / 1000;
+    const bar = (n: number, close: number) => ({ time: d(n), open: close, high: close, low: close, close, volume: 0 });
+    vi.mocked(alpaca.isConfigured).mockReturnValue(true);
+    vi.mocked((await import("../live/history.js")).alpacaHistory).mockResolvedValue([bar(20, 100), bar(26, 100), bar(27, 110)]);
+    const row = { fiscalQtrEnd: "", surprisePercent: null, revenue: null, revenueEstimate: null };
+    vi.mocked(fmp.earnings).mockResolvedValue([
+      { ...row, upcoming: true, dateReported: d(27), eps: null, consensusForecast: 2.49 },
+      { ...row, fiscalQtrEnd: "2026-07-26", fiscalPeriod: "Q2 FY2027", dateReported: d(26), eps: 1.1, consensusForecast: 1 },
+    ]);
+    const { body } = await call("/earnings-history/:symbol", { params: { symbol: "FISC" } });
+    expect(body).toEqual([
+      expect.objectContaining({ upcoming: true, dayAfterChangePercent: null }),
+      expect.objectContaining({ fiscalPeriod: "Q2 FY2027", dayAfterChangePercent: expect.closeTo(10) }),
+    ]);
   });
 
   it("serves the earnings calendar from FMP when keyed", async () => {

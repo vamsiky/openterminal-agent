@@ -40,6 +40,20 @@ CREATE TABLE IF NOT EXISTS watchlist_items (
   position INTEGER NOT NULL,
   PRIMARY KEY (watchlist_id, symbol)
 );
+CREATE TABLE IF NOT EXISTS estimate_snapshots (
+  symbol TEXT NOT NULL,
+  report_date TEXT NOT NULL,
+  captured_day TEXT NOT NULL,
+  eps_estimate REAL,
+  revenue_estimate REAL,
+  PRIMARY KEY (symbol, report_date, captured_day)
+);
+CREATE TABLE IF NOT EXISTS estimate_runs (
+  day TEXT PRIMARY KEY,
+  rows INTEGER NOT NULL,
+  stored INTEGER NOT NULL,
+  finished_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 const defaultPortfolio = db.prepare("SELECT id FROM portfolios LIMIT 1").get();

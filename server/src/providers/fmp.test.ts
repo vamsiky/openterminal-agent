@@ -163,21 +163,101 @@ describe("fmp provider", () => {
   });
 
   it("returns reported quarters newest first with a surprise percent", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        ok([
-          { symbol: "AAPL", date: "2026-08-01", epsActual: null, epsEstimated: 1 },
-          { symbol: "AAPL", date: "2026-02-01", epsActual: 2.2, epsEstimated: 2, revenueActual: 100, revenueEstimated: 90 },
-          { symbol: "AAPL", date: "2026-05-01", epsActual: 1, epsEstimated: 0 },
-        ])
-      )
-    );
+    const body = ok([
+      { symbol: "AAPL", date: "2026-08-01", epsActual: null, epsEstimated: 1 },
+      { symbol: "AAPL", date: "2026-02-01", epsActual: 2.2, epsEstimated: 2, revenueActual: 100, revenueEstimated: 90 },
+      { symbol: "AAPL", date: "2026-05-01", epsActual: 1, epsEstimated: 0 },
+    ]);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => (new URL(url).pathname.endsWith("/income-statement") ? ok([]) : body) as never));
     const rows = await earnings("AAPL");
     expect(rows.map((r) => r.dateReported)).toEqual([Date.UTC(2026, 4, 1) / 1000, Date.UTC(2026, 1, 1) / 1000]);
     expect(rows[0].surprisePercent).toBeNull();
     expect(rows[1]).toMatchObject({ eps: 2.2, consensusForecast: 2, revenue: 100, revenueEstimate: 90 });
     expect(rows[1].surprisePercent).toBeCloseTo(10);
+  });
+
+  describe("fiscal quarters and the upcoming report", () => {
+    const now = new Date("2026-10-20T12:00:00Z");
+    const day = (d: string) => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) / 1000;
+    const stmt = (date: string, period: string, fiscalYear: string, filingDate: string) => ({ symbol: "NVDA", date, period, fiscalYear, filingDate });
+    const stubFetch = (earn: unknown[], income: unknown | (() => unknown)) =>
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (new URL(url).pathname.endsWith("/income-statement")) {
+            const r = typeof income === "function" ? (income as () => unknown)() : income;
+            return r as never;
+          }
+          return ok(earn) as never;
+        })
+      );
+
+    it("matches a report to the statement filed within 5 days of it", async () => {
+      stubFetch(
+        [{ symbol: "NVDA", date: "2026-08-26", epsActual: 1.1, epsEstimated: 1 }],
+        ok([stmt("2026-07-26", "Q2", "2027", "2026-08-26"), stmt("2026-04-26", "Q1", "2027", "2026-05-28")])
+      );
+      const [row] = await earnings("NVDA", 12, now);
+      expect(row).toMatchObject({ fiscalQtrEnd: "2026-07-26", fiscalPeriod: "Q2 FY2027", dateReported: day("2026-08-26") });
+      expect(row.upcoming).toBeUndefined();
+    });
+
+    it("falls back to the latest period end within 100 days before the report", async () => {
+      stubFetch(
+        [
+          { symbol: "NVDA", date: "2026-08-26", epsActual: 1.1, epsEstimated: 1 },
+          { symbol: "NVDA", date: "2026-01-01", epsActual: 1, epsEstimated: 1 },
+        ],
+        ok([stmt("2026-07-26", "Q2", "2027", "2026-09-30"), stmt("2026-04-26", "Q1", "2027", "2026-09-30")])
+      );
+      const rows = await earnings("NVDA", 12, now);
+      expect(rows[0]).toMatchObject({ fiscalQtrEnd: "2026-07-26", fiscalPeriod: "Q2 FY2027" });
+      // Nearest earlier period end is 250 days away: no match.
+      expect(rows[1]).toMatchObject({ fiscalQtrEnd: "" });
+      expect(rows[1].fiscalPeriod).toBeUndefined();
+    });
+
+    it("leaves the fiscal period empty on a 402", async () => {
+      stubFetch([{ symbol: "NVDA", date: "2026-08-26", epsActual: 1.1, epsEstimated: 1 }], fail(402));
+      const rows = await earnings("NVDA", 12, now);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ fiscalQtrEnd: "", eps: 1.1 });
+    });
+
+    it("returns the next report first as upcoming, consensus only", async () => {
+      stubFetch(
+        [
+          { symbol: "NVDA", date: "2026-11-18", epsActual: null, epsEstimated: 2.49, revenueEstimated: 108.8e9 },
+          { symbol: "NVDA", date: "2026-08-26", epsActual: 1.1, epsEstimated: 1 },
+        ],
+        ok([stmt("2026-07-26", "Q2", "2027", "2026-08-26")])
+      );
+      const rows = await earnings("NVDA", 12, now);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toEqual({
+        fiscalQtrEnd: "",
+        upcoming: true,
+        dateReported: day("2026-11-18"),
+        eps: null,
+        consensusForecast: 2.49,
+        surprisePercent: null,
+        revenue: null,
+        revenueEstimate: 108.8e9,
+      });
+      expect(rows[1].upcoming).toBeUndefined();
+    });
+
+    it("omits the upcoming row when the null-actual date has passed or none exists", async () => {
+      stubFetch(
+        [
+          { symbol: "NVDA", date: "2026-10-01", epsActual: null, epsEstimated: 2 },
+          { symbol: "NVDA", date: "2026-08-26", epsActual: 1.1, epsEstimated: 1 },
+        ],
+        ok([])
+      );
+      const rows = await earnings("NVDA", 12, now);
+      expect(rows.map((r) => r.upcoming)).toEqual([undefined]);
+    });
   });
 
   it("maps the economic calendar", async () => {
@@ -208,7 +288,7 @@ describe("fmp provider", () => {
     const fetchMock = vi.fn().mockResolvedValue(fail(429, "limit"));
     vi.stubGlobal("fetch", fetchMock);
     vi.useFakeTimers();
-    const p = earnings("AAPL").catch((e) => e);
+    const p = earningsCalendar("2026-01-01", "2026-02-01").catch((e) => e);
     await vi.runAllTimersAsync();
     vi.useRealTimers();
     expect(await p).toMatchObject({ status: 429 });

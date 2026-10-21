@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Fragment, useMemo, useState } from "react";
 import { apiGet, fmt, fmtBig, pctClass } from "../../lib/api";
 import ErrorNote from "../ErrorNote";
+import EstimateRevisions from "../EstimateRevisions";
 import { symbolsParam } from "../../lib/symbol";
 import { useTerminal } from "../../store/terminal";
 
@@ -132,6 +133,8 @@ const fmtDate = (ts: number | null) => (ts ? new Date(ts * 1000).toLocaleDateStr
 
 type EarningsHistoryRow = {
   fiscalQtrEnd: string;
+  fiscalPeriod?: string;
+  upcoming?: boolean;
   dateReported: number;
   eps: number | null;
   consensusForecast: number | null;
@@ -140,6 +143,14 @@ type EarningsHistoryRow = {
   revenue?: number | null;
   revenueEstimate?: number | null;
 };
+
+/** "Q2 FY2027" + "2026-07-26" → "Q2 FY27 · Jul 26"; falls back to whichever part exists. */
+function quarterLabel(row: EarningsHistoryRow): string {
+  const period = row.fiscalPeriod?.replace(/FY\d\d(\d\d)$/, "FY$1") ?? "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(row.fiscalQtrEnd);
+  const end = m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }) : "";
+  return [period, end].filter(Boolean).join(" · ") || "—";
+}
 
 /** Actual vs forecast: beat = green, miss = red, in-line = white. */
 function surpriseClass(row: EarningsHistoryRow): string {
@@ -174,9 +185,18 @@ function EarningsHistoryRows({ symbol }: { symbol: string }) {
         </tr>
       </thead>
       <tbody>
-        {data.map((row) => (
+        {data.map((row) =>
+          row.upcoming ? (
+            <tr key={row.dateReported}>
+              <td colSpan={7} className="!text-left amber">
+                Next: {fmtDate(row.dateReported)} · EPS est {row.consensusForecast != null ? row.consensusForecast.toFixed(2) : "—"} · Rev est{" "}
+                {row.revenueEstimate != null ? `$${fmtBig(row.revenueEstimate)}` : "—"}
+                <EstimateRevisions symbol={symbol} className="ml-3" />
+              </td>
+            </tr>
+          ) : (
           <tr key={row.dateReported}>
-            <td className="!text-left dim">{row.fiscalQtrEnd || "—"}</td>
+            <td className="!text-left dim">{quarterLabel(row)}</td>
             <td className="!text-left dim">{fmtDate(row.dateReported)}</td>
             <td className="dim">{row.consensusForecast != null ? `$${row.consensusForecast.toFixed(2)}` : "—"}</td>
             <td className={surpriseClass(row)}>{row.eps != null ? `$${row.eps.toFixed(2)}` : "—"}</td>
@@ -186,7 +206,8 @@ function EarningsHistoryRows({ symbol }: { symbol: string }) {
               {row.dayAfterChangePercent != null ? `${fmt(row.dayAfterChangePercent, 1)}%` : "—"}
             </td>
           </tr>
-        ))}
+          )
+        )}
       </tbody>
     </table>
   );

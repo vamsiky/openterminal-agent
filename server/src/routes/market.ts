@@ -21,6 +21,7 @@ import { alpacaHistory } from "../live/history.js";
 import { alpacaSymbol } from "../history/universe.js";
 import { AlpacaNotConfigured, companyName, snapshotPrice, usMarketRows } from "./market-rows.js";
 import { withConsensus } from "./econ-calendar.js";
+import * as usListing from "./us-listing.js";
 
 // Yahoo Finance, TradingView, Nasdaq's public API, Google News, Forex Factory
 // and Binance were removed: their terms forbid automated use (Binance also
@@ -174,8 +175,10 @@ function usStock(symbol: string): string | null {
  * Fan-out bound for webQuotes: the /quotes route caps `symbols` at 150, so a
  * single call does at most one Alpaca crypto snapshot per crypto symbol, one
  * FRED call for VIX, two ECB calls per FX pair, one batched Alpaca stock
- * snapshot call, one batched FMP call (when keyed) and up to
- * FALLBACK_PER_SYMBOL_CAP Stooq calls. Repetition beyond that is bounded by
+ * snapshot call, one batched FMP call (when keyed), one batched OpenFIGI
+ * lookup (only for foreign symbols not checked in 30 days) with one Alpaca
+ * snapshot call for their US listings, and up to FALLBACK_PER_SYMBOL_CAP
+ * Stooq calls. Repetition beyond that is bounded by
  * marketRouter's per-IP rate limit (see index.ts).
  */
 const FALLBACK_PER_SYMBOL_CAP = 20;
@@ -405,6 +408,18 @@ async function webQuoteMap(symbols: string[]): Promise<Map<string, Quote>> {
     remaining = remaining.filter((s) => !fetched.has(s));
   }
 
+  // Foreign listings FMP didn't price (all of them on Starter): the same
+  // company's US listing on Alpaca, when it has one.
+  const foreign = remaining.filter(usListing.isForeign);
+  if (foreign.length > 0 && alpaca.isConfigured()) {
+    try {
+      for (const [s, q] of await listedQuotes(foreign)) fetched.set(s, q);
+    } catch {
+      // Stooq below
+    }
+    remaining = remaining.filter((s) => !fetched.has(s));
+  }
+
   await each(remaining.slice(0, FALLBACK_PER_SYMBOL_CAP), (s) => stooq.quote(s));
 
   // asOf records when this server fetched the quote. Cached and stale
@@ -422,6 +437,29 @@ async function webQuoteMap(symbols: string[]): Promise<Map<string, Quote>> {
   for (const sym of symbols) {
     const q = fresh.get(sym) ?? fetched.get(sym) ?? staleGet<Quote>(`quote:${sym}`);
     if (q) out.set(sym, q);
+  }
+  return out;
+}
+
+/** Foreign symbols priced from their US listings: from the live feed when it runs, else a snapshot. */
+async function listedQuotes(symbols: string[]): Promise<Map<string, Quote>> {
+  const out = new Map<string, Quote>();
+  const listings = await usListing.lookup(symbols);
+  if (listings.size === 0) return out;
+  const us = [...new Set([...listings.values()].map((l) => l.symbol))];
+  if (live.enabled()) {
+    await live.focusOn(us);
+    for (const [s, l] of listings) {
+      const q = live.liveQuote(l.symbol, s);
+      if (q) out.set(s, usListing.listedQuote(s, q, l));
+    }
+    return out;
+  }
+  const snaps = await alpaca.snapshots(us);
+  for (const [s, l] of listings) {
+    const snap = snaps[l.symbol];
+    const q = snap ? snapshotQuote(s, snap) : null;
+    if (q) out.set(s, usListing.listedQuote(s, q, l));
   }
   return out;
 }
@@ -460,10 +498,24 @@ function fmpHistory(symbol: string, rangeKey: string, now = new Date()): Promise
   return fmp.historical(symbol, from, to);
 }
 
-/** FMP when keyed, then Stooq: for everything that isn't a US stock on Alpaca, crypto, VIX or FX. */
+/** Alpaca candles of a foreign symbol's US listing (per ADR, for an ADR). */
+async function listedHistory(symbol: string, rangeKey: string): Promise<Candle[]> {
+  const listing = (await usListing.lookup([symbol])).get(symbol);
+  if (!listing) throw new Error(`us-listing: no US listing for ${symbol}`);
+  const data = await cached(`alpaca-history:${listing.symbol}:${rangeKey}`, ALPACA_HISTORY_TTL, () => alpacaHistory(listing.symbol, rangeKey));
+  if (!data || data.length === 0) throw new Error(`us-listing: no bars for ${listing.symbol}`);
+  return data;
+}
+
+/**
+ * FMP when keyed, then a foreign symbol's US listing on Alpaca, then Stooq:
+ * for everything that isn't a US stock on Alpaca, crypto, VIX or FX.
+ */
 function otherHistory(symbol: string, rangeKey: string): Promise<Candle[]> {
+  type Attempt = [string, () => Promise<Candle[]>];
   return withFallback<Candle[]>([
-    ...(fmp.isConfigured() ? [["fmp", () => fmpHistory(symbol, rangeKey)] as [string, () => Promise<Candle[]>]] : []),
+    ...(fmp.isConfigured() ? [["fmp", () => fmpHistory(symbol, rangeKey)] as Attempt] : []),
+    ...(usListing.isForeign(symbol) && alpaca.isConfigured() ? [["us-listing", () => listedHistory(symbol, rangeKey)] as Attempt] : []),
     ["stooq", () => stooq.history(symbol)],
   ]);
 }
@@ -937,6 +989,7 @@ marketRouter.get("/earnings-history/:symbol", async (req, res) => {
         return -1;
       };
       return surprises.map((s) => {
+        if (s.upcoming) return { ...s, dayAfterChangePercent: null };
         const idx = closeOnOrAfter(s.dateReported);
         const dayAfterChangePercent =
           idx >= 0 && idx + 1 < sorted.length

@@ -6,6 +6,8 @@ import { portfolioRouter } from "./routes/portfolio.js";
 import { aiRouter } from "./routes/ai.js";
 import { watchlistsRouter } from "./routes/watchlists.js";
 import { barsRouter } from "./routes/bars.js";
+import { estimatesRouter } from "./routes/estimates.js";
+import { startEstimateCapture } from "./estimates/capture.js";
 import { startHistoryScheduler } from "./history/scheduler.js";
 import * as alpaca from "./providers/alpaca.js";
 import { allStats } from "./providers/registry.js";
@@ -48,6 +50,8 @@ app.use("/api", rateLimit({ windowMs: 60_000, max: 240, skip: hasApiKey }), mark
 // Portfolio data and the paid AI endpoint require a shared secret; see auth.ts.
 app.use("/api/portfolios", requireApiKey, portfolioRouter);
 app.use("/api/watchlists", requireApiKey, watchlistsRouter);
+// Daily consensus-estimate snapshots (estimates/); served from the local database.
+app.use("/api/estimates", requireApiKey, estimatesRouter);
 // Locally stored price history (history/); read-only, no provider calls.
 app.use("/api/bars", barsRouter);
 app.use(
@@ -78,4 +82,5 @@ app.listen(PORT, HOST, () => {
 });
 
 startHistoryScheduler();
+startEstimateCapture();
 live.startLiveFeed();

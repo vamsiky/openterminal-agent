@@ -54,6 +54,7 @@ export default function QuoteWidget({ widget }: { widget: WidgetInstance }) {
         </span>
       </div>
       <ExtendedPrices quote={data} className="mb-1" />
+      <ListingNote quote={data} className="block mb-1" />
       <div className="dim text-[11px] mb-2 truncate">{data.name ?? "—"}</div>
       <div className="grid grid-cols-2 gap-x-4">
         {rows.map(([label, value]) => (
@@ -65,6 +66,21 @@ export default function QuoteWidget({ widget }: { widget: WidgetInstance }) {
       </div>
     </div>
   );
+}
+
+/** For a foreign symbol priced from its US listing: which one, and for an ADR that the price isn't per local share. */
+export function ListingNote({ quote, className = "" }: { quote: Quote; className?: string }) {
+  const l = quote.listing;
+  if (!l) return null;
+  const where = [l.exchange, "USD"].filter(Boolean).join(", ");
+  if (l.kind === "adr") {
+    return (
+      <span className={`text-[10px] ${className}`} style={{ color: "var(--amber)" }}>
+        Priced from {l.symbol} ADR ({where}): ADR price, not local shares
+      </span>
+    );
+  }
+  return <span className={`dim text-[10px] ${className}`}>Priced from {l.symbol} ({where})</span>;
 }
 
 /** Where the price came from: live from Alpaca, Alpaca's last trade time, or another source (FMP, Stooq, FRED, ECB). */

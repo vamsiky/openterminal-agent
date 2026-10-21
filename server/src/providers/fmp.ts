@@ -108,7 +108,9 @@ export type EarningsInfo = {
 
 /** The /earnings-history/:symbol row (before the route adds dayAfterChangePercent). */
 export type EarningsHistoryRow = {
-  fiscalQtrEnd: string; // FMP gives no fiscal period end here; always ""
+  fiscalQtrEnd: string; // YYYY-MM-DD period end of the matched income statement, "" when none matches
+  fiscalPeriod?: string; // "Q2 FY2027", from the same statement
+  upcoming?: true; // the next report: no actual yet, only the consensus
   dateReported: number; // unix seconds, UTC midnight
   eps: number | null;
   consensusForecast: number | null;
@@ -442,22 +444,75 @@ export async function earningsInfo(symbols: string[], now = new Date()): Promise
   });
 }
 
+/** One quarterly income statement: the fiscal period a report belongs to. */
+type QuarterPeriod = { periodEnd: number; fiscalQtrEnd: string; fiscalPeriod: string; filingDate: number | null };
+
 /**
- * Reported quarters, newest first. GET /earnings?symbol=X&limit=N. Rows with
- * no epsActual (future dates) are dropped. surprisePercent is computed:
- * (actual - estimate) / |estimate| * 100.
+ * Fiscal quarters from GET /income-statement?period=quarter (Starter), newest
+ * first, cached 24 h. A plan or symbol without the endpoint answers 402/403 → [].
  */
-export async function earnings(symbol: string, limit = 12): Promise<EarningsHistoryRow[]> {
+export async function quarterlyPeriods(symbol: string): Promise<QuarterPeriod[]> {
   requireKey();
   const sym = symbol.trim().toUpperCase();
-  return cached(`earnings:${sym}:${limit}`, CALENDAR_TTL, async () => {
-    const rows = await get("earnings", { symbol: sym, limit });
-    return (Array.isArray(rows) ? rows : [])
-      .map(earningsRow)
-      .filter((r): r is EarningsCalendarRow => r !== null && r.epsActual !== null)
-      .sort((a, b) => b.date - a.date)
-      .map((r) => ({
-        fiscalQtrEnd: "",
+  return cached(`quarters:${sym}`, PROFILE_TTL, async () => {
+    const rows = await get("income-statement", { symbol: sym, period: "quarter", limit: 12 }).catch((err) => {
+      if (err instanceof FmpError && (err.status === 402 || err.status === 403)) return [];
+      throw err;
+    });
+    const out: QuarterPeriod[] = [];
+    for (const r of Array.isArray(rows) ? rows : []) {
+      const periodEnd = unixDay(r?.date);
+      if (periodEnd === null) continue;
+      const q = str(r.period);
+      const fy = str(r.fiscalYear) ?? (typeof r.fiscalYear === "number" ? String(r.fiscalYear) : null);
+      out.push({
+        periodEnd,
+        fiscalQtrEnd: String(r.date).slice(0, 10),
+        fiscalPeriod: q && fy ? `${q} FY${fy}` : "",
+        filingDate: unixDay(r.filingDate),
+      });
+    }
+    return out.sort((a, b) => b.periodEnd - a.periodEnd);
+  });
+}
+
+const DAY = 86_400;
+
+/** The statement a report belongs to: filed within 5 days of the report, else the latest period ending in the 100 days before it. */
+function matchPeriod(reported: number, periods: QuarterPeriod[]): QuarterPeriod | null {
+  const filed = periods
+    .filter((p) => p.filingDate !== null && Math.abs(p.filingDate - reported) <= 5 * DAY)
+    .sort((a, b) => Math.abs(a.filingDate! - reported) - Math.abs(b.filingDate! - reported))[0];
+  if (filed) return filed;
+  return periods.find((p) => p.periodEnd < reported && reported - p.periodEnd <= 100 * DAY) ?? null;
+}
+
+/**
+ * Quarters, newest first. GET /earnings?symbol=X&limit=N. Reported rows carry
+ * the fiscal period of the matching income statement. The next report (no
+ * actual, dated today or later) comes first as `upcoming` with only the
+ * consensus. surprisePercent is computed: (actual - estimate) / |estimate| * 100.
+ */
+export async function earnings(symbol: string, limit = 12, now = new Date()): Promise<EarningsHistoryRow[]> {
+  requireKey();
+  const sym = symbol.trim().toUpperCase();
+  const today = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 1000);
+  const [rows, periods] = await Promise.all([
+    cached(`earnings:${sym}:${limit}`, CALENDAR_TTL, async () => {
+      const raw = await get("earnings", { symbol: sym, limit });
+      return (Array.isArray(raw) ? raw : []).map(earningsRow).filter((r): r is EarningsCalendarRow => r !== null);
+    }),
+    // The fiscal quarter is a label; a failed statement lookup must not fail the history.
+    quarterlyPeriods(sym).catch(() => [] as QuarterPeriod[]),
+  ]);
+  const reported: EarningsHistoryRow[] = rows
+    .filter((r) => r.epsActual !== null)
+    .sort((a, b) => b.date - a.date)
+    .map((r) => {
+      const period = matchPeriod(r.date, periods);
+      return {
+        fiscalQtrEnd: period?.fiscalQtrEnd ?? "",
+        ...(period?.fiscalPeriod ? { fiscalPeriod: period.fiscalPeriod } : {}),
         dateReported: r.date,
         eps: r.epsActual,
         consensusForecast: r.epsEstimated,
@@ -467,8 +522,25 @@ export async function earnings(symbol: string, limit = 12): Promise<EarningsHist
             : null,
         revenue: r.revenueActual,
         revenueEstimate: r.revenueEstimated,
-      }));
-  });
+      };
+    });
+  const next = rows
+    .filter((r) => r.epsActual === null && r.date >= today)
+    .sort((a, b) => a.date - b.date)[0];
+  if (!next) return reported;
+  return [
+    {
+      fiscalQtrEnd: "",
+      upcoming: true,
+      dateReported: next.date,
+      eps: null,
+      consensusForecast: next.epsEstimated,
+      surprisePercent: null,
+      revenue: null,
+      revenueEstimate: next.revenueEstimated,
+    },
+    ...reported,
+  ];
 }
 
 function impact(v: unknown): EconEvent["impact"] {
