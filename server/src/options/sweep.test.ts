@@ -68,11 +68,16 @@ describe("pure helpers", () => {
     expect(sweep.historicalVol(alt)!).toBeGreaterThan(0.1);
   });
 
-  it("flags unusual volume only against a known open interest", () => {
-    const c = (occ: string, volume: number, openInterest: number | null) =>
-      ({ occ, expiry: "2026-11-20", right: "call", strike: 100, bid: 1, ask: 1, mid: 1, volume, openInterest, iv: 0.3, delta: 0.5 }) as const;
-    const out = sweep.unusualContracts([c("A", 900, 400), c("B", 300, 50), c("C", 900, 600), c("D", 5000, null)]);
-    expect(out).toEqual([{ occ: "A", volume: 900, openInterest: 400, ratio: 2.25 }]);
+  it("flags unusual volume against open interest, skipping 0DTE and 1DTE, highest ratio first", () => {
+    const c = (occ: string, volume: number, openInterest: number | null, expiry = "2026-11-20") =>
+      ({ occ, expiry, right: "call", strike: 100, bid: 1, ask: 1, mid: 1, volume, openInterest, iv: 0.3, delta: 0.5 }) as const;
+    const out = sweep.unusualContracts(
+      [c("A", 900, 400), c("B", 300, 50), c("C", 900, 600), c("D", 5000, null), c("E", 2000, 400), c("F", 9000, 10, "2026-10-21"), c("G", 9000, 10, "2026-10-22"), c("H", 9000, 10, "2026-10-23")],
+      "2026-10-21"
+    );
+    expect(out.map((u) => u.occ)).toEqual(["H", "E", "A"]); // 900x, 5x, 2.25x
+    expect(out[1]).toEqual({ occ: "E", volume: 2000, openInterest: 400, ratio: 5 });
+    expect(sweep.UNUSUAL_MIN_DTE).toBe(2);
   });
 
   it("records the IV day only in the last minutes of the session", () => {

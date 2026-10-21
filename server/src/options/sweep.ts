@@ -129,16 +129,19 @@ export function hv20FromDailyBars(symbol: string): number | null {
 
 export const UNUSUAL_MIN_VOLUME = 500;
 export const UNUSUAL_RATIO = 2;
+/** Contracts expiring sooner than this many calendar days (0DTE, 1DTE) are skipped: their open interest means little next to intraday volume. */
+export const UNUSUAL_MIN_DTE = 2;
 
 /**
  * Contracts trading at least twice their open interest and at least 500 lots.
  * Open interest comes from the contract reference data (open-interest.ts);
- * a contract without it is never flagged.
+ * a contract without it is never flagged. Highest volume/OI ratio first, top 10.
  */
-export function unusualContracts(contracts: ParsedContract[]): OptionMetrics["unusual"] {
+export function unusualContracts(contracts: ParsedContract[], today: string): OptionMetrics["unusual"] {
   return contracts
+    .filter((c) => daysBetween(today, c.expiry) >= UNUSUAL_MIN_DTE)
     .filter((c) => (c.volume ?? 0) >= UNUSUAL_MIN_VOLUME && c.openInterest !== null && c.openInterest > 0 && c.volume! >= UNUSUAL_RATIO * c.openInterest)
-    .sort((a, b) => b.volume! - a.volume!)
+    .sort((a, b) => b.volume! / b.openInterest! - a.volume! / a.openInterest!)
     .slice(0, 10)
     .map((c) => ({ occ: c.occ, volume: c.volume!, openInterest: c.openInterest, ratio: c.volume! / c.openInterest! }));
 }
@@ -219,7 +222,7 @@ export function buildMetrics(i: MetricsInput): OptionMetrics {
     impliedMovePct: straddle !== null && price ? (straddle / price) * 100 : null,
     termSlope: slope,
     putCallVolumeRatio: callVol > 0 ? putVol / callVol : null,
-    unusual: unusualContracts(contracts),
+    unusual: unusualContracts(contracts, nyToday),
     atmCallQuote: quote(call),
     atmPutQuote: quote(put),
   };
