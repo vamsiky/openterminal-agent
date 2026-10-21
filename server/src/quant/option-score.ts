@@ -159,7 +159,8 @@ function ivRichness(m: OptionMetrics): { value: number; text: string; rich: bool
 
 function earningsNote(i: SetupInputs): { before: boolean | null; text: string | null } {
   const expiry = i.metrics?.atmExpiry;
-  if (!expiry || !i.nextEarnings) return { before: i.nextEarnings === null ? null : false, text: null };
+  // Without an expiry, or without a known report date, nothing can be said either way.
+  if (!expiry || !i.nextEarnings) return { before: null, text: null };
   const before = i.nextEarnings >= i.today && i.nextEarnings <= expiry;
   return { before, text: before ? `earnings on ${i.nextEarnings} fall before the ${expiry} expiry` : null };
 }

@@ -175,10 +175,11 @@ export async function runHourlyIfNeeded(now = new Date()): Promise<boolean> {
 }
 
 let running = false;
+let stopped = false;
 
 /** Runs one job now (also the route behind forced scans). Returns false when another run is in progress or the job can't run. */
 export function runJob(job: JobName, now = new Date()): boolean {
-  if (running) return false;
+  if (running || stopped) return false;
   if (job === "option-scan" && !deps) return false;
   running = true;
   try {
@@ -225,6 +226,7 @@ export function startQuantJobs(d: QuantDeps): { stop: () => void } | null {
     return null;
   }
   deps = d;
+  stopped = false;
   // A killed process leaves its run marked running.
   db.prepare("UPDATE scan_runs SET status = 'error', error = 'abandoned: process stopped', finished_at = ? WHERE status = 'running'").run(new Date().toISOString());
 
@@ -260,6 +262,12 @@ export function startQuantJobs(d: QuantDeps): { stop: () => void } | null {
   timer.unref();
   setTimeout(() => void tick(), 15_000).unref();
   console.log("[scan] jobs enabled: nightly scorecards 07:00 and 16:30 ET, stock scan every 15 min and option scan every 5 min in the session");
-  return { stop: () => clearInterval(timer) };
+  return {
+    stop: () => {
+      clearInterval(timer);
+      deps = null;
+      stopped = true;
+    },
+  };
 }
 

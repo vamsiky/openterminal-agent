@@ -7,6 +7,7 @@ import { nyInstant } from "../live/session.js";
 import { LISTED_EXCHANGES } from "../research/bulk-store.js";
 import { addDays, revisions } from "../estimates/store.js";
 import type { FactorScore, Scorecard } from "../scan/contracts.js";
+import { isUsListed, listedSymbols } from "./listings.js";
 import { periodReturn, rollup, rsi, vwap, type Bar } from "./indicators.js";
 import { STOCK_WEIGHTS, STOCK_WEIGHTS_VERSION, composite } from "./weights.js";
 
@@ -227,9 +228,10 @@ function loadFundamentals(today: string): Fund[] {
     )
     .all(today, JSON.stringify(LISTED_EXCHANGES)) as FundRow[];
 
+  const listed = listedSymbols();
   const revs = loadRevisions(today);
   const oldest = addDays(today, -200); // a surprise older than two quarters says little about now
-  return rows.map((r) => {
+  return rows.filter((r) => isUsListed(r.symbol, listed)).map((r) => {
     const price = num(r.price);
     const dcf = num(r.dcf);
     const est = num(r.eps_estimated);

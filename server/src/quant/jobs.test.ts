@@ -93,3 +93,13 @@ describe("universeByPriority", () => {
     expect(jobs.universeByPriority()).toEqual(["HELD", "BBB", "CCC", "EEE", "DDD", "AAA"]);
   });
 });
+
+describe("stop", () => {
+  it("clears the deps and refuses forced runs afterwards", () => {
+    const handle = jobs.startQuantJobs({ optionMetrics: () => new Map(), optionsStatus: () => ({ ok: true }) });
+    expect(jobs.quantDeps()).not.toBeNull();
+    handle!.stop();
+    expect(jobs.quantDeps()).toBeNull();
+    expect(jobs.runJob("stock-nightly")).toBe(false);
+  });
+});

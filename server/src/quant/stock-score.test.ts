@@ -82,6 +82,17 @@ describe("nightly scorecards", () => {
     expect(pe("T7").value).toBe(-5);
   });
 
+  it("leaves foreign-looking listings out of the nightly pass", () => {
+    db.prepare(
+      `INSERT INTO bulk_profiles (symbol, company_name, exchange, sector, industry, country, price, market_cap, average_volume, is_etf, is_fund, is_adr, is_actively_trading, data, updated_at)
+       VALUES ('7203.T', 'Toyota', 'NASDAQ', 'Technology', 'x', 'JP', 100, 1e9, 1e6, 0, 0, 0, 1, '{}', '')`
+    ).run();
+    ss.runNightlyScorecards(NOW);
+    expect(ss.getStockScorecard("7203.T")).toBeNull();
+    expect(ss.getStockScorecard("T0")).not.toBeNull();
+    db.prepare("DELETE FROM bulk_profiles WHERE symbol = '7203.T'").run();
+  });
+
   it("treats higher ROIC as better and higher leverage as worse", () => {
     const f = (s: string, k: string) => ss.getStockScorecard(s)!.factors.find((x) => x.key === k)!.score!;
     expect(f("T7", "roic")).toBeGreaterThan(f("T0", "roic"));
