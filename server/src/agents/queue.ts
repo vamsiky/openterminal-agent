@@ -5,7 +5,7 @@ import { heldSymbols } from "../quant/positions.js";
 import type { ThesisStrategy } from "./contracts.js";
 
 // The analysis queue, in memory-fast SQLite so it survives restarts. One row
-// per (day, symbol, strategy, contract). Order: manual requests, then held
+// per (day, symbol, strategy, key contract); automatic option items key on (symbol, strategy, day) only. Order: manual requests, then held
 // symbols, then idea rank.
 
 export type QueueItem = {
@@ -14,36 +14,45 @@ export type QueueItem = {
 };
 
 const toItem = (r: any): QueueItem => ({
-  id: r.id, day: r.day, symbol: r.symbol, strategy: r.strategy, contract: r.contract || null, ideaId: r.idea_id, kind: r.kind,
+  id: r.id, day: r.day, symbol: r.symbol, strategy: r.strategy, contract: r.item_contract || null, ideaId: r.idea_id, kind: r.kind,
   reason: r.reason, rank: r.rank, manual: r.manual === 1, queuedAt: r.queued_at,
 });
 
 export type EnqueueInput = { symbol: string; strategy: ThesisStrategy; contract?: string | null; ideaId?: number | null; kind: "stock" | "option"; reason: string; rank?: number };
 
 /**
- * Adds an item. Automatic items are deduped by (symbol, strategy, contract, day): a row already queued, running or
- * done today stops them. Manual items (the user's Analyse button) skip that dedupe and only refuse a row that is
- * queued or running right now. Returns the item's position (1 = next) or null when refused.
+ * Adds an item. Automatic items are deduped per day: by (symbol, strategy) for options, since the idea's contract
+ * re-centres as the price moves (the thesis still records the contract analysed), and by (symbol, strategy) for stocks.
+ * A row already queued, running or done today stops them. Manual items (the user's Analyse button) are per contract,
+ * skip the per-day dedupe and only refuse a row for that contract that is queued or running right now.
+ * Returns the item's position (1 = next) or null when refused.
  */
 export function enqueue(input: EnqueueInput, opts: { manual?: boolean; now?: Date } = {}): { position: number } | null {
   const now = opts.now ?? new Date();
   const day = nyClock(now).date;
-  const contract = input.contract ?? "";
+  const real = input.contract ?? "";
   const manual = opts.manual ? 1 : 0;
-  const anyDay = db.prepare("SELECT id FROM agent_queue WHERE symbol = ? AND strategy = ? AND contract = ? AND status IN ('queued','running')").get(input.symbol, input.strategy, contract);
-  if (anyDay) return null;
-  const today = db.prepare("SELECT id, status FROM agent_queue WHERE day = ? AND symbol = ? AND strategy = ? AND contract = ?").get(day, input.symbol, input.strategy, contract) as { id: number; status: string } | undefined;
+  const key = manual ? real : "";
+  const active = manual
+    ? db.prepare("SELECT id FROM agent_queue WHERE symbol = ? AND strategy = ? AND item_contract = ? AND status IN ('queued','running')").get(input.symbol, input.strategy, real)
+    : db.prepare("SELECT id, status FROM agent_queue WHERE symbol = ? AND strategy = ? AND status IN ('queued','running') ORDER BY id DESC").get(input.symbol, input.strategy);
+  if (active) {
+    // A queued automatic item follows the idea's current contract.
+    if (!manual && (active as { status: string }).status === "queued") db.prepare("UPDATE agent_queue SET item_contract = ? WHERE id = ?").run(real, (active as { id: number }).id);
+    return null;
+  }
+  const today = db.prepare("SELECT id, status FROM agent_queue WHERE day = ? AND symbol = ? AND strategy = ? AND contract = ?").get(day, input.symbol, input.strategy, key) as { id: number; status: string } | undefined;
   if (today && !manual) return null;
-  const fields = { reason: input.reason, rank: input.rank ?? 1000, idea: input.ideaId ?? null, kind: input.kind, manual, at: now.toISOString() };
+  const fields = { reason: input.reason, rank: input.rank ?? 1000, idea: input.ideaId ?? null, kind: input.kind, manual, at: now.toISOString(), real };
   if (today) {
-    db.prepare("UPDATE agent_queue SET status = 'queued', reason = @reason, rank = @rank, idea_id = @idea, kind = @kind, manual = @manual, skipped_day = NULL, queued_at = @at WHERE id = @id").run({ ...fields, id: today.id });
+    db.prepare("UPDATE agent_queue SET status = 'queued', reason = @reason, rank = @rank, idea_id = @idea, kind = @kind, manual = @manual, item_contract = @real, skipped_day = NULL, queued_at = @at WHERE id = @id").run({ ...fields, id: today.id });
   } else {
     db.prepare(
-      `INSERT INTO agent_queue (day, symbol, strategy, contract, idea_id, kind, reason, rank, manual, status, queued_at)
-       VALUES (@day, @symbol, @strategy, @contract, @idea, @kind, @reason, @rank, @manual, 'queued', @at)`
-    ).run({ ...fields, day, symbol: input.symbol, strategy: input.strategy, contract });
+      `INSERT INTO agent_queue (day, symbol, strategy, contract, item_contract, idea_id, kind, reason, rank, manual, status, queued_at)
+       VALUES (@day, @symbol, @strategy, @key, @real, @idea, @kind, @reason, @rank, @manual, 'queued', @at)`
+    ).run({ ...fields, day, symbol: input.symbol, strategy: input.strategy, key });
   }
-  const id = (db.prepare("SELECT id FROM agent_queue WHERE day = ? AND symbol = ? AND strategy = ? AND contract = ?").get(day, input.symbol, input.strategy, contract) as { id: number }).id;
+  const id = (db.prepare("SELECT id FROM agent_queue WHERE day = ? AND symbol = ? AND strategy = ? AND contract = ?").get(day, input.symbol, input.strategy, key) as { id: number }).id;
   return { position: pending().findIndex((i) => i.id === id) + 1 };
 }
 
@@ -60,7 +69,7 @@ export function running(): QueueItem[] {
 }
 
 export const isBusy = (symbol: string, strategy: ThesisStrategy, contract: string | null): boolean =>
-  db.prepare("SELECT 1 FROM agent_queue WHERE symbol = ? AND strategy = ? AND contract = ? AND status IN ('queued','running')").get(symbol, strategy, contract ?? "") !== undefined;
+  db.prepare("SELECT 1 FROM agent_queue WHERE symbol = ? AND strategy = ? AND item_contract = ? AND status IN ('queued','running')").get(symbol, strategy, contract ?? "") !== undefined;
 
 export const markRunning = (id: number): void => void db.prepare("UPDATE agent_queue SET status = 'running' WHERE id = ?").run(id);
 export const markDone = (id: number): void => void db.prepare("UPDATE agent_queue SET status = 'done' WHERE id = ?").run(id);

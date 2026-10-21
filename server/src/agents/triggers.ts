@@ -3,7 +3,7 @@ import { nyClock } from "../history/scheduler.js";
 import { listIdeas } from "../quant/ideas.js";
 import type { Idea } from "../scan/contracts.js";
 import { enqueue } from "./queue.js";
-import { latestThesisFor } from "./store.js";
+import { latestThesisForStrategy, latestThesisFor } from "./store.js";
 
 export const STOCK_THESIS_DAYS = 7;
 export const SCORE_MOVE = 10;
@@ -11,7 +11,8 @@ export const SCORE_MOVE = 10;
 /** Why an idea needs analysing now, or null: no usable thesis in the window, or its score moved 10+ points since. */
 export function needsAnalysis(idea: Idea, now: Date): string | null {
   const day = nyClock(now).date;
-  const last = latestThesisFor(idea.symbol, idea.strategy, idea.contract);
+  // Option ideas re-centre their contract as the price moves, so any contract's thesis of the day counts.
+  const last = idea.kind === "option" ? latestThesisForStrategy(idea.symbol, idea.strategy) : latestThesisFor(idea.symbol, idea.strategy, idea.contract);
   // A thesis that errored does not count: the idea is tried again (the queue's per-day dedupe stops loops).
   if (!last || last.status === "error") return last ? "last analysis failed" : "no thesis yet";
   const thesisDay = last.asOf.slice(0, 10);

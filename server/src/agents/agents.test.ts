@@ -63,10 +63,22 @@ describe("queue", () => {
     expect(queue.enqueue(item("MU"), { now: NOW })).toEqual({ position: 1 });
     expect(queue.enqueue(item("MU"), { now: NOW })).toBeNull();
     expect(queue.enqueue({ ...item("MU"), strategy: "short_put", kind: "option", contract: "MU261120P00090000" }, { now: NOW })).not.toBeNull();
+    // Automatic option items key on symbol, strategy and day, not the contract.
+    expect(queue.enqueue({ ...item("MU"), strategy: "short_put", kind: "option", contract: "MU261120P00095000" }, { now: NOW })).toBeNull();
+    expect(queue.pending().find((i) => i.strategy === "short_put")?.contract).toBe("MU261120P00095000"); // follows the idea
     // Finished today: automatic items still wait for tomorrow.
     queue.markDone(queue.pending()[0].id);
     expect(queue.enqueue(item("MU"), { now: NOW })).toBeNull();
     expect(queue.enqueue(item("MU"), { now: new Date("2026-10-22T22:00:00Z") })).not.toBeNull();
+  });
+
+  it("keeps manual requests per contract", () => {
+    const c = (contract: string) => ({ ...item("MU"), strategy: "short_put" as const, kind: "option" as const, contract });
+    expect(queue.enqueue(c("A"), { manual: true, now: NOW })).not.toBeNull();
+    expect(queue.enqueue(c("B"), { manual: true, now: NOW })).not.toBeNull();
+    expect(queue.enqueue(c("A"), { manual: true, now: NOW })).toBeNull();
+    expect(queue.isBusy("MU", "short_put", "B")).toBe(true);
+    expect(queue.isBusy("MU", "short_put", "C")).toBe(false);
   });
 
   it("lets a manual request redo a finished item but not one queued or running", () => {
@@ -127,6 +139,31 @@ describe("guardrail", () => {
   });
 });
 
+describe("price warning", () => {
+  const t = (over = {}) => ({ entry: { low: 90, high: 95 }, target: { price: 130 }, invalidation: { price: 80 }, ...over });
+  it("flags levels more than 50% from the current price, without rejecting", async () => {
+    const { priceWarning } = await import("./guardrail.js");
+    expect(priceWarning(t(), 100)).toBeNull();
+    expect(priceWarning(t({ target: { price: 160 } }), 100)).toMatch(/target 160 more than 50%/);
+    expect(priceWarning(t({ invalidation: { price: 40 } }), 100)).toMatch(/invalidation 40/);
+    expect(priceWarning(t({ target: { price: 160 } }), null)).toBeNull();
+    expect(priceWarning({ entry: null, target: null, invalidation: null }, 100)).toBeNull();
+  });
+  it("is added to a stored thesis's statusReason with status unchanged", async () => {
+    quotes.MU = { price: 100, change: 0, changePercent: 0, asOf: null, extended: {} };
+    queryMock.mockImplementation(({ prompt }: { prompt: string }) => (async function* () {
+      yield { type: "system", subtype: "init", apiKeySource: "none", mcp_servers: [{ name: "openterminal", status: "connected" }] };
+      const out = prompt.startsWith("Decide")
+        ? { verdict: "wait", confidence: 50, horizon: "m", entry: { low: 90, high: 95, note: "" }, target: { price: 400, note: "" }, invalidation: { price: 80, condition: "" }, exitPlan: "x", catalysts: [], risks: [], summary: "s", evidence: [] }
+        : { summary: "s", points: [{ point: "p", evidence: [] }] };
+      yield { type: "result", subtype: "success", is_error: false, total_cost_usd: 0.01, duration_ms: 1, num_turns: 1, usage: {}, structured_output: out, errors: [] };
+    })());
+    const r = await analysis.analyze({ symbol: "MU", strategy: "buy", contract: null, ideaId: null, kind: "stock" }, NOW);
+    expect(r.outcome === "done" && r.thesis).toMatchObject({ status: "ok", verdict: "wait" });
+    expect(r.outcome === "done" && r.thesis.statusReason).toMatch(/target 400/);
+  });
+});
+
 describe("triggers", () => {
   it("queues ideas without a thesis, in rank order", () => {
     idea(1, "stock", "MU", "buy", 80, 1);
@@ -147,14 +184,16 @@ describe("triggers", () => {
     expect(triggers.needsAnalysis(asIdea(80), new Date("2026-10-25T18:00:00Z"))).toMatch(/7 days/);
   });
 
-  it("option ideas need a thesis from the same trading day for the same contract", () => {
+  it("option ideas need a thesis from the same trading day for the same symbol and strategy, any contract", () => {
     const c = "MU261120C00100000";
     const o = { id: 3, kind: "option" as const, symbol: "MU", strategy: "long_call" as const, contract: c, score: 80, rank: 1, reasons: [], firstSeen: "", lastSeen: "", status: "active" as const };
     store.insertThesis("2026-10-20", thesisBody({ kind: "option", strategy: "long_call", contract: c, asOf: "2026-10-20T15:00:00Z" }));
     expect(triggers.needsAnalysis(o, NOW)).toMatch(/today/);
     store.insertThesis(DAY, thesisBody({ kind: "option", strategy: "long_call", contract: c }));
     expect(triggers.needsAnalysis(o, NOW)).toBeNull();
-    expect(triggers.needsAnalysis({ ...o, contract: "MU261120C00105000" }, NOW)).toMatch(/no thesis/);
+    // The contract re-centred: the day's thesis still counts.
+    expect(triggers.needsAnalysis({ ...o, contract: "MU261120C00105000" }, NOW)).toBeNull();
+    expect(triggers.needsAnalysis({ ...o, strategy: "short_put" }, NOW)).toMatch(/no thesis/);
   });
 
   it("tries again after an errored analysis", () => {

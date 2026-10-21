@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS agent_queue (
   day TEXT NOT NULL,
   symbol TEXT NOT NULL,
   strategy TEXT NOT NULL,
-  contract TEXT NOT NULL DEFAULT '',
+  contract TEXT NOT NULL DEFAULT '',   -- dedupe key part: empty for automatic option items
+  item_contract TEXT NOT NULL DEFAULT '', -- the contract to analyse
   idea_id INTEGER,
   kind TEXT NOT NULL,
   reason TEXT NOT NULL,
@@ -77,6 +78,11 @@ CREATE TABLE IF NOT EXISTS agent_queue (
 CREATE INDEX IF NOT EXISTS agent_queue_status ON agent_queue (status);
 `);
 
+try {
+  db.exec("ALTER TABLE agent_queue ADD COLUMN item_contract TEXT NOT NULL DEFAULT ''");
+} catch {
+  // column already there
+}
 // A killed process leaves its runs marked running.
 db.prepare("UPDATE agent_runs SET status = 'error', error = 'abandoned: process stopped', finished_at = ? WHERE status = 'running'").run(new Date().toISOString());
 db.prepare("UPDATE agent_queue SET status = 'queued' WHERE status = 'running'").run();
@@ -171,6 +177,11 @@ export function listTheses(q: { symbol?: string; strategy?: ThesisStrategy; limi
   args.push(q.limit);
   return (db.prepare(`SELECT * FROM theses ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY id DESC LIMIT ?`).all(...args) as any[]).map(toThesis);
 }
+/** Newest thesis for a symbol and strategy whatever the contract (option ideas re-centre as the price moves). */
+export const latestThesisForStrategy = (symbol: string, strategy: ThesisStrategy): Thesis | null => {
+  const r = db.prepare("SELECT * FROM theses WHERE symbol = ? AND strategy = ? ORDER BY id DESC LIMIT 1").get(symbol, strategy);
+  return r ? toThesis(r) : null;
+};
 /** Newest thesis for a (symbol, strategy, contract); contract null matches stock theses. */
 export function latestThesisFor(symbol: string, strategy: ThesisStrategy, contract: string | null): Thesis | null {
   const r = contract
