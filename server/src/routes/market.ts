@@ -732,24 +732,28 @@ marketRouter.get("/macro", async (req, res) => {
       return;
     }
 
-    // FRED first; FMP fills what FRED could not give, and the policy rate and inflation, each with its source.
+    // FMP first (yields, VIX, policy rate, CPI); FRED only for what FMP could not give. Each value carries its source.
     const orNull = <T,>(p: Promise<T | null>) => p.catch((err) => {
       console.warn("[market] fmp macro series unavailable:", err instanceof Error ? err.message : err);
       return null;
     });
-    const [yieldResults, fredVix, quotes, treasury, fmpVix, policy, cpi] = await Promise.all([
-      Promise.allSettled(YIELD_SERIES.map((s) => cached(`fred:${s.id}`, 300_000, () => fred.latest(s.id)))),
-      cached("fred:VIXCLS", 300_000, () => fred.latest("VIXCLS")).catch(() => null),
+    const [quotes, treasury, fmpVix, policy, cpi] = await Promise.all([
       getQuotes(Object.keys(INDEX_PROXIES)),
       orNull(fmpMacro.treasuryRates()),
       orNull(fmpMacro.vix()),
       orNull(fmpMacro.policyRate()),
       orNull(fmpMacro.cpiYoy()),
     ]);
+    const fmpYield: Record<string, number | null | undefined> = { "3M": treasury?.month3, "5Y": treasury?.year5, "10Y": treasury?.year10, "30Y": treasury?.year30 };
+    const missing = YIELD_SERIES.filter((s) => fmpYield[s.tenor] == null);
+    const [fredYields, fredVix] = await Promise.all([
+      Promise.allSettled(missing.map((s) => cached(`fred:${s.id}`, 300_000, () => fred.latest(s.id)))),
+      fmpVix ? Promise.resolve(null) : cached("fred:VIXCLS", 300_000, () => fred.latest("VIXCLS")).catch(() => null),
+    ]);
     const rates = fmpMacro.mergeRates(
       {
-        yields: YIELD_SERIES.map((s, i) => {
-          const r = yieldResults[i];
+        yields: missing.map((s, i) => {
+          const r = fredYields[i];
           return { tenor: s.tenor, value: r.status === "fulfilled" ? r.value?.value ?? null : null, date: r.status === "fulfilled" ? r.value?.date : undefined };
         }),
         vix: fredVix ? { value: fredVix.value, date: fredVix.date } : null,
