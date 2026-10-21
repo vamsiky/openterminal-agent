@@ -3,6 +3,8 @@ import { nyClock } from "../history/scheduler.js";
 import { nyInstant } from "../live/session.js";
 import { ensureCalendar, isTradingDay, sessionClose } from "../providers/alpaca-calendar.js";
 import type { QuantDeps } from "../scan/contracts.js";
+import * as alpaca from "../providers/alpaca.js";
+import { hourlyNeeded, refreshHourly } from "./hourly.js";
 import { refreshDividends } from "./dividends.js";
 import { refreshStockIdeas, runStockScreen, updateOptionIdeas } from "./ideas.js";
 import { optionScores, runOptionScan } from "./option-score.js";
@@ -22,6 +24,12 @@ import { resolveUniverse } from "./universe.js";
 
 export type JobName = "stock-nightly" | "stock-intraday" | "option-scan" | "ideas-screen";
 export const JOB_NAMES: JobName[] = ["stock-nightly", "stock-intraday", "option-scan", "ideas-screen"];
+
+/** Daily hourly-bar fetch for the universe; recorded in scan_runs and shown in the status, but not forced through runJob. */
+export const HOURLY_JOB = "hourly-bars";
+const HOURLY_AFTER = { h: 7, m: 30 };
+const HOURLY_RETRY_MS = 3_600_000;
+let hourlyFailedAt = 0;
 
 const TICK_MS = 20_000;
 /** The stock scan waits this long into its slot for the minute bars to land; the option scan a bit more, for the sweep. */
@@ -49,7 +57,7 @@ export type RunRow = { started_at: string; finished_at: string | null; status: s
 export function lastRuns(): Record<string, RunRow> {
   const out: Record<string, RunRow> = {};
   const stmt = db.prepare("SELECT started_at, finished_at, status, symbols, duration_ms, error FROM scan_runs WHERE job = ? ORDER BY id DESC LIMIT 1");
-  for (const job of JOB_NAMES) {
+  for (const job of [...JOB_NAMES, HOURLY_JOB]) {
     const r = stmt.get(job) as RunRow | undefined;
     if (r) out[job] = r;
   }
@@ -143,6 +151,31 @@ function record<T extends { symbols?: number; scored?: number }>(job: JobName, f
   }
 }
 
+/**
+ * Fetches the universe's hourly bars once a day from 07:30 ET on trading days
+ * (and whenever symbols have none cached, e.g. after a universe change or on
+ * the first start). A failure waits an hour.
+ */
+export async function runHourlyIfNeeded(now = new Date()): Promise<boolean> {
+  const ny = nyClock(now);
+  if (!isTradingDay(ny.date) || now.getTime() < nyInstant(ny.date, HOURLY_AFTER.h, HOURLY_AFTER.m) || now.getTime() - hourlyFailedAt < HOURLY_RETRY_MS) return false;
+  if (!alpaca.isConfigured()) return false;
+  const universe = resolveUniverse();
+  if (!hourlyNeeded(universe, now)) return false;
+  const started = Date.now();
+  const id = Number(db.prepare("INSERT INTO scan_runs (job, started_at) VALUES (?, ?)").run(HOURLY_JOB, new Date(started).toISOString()).lastInsertRowid);
+  try {
+    const r = await refreshHourly(universe, now);
+    db.prepare("UPDATE scan_runs SET finished_at = ?, status = 'ok', symbols = ?, duration_ms = ? WHERE id = ?").run(new Date().toISOString(), r.symbols, Date.now() - started, id);
+    console.log(`[scan] hourly bars: ${r.symbols} symbols, ${r.requests} requests, ${r.bars} bars in ${(r.durationMs / 1000).toFixed(1)} s`);
+  } catch (err) {
+    hourlyFailedAt = now.getTime();
+    console.error("[scan] hourly bars failed:", err);
+    db.prepare("UPDATE scan_runs SET finished_at = ?, status = 'error', error = ?, duration_ms = ? WHERE id = ?").run(new Date().toISOString(), err instanceof Error ? err.message : String(err), Date.now() - started, id);
+  }
+  return true;
+}
+
 let running = false;
 
 /** Runs one job now (also the route behind forced scans). Returns false when another run is in progress or the job can't run. */
@@ -212,6 +245,7 @@ export function startQuantJobs(d: QuantDeps): { stop: () => void } | null {
       const now = new Date();
       await ensureYears(now);
       await refreshDividends(now);
+      await runHourlyIfNeeded(now);
       // A fresh install has no scorecards: build them once without waiting for 07:00.
       const jobs: JobName[] = latestScorecardDay() === null && lastStart("stock-nightly") === null ? ["stock-nightly", "ideas-screen"] : dueJobs(now, (j) => lastStart(j));
       for (const job of jobs) {

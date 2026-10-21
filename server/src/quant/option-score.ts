@@ -5,6 +5,7 @@ import { minuteBars } from "../history/store.js";
 import { tradingDay } from "../history/time.js";
 import type { OptionMetrics, OptionScorecard, OptionSetup } from "../scan/contracts.js";
 import { atr, ema, rollup, rsi, vwap, type Bar } from "./indicators.js";
+import { hourlySeries } from "./hourly.js";
 import { nextExDividends } from "./dividends.js";
 import { sharesHeld } from "./positions.js";
 import { compositeMap, getLiveScorecard, loadDaily } from "./stock-score.js";
@@ -101,14 +102,19 @@ export function trendScore(bars: Bar[], sessionVwap: number | null = null): numb
 
 export type Momentum = OptionScorecard["momentum"];
 
-/** The four timeframes from minute bars (oldest first, several sessions) and daily bars. Intraday ones include price against today's VWAP. */
-export function momentumOf(minute: Bar[], daily: Bar[]): Momentum {
+/**
+ * The four timeframes from minute bars (oldest first, several sessions),
+ * daily bars and the hourly series (cached hours plus today's). The intraday
+ * ones include price against today's VWAP. When the hourly series is too short
+ * (nothing cached yet) the minute bars are rolled up instead.
+ */
+export function momentumOf(minute: Bar[], daily: Bar[], hourly?: Bar[]): Momentum {
   const lastDay = minute.length > 0 ? tradingDay(minute[minute.length - 1].ts ?? 0) : null;
   const today = lastDay ? minute.filter((b) => tradingDay(b.ts ?? 0) === lastDay) : [];
   const v = vwap(today);
   const sessionVwap = v.length > 0 ? v[v.length - 1].value : null;
   const score = (minutes: number) => trendScore(rollup(minute, minutes), sessionVwap);
-  return { m5: score(5), m15: score(15), h1: score(60), d1: trendScore(daily) };
+  return { m5: score(5), m15: score(15), h1: (hourly && trendScore(hourly, sessionVwap)) ?? score(60), d1: trendScore(daily) };
 }
 
 export type SetupInputs = {
@@ -265,7 +271,12 @@ export function runOptionScan(symbols: string[], optionMetrics: (symbols: string
     const minute = minuteBars(symbol, nowSec - LOOKBACK_DAYS * 86_400, nowSec + 60).map((b) => ({ ...b }) as Bar);
     const daily = loadDaily(symbol);
     const dailyBars = daily.closes.map((c, i) => ({ ...toBar({ close: c, volume: daily.volumes[i] }), time: i }));
-    const momentum = momentumOf(minute, dailyBars);
+    // Today's running price joins the daily series until its own daily bar exists.
+    const lastMinute = minute[minute.length - 1];
+    if (lastMinute && daily.days.length > 0 && daily.days[daily.days.length - 1] < today && tradingDay(lastMinute.ts ?? 0) === today) {
+      dailyBars.push({ time: dailyBars.length, open: lastMinute.close, high: lastMinute.close, low: lastMinute.close, close: lastMinute.close, volume: 0 });
+    }
+    const momentum = momentumOf(minute, dailyBars, hourlySeries(symbol, minute, today, nowSec));
     const m = metrics.get(symbol) ?? null;
     const nextEarnings = earnings.get(symbol) ?? null;
     const live = getLiveScorecard(symbol);
