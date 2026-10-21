@@ -103,7 +103,7 @@ export function createOpraStream(deps: StreamDeps) {
       rateStart = now();
       rateCount = 0;
     }
-    return lastRate || Math.round((rateCount * 60_000) / Math.max(elapsed, 1_000));
+    return lastRate || (elapsed >= 10_000 ? Math.round((rateCount * 60_000) / elapsed) : 0);
   };
 
   const send = (payload: unknown) => ws?.send(encode(payload));
