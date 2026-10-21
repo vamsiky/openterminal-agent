@@ -54,7 +54,8 @@ export function resetThrottle(): void {
   nextSlot = 0;
 }
 
-async function dataFetch(path: string, params: Record<string, string | undefined>): Promise<any> {
+/** Every market-data request goes through here: origin guard, throttle, 429 retry. */
+export async function dataFetch(path: string, params: Record<string, string | undefined>): Promise<any> {
   if (!isConfigured()) throw new Error("alpaca: ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY not set");
   const url = new URL(path, DATA_BASE);
   if (url.origin !== DATA_BASE) throw new Error(`alpaca: refusing non-market-data URL ${url.origin}`);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alpacaSymbol, parseNasdaq100, parseSp500Wikitext, parseSymbolDirectory } from "./universe.js";
+import { alpacaSymbol, parseNasdaq100Wikitext, parseSp500Wikitext, parseSymbolDirectory } from "./universe.js";
 
 describe("symbol directory parsing", () => {
   it("reads Nasdaq-listed symbols and skips test issues and the footer", () => {
@@ -53,8 +53,28 @@ describe("index membership parsing", () => {
     expect(parseSp500Wikitext(wikitext)).toEqual(["MMM", "AAPL", "BRK.B"]);
   });
 
-  it("reads Nasdaq-100 rows", () => {
-    expect(parseNasdaq100({ data: { data: { rows: [{ symbol: "aapl" }, { symbol: "MSFT" }, {}] } } })).toEqual(["AAPL", "MSFT"]);
+  it("takes Nasdaq-100 tickers from the constituents table, one per row", () => {
+    const wikitext = [
+      "intro with | pipes || and more",
+      '{| class="wikitable sortable" id="constituents"',
+      "|-",
+      "! Ticker !! Company !! ICB Industry !! ICB Subsector",
+      "|-",
+      "| ADBE || [[Adobe Inc.]] || Technology || Software",
+      "|-",
+      "| GOOGL || [[Alphabet Inc.]] (Class A) || Technology || Software",
+      "|-",
+      "| GOOG || [[Alphabet Inc.]] (Class C) || Technology || Software",
+      "|-",
+      "| adbe || duplicate row",
+      "|}",
+      "| NOPE || after the table",
+    ].join("\n");
+    expect(parseNasdaq100Wikitext(wikitext)).toEqual(["ADBE", "GOOGL", "GOOG"]);
+  });
+
+  it("returns nothing for a page without a table", () => {
+    expect(parseNasdaq100Wikitext("no tables here")).toEqual([]);
   });
 });
 

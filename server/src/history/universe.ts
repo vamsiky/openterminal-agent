@@ -10,8 +10,8 @@ import type { SymbolRow } from "./store.js";
 //   covering Nasdaq, NYSE, NYSE American, NYSE Arca, Cboe and IEX listings.
 // - S&P 500 members: the constituents table on Wikipedia, overridable with a
 //   plain list in data/universe/sp500.txt (one symbol per line).
-// - Nasdaq-100 members: Nasdaq's public index list, overridable with
-//   data/universe/nasdaq100.txt.
+// - Nasdaq-100 members: the constituents table on Wikipedia's "List of
+//   NASDAQ-100 companies", overridable with data/universe/nasdaq100.txt.
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
@@ -91,9 +91,15 @@ export function parseSp500Wikitext(wikitext: string): string[] {
   return [...symbols];
 }
 
-export function parseNasdaq100(json: any): string[] {
-  const rows: any[] = json?.data?.data?.rows ?? json?.data?.rows ?? [];
-  return rows.map((r) => String(r?.symbol ?? "").trim().toUpperCase()).filter(Boolean);
+/** Pull tickers from the first column of the constituents table on Wikipedia's Nasdaq-100 list. */
+export function parseNasdaq100Wikitext(wikitext: string): string[] {
+  const start = wikitext.indexOf("{|");
+  if (start < 0) return [];
+  const end = wikitext.indexOf("\n|}", start);
+  const table = wikitext.slice(start, end < 0 ? undefined : end);
+  const symbols = new Set<string>();
+  for (const m of table.matchAll(/^\|\s*([A-Za-z][A-Za-z.]{0,7})\s*\|\|/gm)) symbols.add(m[1].toUpperCase());
+  return [...symbols];
 }
 
 function overrideFile(name: string): string[] | null {
@@ -118,11 +124,8 @@ export async function sp500(): Promise<string[]> {
 export async function nasdaq100(): Promise<string[]> {
   const override = overrideFile("nasdaq100.txt");
   if (override) return override;
-  const res = await fetch("https://api.nasdaq.com/api/quote/list-type/nasdaq100", {
-    headers: { "User-Agent": UA, Accept: "application/json", Origin: "https://www.nasdaq.com", Referer: "https://www.nasdaq.com/" },
-  });
-  if (!res.ok) throw new Error(`nasdaq100 ${res.status}`);
-  const symbols = parseNasdaq100(await res.json());
+  const text = await fetchText("https://en.wikipedia.org/w/index.php?title=List_of_NASDAQ-100_companies&action=raw");
+  const symbols = parseNasdaq100Wikitext(text);
   if (symbols.length < 90) throw new Error(`nasdaq100: parsed only ${symbols.length} symbols; add data/universe/nasdaq100.txt`);
   return symbols;
 }
