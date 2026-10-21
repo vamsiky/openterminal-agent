@@ -26,9 +26,9 @@ export type EnqueueInput = { symbol: string; strategy: ThesisStrategy; contract?
  * A row already queued, running or done today stops them. Manual items (the user's Analyse button) are per contract and
  * skip the per-day dedupe: one already queued is promoted to the front (ahead of automatic items, in request order);
  * only one running right now refuses it.
- * Returns the item's position (1 = next) or null when refused.
+ * Returns the item's position (1 = next; `existing` when it was already waiting), or null when it is running or done today.
  */
-export function enqueue(input: EnqueueInput, opts: { manual?: boolean; now?: Date } = {}): { position: number } | null {
+export function enqueue(input: EnqueueInput, opts: { manual?: boolean; now?: Date } = {}): { position: number; existing?: true } | null {
   const now = opts.now ?? new Date();
   const day = nyClock(now).date;
   const real = input.contract ?? "";
@@ -40,16 +40,20 @@ export function enqueue(input: EnqueueInput, opts: { manual?: boolean; now?: Dat
     if (row?.status === "running") return null;
     if (row) {
       db.prepare("UPDATE agent_queue SET manual = 1, reason = ?, queued_at = ? WHERE id = ?").run(input.reason, now.toISOString(), row.id);
-      return { position: pending().findIndex((i) => i.id === row.id) + 1 };
+      return { position: pending().findIndex((i) => i.id === row.id) + 1, existing: true };
     }
   }
   const active = manual
     ? undefined
     : db.prepare("SELECT id, status FROM agent_queue WHERE symbol = ? AND strategy = ? AND status IN ('queued','running') ORDER BY id DESC").get(input.symbol, input.strategy);
   if (active) {
-    // A queued automatic item follows the idea's current contract.
-    if ((active as { status: string }).status === "queued") db.prepare("UPDATE agent_queue SET item_contract = ? WHERE id = ?").run(real, (active as { id: number }).id);
-    return null;
+    const a = active as { id: number; status: string };
+    if (a.status === "running") return null;
+    // Already waiting: one pending item per (symbol, strategy) is the rule, so a repeat refreshes it (day, priority,
+    // and the idea's current contract) and reports its position instead of queueing a second, paid, analysis.
+    const clash = db.prepare("SELECT 1 FROM agent_queue WHERE day = ? AND symbol = ? AND strategy = ? AND contract = ? AND id != ?").get(day, input.symbol, input.strategy, key, a.id);
+    db.prepare(`UPDATE agent_queue SET item_contract = ?, rank = ?, reason = ?${clash ? "" : ", day = ?"} WHERE id = ?`).run(...[real, input.rank ?? 1000, input.reason, ...(clash ? [] : [day]), a.id]);
+    return { position: pending().findIndex((i) => i.id === a.id) + 1, existing: true };
   }
   const today = db.prepare("SELECT id, status FROM agent_queue WHERE day = ? AND symbol = ? AND strategy = ? AND contract = ?").get(day, input.symbol, input.strategy, key) as { id: number; status: string } | undefined;
   if (today && !manual) return null;

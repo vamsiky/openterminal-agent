@@ -58,6 +58,15 @@ CREATE TABLE IF NOT EXISTS briefs (
   cost_usd REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS briefs_day ON briefs (day);
+CREATE TABLE IF NOT EXISTS case_cache (
+  symbol TEXT NOT NULL,
+  strategy TEXT NOT NULL,
+  contract TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  bull TEXT NOT NULL,
+  bear TEXT NOT NULL,
+  PRIMARY KEY (symbol, strategy, contract)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS agent_queue (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   day TEXT NOT NULL,
@@ -208,3 +217,18 @@ export const latestBrief = (): Brief | null => {
 };
 export const listBriefs = (limit: number): Brief[] => (db.prepare("SELECT * FROM briefs ORDER BY id DESC LIMIT ?").all(limit) as any[]).map(toBrief);
 export const hasBrief = (day: string): boolean => db.prepare("SELECT 1 FROM briefs WHERE day = ?").get(day) !== undefined;
+
+// ---- bull and bear cases kept when the judge was refused for budget, so it can reuse them within 24 hours ----
+
+export const CASE_REUSE_MS = 24 * 3_600_000;
+type CasePair = { bull: import("./contracts.js").Case; bear: import("./contracts.js").Case };
+export function saveCases(symbol: string, strategy: ThesisStrategy, contract: string | null, pair: CasePair, now: Date): void {
+  db.prepare("INSERT OR REPLACE INTO case_cache (symbol, strategy, contract, created_at, bull, bear) VALUES (?, ?, ?, ?, ?, ?)").run(symbol, strategy, contract ?? "", now.toISOString(), JSON.stringify(pair.bull), JSON.stringify(pair.bear));
+}
+export function loadCases(symbol: string, strategy: ThesisStrategy, contract: string | null, now: Date): CasePair | null {
+  const r = db.prepare("SELECT * FROM case_cache WHERE symbol = ? AND strategy = ? AND contract = ?").get(symbol, strategy, contract ?? "") as { created_at: string; bull: string; bear: string } | undefined;
+  if (!r || now.getTime() - Date.parse(r.created_at) > CASE_REUSE_MS) return null;
+  return { bull: JSON.parse(r.bull), bear: JSON.parse(r.bear) };
+}
+export const dropCases = (symbol: string, strategy: ThesisStrategy, contract: string | null): void =>
+  void db.prepare("DELETE FROM case_cache WHERE symbol = ? AND strategy = ? AND contract = ?").run(symbol, strategy, contract ?? "");

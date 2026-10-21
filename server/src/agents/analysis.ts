@@ -14,7 +14,7 @@ import { optionMid } from "./option-quote.js";
 import { loadPrompt } from "./prompts.js";
 import { runAgent, type RunResult } from "./runtime.js";
 import { caseJson, caseOutput, judgeJson, judgeOutput, type CaseOutput } from "./schemas.js";
-import { insertThesis, latestMacro } from "./store.js";
+import { dropCases, insertThesis, latestMacro, loadCases, saveCases } from "./store.js";
 import type { QueueItem } from "./queue.js";
 
 // One analysis: bull and bear in parallel, then the judge, then the guardrail.
@@ -92,10 +92,13 @@ export async function analyze(item: AnalysisTarget, now = new Date()): Promise<A
       agent: side, model: model(), system: loadPrompt(side), prompt: lens(side, ctx), schema: caseOutput, jsonSchema: caseJson,
       tools: CASE_TOOLS, maxBudgetUsd: capUsd(side), maxTurns: MAX_TURNS[side], symbol: item.symbol, now,
     });
-  const [bullRun, bearRun] = await Promise.all([caseRun("bull"), caseRun("bear")]);
-  const bull = toCase("bull", bullRun);
-  const bear = toCase("bear", bearRun);
-  let cost = bullRun.costUsd + bearRun.costUsd;
+  // A judge refused for budget earlier left its cases behind: reuse them while they are under 24 hours old.
+  const kept = loadCases(item.symbol, item.strategy, item.contract, now);
+  const none = { ok: true, output: null, costUsd: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, durationMs: 0, error: null, status: "ok", auth: null } as const;
+  const [bullRun, bearRun] = kept ? [none, none] : await Promise.all([caseRun("bull"), caseRun("bear")]);
+  const bull = kept ? kept.bull : toCase("bull", bullRun as RunResult<CaseOutput>);
+  const bear = kept ? kept.bear : toCase("bear", bearRun as RunResult<CaseOutput>);
+  let cost = kept ? kept.bull.costUsd + kept.bear.costUsd : bullRun.costUsd + bearRun.costUsd;
 
   const base = {
     ideaId: idea?.id ?? item.ideaId, symbol: item.symbol, kind: item.kind, strategy: item.strategy, contract: item.contract, asOf,
@@ -109,7 +112,7 @@ export async function analyze(item: AnalysisTarget, now = new Date()): Promise<A
   } satisfies Omit<Thesis, "id" | "status" | "statusReason" | "costUsd" | "models"> & { models: Thesis["models"] };
   const fail = (reason: string) => ({ outcome: "done" as const, thesis: insertThesis(day, { ...base, status: "error", statusReason: reason, costUsd: cost }) });
 
-  if (bullRun.status === "skipped" && bearRun.status === "skipped") return { outcome: "budget" };
+  if (!kept && bullRun.status === "skipped" && bearRun.status === "skipped") return { outcome: "budget" };
   if (!bull || !bear) return fail(`${!bull ? "bull" : "bear"} case failed: ${(!bull ? bullRun : bearRun).error}`);
 
   const judgeRun = await runAgent({
@@ -118,6 +121,12 @@ export async function analyze(item: AnalysisTarget, now = new Date()): Promise<A
     schema: judgeOutput, jsonSchema: judgeJson, tools: JUDGE_TOOLS, maxBudgetUsd: capUsd("judge"), maxTurns: MAX_TURNS.judge, symbol: item.symbol, now,
   });
   cost += judgeRun.costUsd;
+  if (judgeRun.status === "skipped") {
+    // Not an error: keep the cases, leave the item queued, and let the judge run when budget is back.
+    saveCases(item.symbol, item.strategy, item.contract, { bull, bear }, now);
+    return { outcome: "budget" };
+  }
+  dropCases(item.symbol, item.strategy, item.contract);
   if (!judgeRun.output) return fail(`judge failed: ${judgeRun.error}`);
 
   const j = judgeRun.output;
@@ -132,3 +141,8 @@ export async function analyze(item: AnalysisTarget, now = new Date()): Promise<A
 }
 
 export const analysisTarget = (i: QueueItem): AnalysisTarget => ({ symbol: i.symbol, strategy: i.strategy, contract: i.contract, ideaId: i.ideaId, kind: i.kind });
+
+/** Dollars an analysis of this target still needs: only the judge when kept cases can be reused. */
+export function analysisNeedUsd(t: AnalysisTarget, now = new Date()): number {
+  return loadCases(t.symbol, t.strategy, t.contract, now) ? capUsd("judge") : capUsd("bull") + capUsd("bear") + capUsd("judge");
+}

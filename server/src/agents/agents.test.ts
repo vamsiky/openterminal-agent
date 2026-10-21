@@ -43,7 +43,7 @@ afterAll(() => {
 });
 beforeEach(() => {
   queryMock.mockReset();
-  for (const t of ["agent_runs", "agent_queue", "theses", "macro_reports", "briefs", "ideas", "positions", "earnings_calendar", "earnings_timing"]) db.prepare(`DELETE FROM ${t}`).run();
+  for (const t of ["case_cache", "agent_runs", "agent_queue", "theses", "macro_reports", "briefs", "ideas", "positions", "earnings_calendar", "earnings_timing"]) db.prepare(`DELETE FROM ${t}`).run();
   for (const k of Object.keys(quotes)) delete quotes[k];
   delete process.env.AGENTS_DAILY_BUDGET_USD;
 });
@@ -61,10 +61,10 @@ describe("queue", () => {
 
   it("dedupes automatic items per symbol, strategy, contract and day", () => {
     expect(queue.enqueue(item("MU"), { now: NOW })).toEqual({ position: 1 });
-    expect(queue.enqueue(item("MU"), { now: NOW })).toBeNull();
+    expect(queue.enqueue(item("MU"), { now: NOW })).toMatchObject({ existing: true }); // pending already: reported, not queued twice
     expect(queue.enqueue({ ...item("MU"), strategy: "short_put", kind: "option", contract: "MU261120P00090000" }, { now: NOW })).not.toBeNull();
     // Automatic option items key on symbol, strategy and day, not the contract.
-    expect(queue.enqueue({ ...item("MU"), strategy: "short_put", kind: "option", contract: "MU261120P00095000" }, { now: NOW })).toBeNull();
+    expect(queue.enqueue({ ...item("MU"), strategy: "short_put", kind: "option", contract: "MU261120P00095000" }, { now: NOW })).toMatchObject({ existing: true }); // pending already: reported, not queued twice
     expect(queue.pending().find((i) => i.strategy === "short_put")?.contract).toBe("MU261120P00095000"); // follows the idea
     // Finished today: automatic items still wait for tomorrow.
     queue.markDone(queue.pending()[0].id);
@@ -86,7 +86,7 @@ describe("queue", () => {
     queue.enqueue(item("A", 1), { now: NOW });
     queue.enqueue(item("MU", 9), { now: NOW });
     expect(queue.pending().map((i) => i.symbol)).toEqual(["A", "MU"]);
-    expect(queue.enqueue(item("MU"), { manual: true, now: new Date(NOW.getTime() + 1000) })).toEqual({ position: 1 });
+    expect(queue.enqueue(item("MU"), { manual: true, now: new Date(NOW.getTime() + 1000) })).toEqual({ position: 1, existing: true });
     expect(queue.pending().map((i) => [i.symbol, i.manual])).toEqual([["MU", true], ["A", false]]);
     expect(queue.pending()).toHaveLength(2);
     const id = queue.pending()[0].id;
@@ -377,6 +377,33 @@ describe("analysis (mocked SDK end to end)", () => {
     expect(await analysis.analyze(target, NOW)).toEqual({ outcome: "budget" });
     expect(queryMock).not.toHaveBeenCalled();
     expect(store.skippedOn(DAY)).toBe(2);
+  });
+
+  it("keeps the cases when only the judge is refused for budget and reuses them later", async () => {
+    answer(judge());
+    process.env.AGENTS_DAILY_BUDGET_USD = "0.5"; // bull and bear (0.1 each) fit; the judge's 0.4 cap does not
+    expect(await analysis.analyze(target, NOW)).toEqual({ outcome: "budget" });
+    expect(store.listTheses({ limit: 5 })).toHaveLength(0);
+    expect(store.loadCases("MU", "buy", null, NOW)).not.toBeNull();
+    expect(analysis.analysisNeedUsd(target, NOW)).toBeCloseTo(0.4);
+    // Later, with budget back: only the judge runs, and the thesis carries the earlier cases and their cost.
+    process.env.AGENTS_DAILY_BUDGET_USD = "5";
+    queryMock.mockClear();
+    const r = await analysis.analyze(target, new Date(NOW.getTime() + 3_600_000));
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(queryMock.mock.calls[0][0].prompt.startsWith("Decide")).toBe(true);
+    expect(r.outcome === "done" && r.thesis).toMatchObject({ status: "ok", verdict: "act" });
+    expect(r.outcome === "done" && r.thesis.bull?.side).toBe("bull");
+    expect(r.outcome === "done" && r.thesis.costUsd).toBeCloseTo(0.4);
+    expect(store.loadCases("MU", "buy", null, NOW)).toBeNull();
+    expect(analysis.analysisNeedUsd(target, NOW)).toBeCloseTo(0.9);
+  });
+
+  it("ignores kept cases older than 24 hours", async () => {
+    answer(judge());
+    process.env.AGENTS_DAILY_BUDGET_USD = "0.5";
+    await analysis.analyze(target, NOW);
+    expect(store.loadCases("MU", "buy", null, new Date(NOW.getTime() + 25 * 3_600_000))).toBeNull();
   });
 
   it("drain runs queued options at once and marks the item done", async () => {
