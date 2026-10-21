@@ -72,10 +72,10 @@ describe("pure helpers", () => {
     const c = (occ: string, volume: number, openInterest: number | null, expiry = "2026-11-20") =>
       ({ occ, expiry, right: "call", strike: 100, bid: 1, ask: 1, mid: 1, volume, openInterest, iv: 0.3, delta: 0.5 }) as const;
     const out = sweep.unusualContracts(
-      [c("A", 900, 400), c("B", 300, 50), c("C", 900, 600), c("D", 5000, null), c("E", 2000, 400), c("F", 9000, 10, "2026-10-21"), c("G", 9000, 10, "2026-10-22"), c("H", 9000, 10, "2026-10-23")],
+      [c("A", 900, 400), c("B", 300, 50), c("C", 900, 600), c("D", 5000, null), c("E", 2000, 400), c("F", 9000, 10, "2026-10-21"), c("G", 9000, 10, "2026-10-22"), c("H", 9000, 100, "2026-10-23"), c("I", 9000, 99, "2026-10-23")],
       "2026-10-21"
     );
-    expect(out.map((u) => u.occ)).toEqual(["H", "E", "A"]); // 900x, 5x, 2.25x
+    expect(out.map((u) => u.occ)).toEqual(["H", "E", "A"]); // 90x, 5x, 2.25x; I has OI under 100
     expect(out[1]).toEqual({ occ: "E", volume: 2000, openInterest: 400, ratio: 5 });
     expect(sweep.UNUSUAL_MIN_DTE).toBe(2);
   });

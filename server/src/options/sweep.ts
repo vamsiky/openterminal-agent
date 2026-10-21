@@ -131,6 +131,8 @@ export const UNUSUAL_MIN_VOLUME = 500;
 export const UNUSUAL_RATIO = 2;
 /** Contracts expiring sooner than this many calendar days (0DTE, 1DTE) are skipped: their open interest means little next to intraday volume. */
 export const UNUSUAL_MIN_DTE = 2;
+/** Open interest under this makes the ratio meaningless. */
+export const UNUSUAL_MIN_OI = 100;
 
 /**
  * Contracts trading at least twice their open interest and at least 500 lots.
@@ -140,7 +142,7 @@ export const UNUSUAL_MIN_DTE = 2;
 export function unusualContracts(contracts: ParsedContract[], today: string): OptionMetrics["unusual"] {
   return contracts
     .filter((c) => daysBetween(today, c.expiry) >= UNUSUAL_MIN_DTE)
-    .filter((c) => (c.volume ?? 0) >= UNUSUAL_MIN_VOLUME && c.openInterest !== null && c.openInterest > 0 && c.volume! >= UNUSUAL_RATIO * c.openInterest)
+    .filter((c) => (c.volume ?? 0) >= UNUSUAL_MIN_VOLUME && c.openInterest !== null && c.openInterest >= UNUSUAL_MIN_OI && c.volume! >= UNUSUAL_RATIO * c.openInterest)
     .sort((a, b) => b.volume! / b.openInterest! - a.volume! / a.openInterest!)
     .slice(0, 10)
     .map((c) => ({ occ: c.occ, volume: c.volume!, openInterest: c.openInterest, ratio: c.volume! / c.openInterest! }));
