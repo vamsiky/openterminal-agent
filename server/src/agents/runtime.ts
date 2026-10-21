@@ -117,7 +117,7 @@ export function buildOptions(spec: RunSpec<unknown>, abortController: AbortContr
       openterminal: {
         type: "stdio",
         command: join(repoRoot, "node_modules", ".bin", "tsx"),
-        args: [join(repoRoot, "mcp", "src", "index.ts")],
+        args: [process.env.AGENTS_MCP_ENTRY || join(repoRoot, "mcp", "src", "index.ts")],
         env: { OPENTERMINAL_API_URL: `http://127.0.0.1:${process.env.API_PORT ?? 4000}`, OPENTERMINAL_API_KEY: apiKey, PATH: env.PATH ?? "" },
       },
     };
