@@ -190,7 +190,10 @@ export function buildMetrics(i: MetricsInput): OptionMetrics {
 
   let callVol = 0;
   let putVol = 0;
-  for (const c of contracts) (c.right === "call" ? (callVol += c.volume ?? 0) : (putVol += c.volume ?? 0));
+  for (const c of contracts) {
+    if (c.right === "call") callVol += c.volume ?? 0;
+    else putVol += c.volume ?? 0;
+  }
 
   const rank = ivRank(iv30, i.history);
   const quote = (c: ParsedContract | undefined) => {
@@ -225,7 +228,7 @@ export type SweepDeps = {
   holdings: () => OptionPosition[];
   /** Latest underlying prices. */
   prices?: (symbols: string[]) => Promise<Map<string, number>>;
-  snapshots?: (underlying: string, filter: ChainFilter) => Promise<Record<string, any>>;
+  snapshots?: (underlying: string, filter: ChainFilter, stats: { requests: number }) => Promise<Record<string, any>>;
   hv20?: (symbol: string) => number | null;
   live?: (occ: string) => LiveContractQuote | null;
   now?: () => number;
@@ -241,6 +244,8 @@ export type SweepResult = {
   metrics: OptionMetrics[];
   selection: Selection;
   errors: Array<{ symbol: string; message: string }>;
+  /** HTTP requests made (stock price snapshots plus option snapshot pages). */
+  requests: number;
   prices: Map<string, number>;
 };
 
@@ -273,7 +278,8 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
   const errors: SweepResult["errors"] = [];
 
   const prices = await (deps.prices ?? stockPrices)(underlyings);
-  const fetchSnaps = deps.snapshots ?? ((u, f) => optionSnapshots(u, f));
+  const stats = { requests: Math.ceil(underlyings.length / 500) };
+  const fetchSnaps = deps.snapshots ?? ((u, f, st) => optionSnapshots(u, f, undefined, st));
   const expiryMax = new Date(Date.parse(`${day}T00:00:00Z`) + cfg.maxDte * 86_400_000).toISOString().slice(0, 10);
 
   const parsed = new Map<string, ParsedContract[]>();
@@ -283,7 +289,7 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
       const snaps = await fetchSnaps(u, {
         expiryMin: day, expiryMax,
         strikeMin: price * (1 - cfg.strikeRange), strikeMax: price * (1 + cfg.strikeRange),
-      });
+      }, stats);
       parsed.set(u, parseSnapshots(snaps, price, started));
     } catch (err) {
       errors.push({ symbol: u, message: err instanceof Error ? err.message : String(err) });
@@ -309,5 +315,5 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
     if (recordsIvDay(started) && (m.iv30 !== null || m.atmIv !== null)) upsertIvDay({ symbol: u, day, iv30: m.iv30, atmIv: m.atmIv, hv20: m.hv20 });
     metrics.push(m);
   }
-  return { startedAt: new Date(started).toISOString(), durationMs: now() - started, underlyings: underlyings.length, metrics, selection, errors, prices };
+  return { startedAt: new Date(started).toISOString(), durationMs: now() - started, underlyings: underlyings.length, metrics, selection, errors, requests: stats.requests, prices };
 }

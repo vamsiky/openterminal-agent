@@ -90,10 +90,11 @@ export function optionsFeed(): string {
 }
 
 /** Walk the snapshot pages for an underlying; stops at maxPages so a huge chain can't run away. */
-async function snapshotPages(underlying: string, filter: ChainFilter, maxPages = MAX_PAGES): Promise<Record<string, any>> {
+async function snapshotPages(underlying: string, filter: ChainFilter, maxPages = MAX_PAGES, stats?: { requests: number }): Promise<Record<string, any>> {
   const out: Record<string, any> = {};
   let pageToken: string | undefined;
   for (let page = 0; page < maxPages; page++) {
+    if (stats) stats.requests++;
     const data = await dataFetch(`/v1beta1/options/snapshots/${encodeURIComponent(underlying)}`, {
       feed: optionsFeed(),
       limit: String(PAGE_LIMIT),
@@ -115,10 +116,11 @@ async function snapshotPages(underlying: string, filter: ChainFilter, maxPages =
 /**
  * Raw snapshots (latest quote/trade, day bar, greeks) for an underlying's
  * contracts across an expiry range and strike band, keyed by OCC symbol.
- * Used by the options sweep, which walks more pages than a chain view does.
+ * Used by the options sweep, which walks more pages than a chain view does;
+ * `stats.requests` counts the page requests made.
  */
-export async function optionSnapshots(underlying: string, filter: ChainFilter, maxPages = 30): Promise<Record<string, any>> {
-  return snapshotPages(underlying.toUpperCase(), filter, maxPages);
+export async function optionSnapshots(underlying: string, filter: ChainFilter, maxPages = 30, stats?: { requests: number }): Promise<Record<string, any>> {
+  return snapshotPages(underlying.toUpperCase(), filter, maxPages, stats);
 }
 
 async function underlyingPrice(symbol: string): Promise<number | null> {
