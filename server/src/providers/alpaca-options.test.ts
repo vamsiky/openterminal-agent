@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetThrottle } from "./alpaca.js";
-import { chain, expirations, parseOcc } from "./alpaca-options.js";
+import { chain, expirations, optionSnapshots, parseOcc } from "./alpaca-options.js";
 
 function route(handler: (u: URL) => unknown) {
   const fetchMock = vi.fn(async (url: string) => ({ ok: true, status: 200, json: async () => handler(new URL(url)), headers: new Headers() }));
@@ -96,5 +96,17 @@ describe("alpaca options", () => {
   it("returns an empty chain when the underlying has no options", async () => {
     route((u) => (u.pathname === "/v2/stocks/snapshots" ? stockSnap : { snapshots: {}, next_page_token: null }));
     expect(await chain("ZZZZ")).toMatchObject({ expirationDates: [], selectedDate: null, calls: [], puts: [] });
+  });
+
+  it("optionSnapshots passes the expiry range and strike band", async () => {
+    const fetchMock = route(() => ({ snapshots: optSnaps, next_page_token: null }));
+    const snaps = await optionSnapshots("nvda", { expiryMin: "2026-10-21", expiryMax: "2026-12-20", strikeMin: 170, strikeMax: 230 });
+    expect(Object.keys(snaps)).toHaveLength(4);
+    const url = new URL(fetchMock.mock.calls[0][0]);
+    expect(url.pathname).toBe("/v1beta1/options/snapshots/NVDA");
+    expect(url.searchParams.get("expiration_date_gte")).toBe("2026-10-21");
+    expect(url.searchParams.get("expiration_date_lte")).toBe("2026-12-20");
+    expect(url.searchParams.get("strike_price_gte")).toBe("170");
+    expect(url.searchParams.get("feed")).toBe("opra");
   });
 });
