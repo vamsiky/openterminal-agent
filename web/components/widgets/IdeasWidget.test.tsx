@@ -180,6 +180,15 @@ describe("thesis view", () => {
     expect(calls.some((c) => c.url.includes("ideaId=2"))).toBe(true);
   });
 
+  it("re-analyses an existing thesis and waits for a newer one", async () => {
+    table = [...optionIdeaRoutes, ["/api/agents/analyze", () => reply({ queued: true }, 202)], ["/api/agents/theses/latest", () => reply(thesis)]];
+    await open();
+    fireEvent.click(await screen.findByRole("button", { name: "Re-analyse" }));
+    expect(await screen.findByRole("button", { name: "Re-analysing…" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Re-analysing…" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(JSON.parse(String(calls.find((c) => c.url.includes("/analyze"))!.init!.body))).toMatchObject({ symbol: "AAPL", ideaId: 2 });
+  });
+
   it("shows a rejected thesis with its reason", async () => {
     table = [...optionIdeaRoutes, ["/api/agents/theses/latest", () => reply({ ...thesis, status: "rejected", statusReason: "act without a dated catalyst" })]];
     await open();

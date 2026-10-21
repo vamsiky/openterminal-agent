@@ -59,7 +59,9 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-function Body({ t, idea }: { t: Thesis; idea: Idea }) {
+type Reanalyse = { onClick: () => void; pending: boolean; disabled: boolean; title: string; note: string | null };
+
+function Body({ t, idea, again }: { t: Thesis; idea: Idea; again: Reanalyse }) {
   const chipClass = t.verdict === "act" ? "up" : t.verdict === "pass" ? "down" : "amber";
   const rejected = t.status !== "ok";
   return (
@@ -89,34 +91,43 @@ function Body({ t, idea }: { t: Thesis; idea: Idea }) {
       </div>
       <CaseView c={t.bull} label="Bull" />
       <CaseView c={t.bear} label="Bear" />
-      <div className="dim text-[10px] mt-1">Advice only, not an order · analysed {ago(t.asOf)} · cost ${fmt(t.costUsd, 2)}</div>
+      <div className="dim text-[10px] mt-1">Advice only, not an order · analysed {ago(t.asOf)} · cost ${fmt(t.costUsd, 2)}{" "}
+        <button className="term-btn" disabled={again.disabled || again.pending} onClick={again.onClick} title={again.title}>
+          {again.pending ? "Re-analysing…" : "Re-analyse"}
+        </button>
+        {again.note && <span> {again.note}</span>}
+      </div>
     </div>
   );
 }
 
 export default function ThesisView({ idea, agents }: { idea: Idea; agents: AgentsStatus | undefined }) {
   const client = useQueryClient();
-  const [queued, setQueued] = useState(false);
+  // `since` is the thesis on screen when an analysis was queued; a newer one (higher id or later asOf) ends the wait.
+  const [since, setSince] = useState<{ id: number; asOf: string } | null | undefined>(undefined);
+  const queued = since !== undefined;
+  const arrived = (t: Thesis | null | undefined) => !!t && (!since || t.id > since.id || t.asOf > since.asOf);
   const [note, setNote] = useState<string | null>(null);
   const thesis = useQuery({
     queryKey: ["thesis", idea.id],
     queryFn: () => fetchThesis(idea),
     staleTime: 30_000,
-    // While an analysis is queued, poll until the thesis arrives.
-    refetchInterval: (q) => (queued && !q.state.data ? 5_000 : false),
+    // While an analysis is queued, poll until a newer thesis arrives.
+    refetchInterval: (q) => (queued && !arrived(q.state.data) ? 5_000 : false),
   });
+  const pending = queued && !arrived(thesis.data);
 
   const analyse = async () => {
     setNote(null);
     try {
       await apiPost("/api/agents/analyze", { symbol: idea.symbol, strategy: idea.strategy, contract: idea.contract ?? undefined, ideaId: idea.id });
-      setQueued(true);
+      setSince(thesis.data ? { id: thesis.data.id, asOf: thesis.data.asOf } : null);
       setNote("Queued: the analysis usually takes a minute or two.");
       client.invalidateQueries({ queryKey: ["agents-status"] });
     } catch (err) {
       const status = err instanceof ApiError ? err.status : 0;
       if (status === 409) {
-        setQueued(true);
+        setSince(thesis.data ? { id: thesis.data.id, asOf: thesis.data.asOf } : null);
         setNote("Already queued or running.");
       } else if (status === 402) setNote("Daily AI budget reached; try again tomorrow.");
       else if (status === 503) setNote("AI agents are disabled.");
@@ -126,17 +137,17 @@ export default function ThesisView({ idea, agents }: { idea: Idea; agents: Agent
 
   if (thesis.isLoading) return <div className="dim p-1">Loading thesis…</div>;
   if (thesis.error) return <ErrorNote error={thesis.error} />;
+  const noBudget = budgetSpent(agents);
+  const off = agents?.enabled === false;
+  const reason = off ? "AI agents are disabled." : noBudget ? "Daily AI budget reached." : null;
   if (thesis.data) {
     return (
       <div className="p-1 border-t border-[var(--border)] mt-1">
-        <Body t={thesis.data} idea={idea} />
+        <Body t={thesis.data} idea={idea} again={{ onClick: analyse, pending, disabled: !!reason, title: reason ?? "Run the agents again on this idea", note: note ?? reason }} />
       </div>
     );
   }
-  const noBudget = budgetSpent(agents);
-  const off = agents?.enabled === false;
-  const disabled = queued || noBudget || off;
-  const reason = off ? "AI agents are disabled." : noBudget ? "Daily AI budget reached." : null;
+  const disabled = queued || !!reason;
   return (
     <div className="p-1 border-t border-[var(--border)] mt-1 flex items-center gap-2">
       <span className="dim">{queued ? "Analysing…" : "Not analysed yet"}</span>

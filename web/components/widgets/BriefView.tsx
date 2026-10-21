@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, apiGet, apiPost } from "../../lib/api";
 import type { Brief } from "../../lib/agents";
@@ -24,12 +24,30 @@ export default function BriefView() {
     refetchInterval: 300_000,
   });
 
+  // After Regenerate: poll every 10 s for up to 3 min until a brief newer than the one shown arrives.
+  const [waitingSince, setWaitingSince] = useState<string | null>(null);
+  const shownAsOf = useRef<string | null>(null);
+  shownAsOf.current = brief.data?.asOf ?? null;
+  useEffect(() => {
+    if (waitingSince === null) return;
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if ((shownAsOf.current ?? "") > waitingSince || Date.now() - started > 180_000) {
+        clearInterval(timer);
+        setWaitingSince(null);
+        return;
+      }
+      client.invalidateQueries({ queryKey: ["brief"] });
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [waitingSince, client]);
+
   const regenerate = async () => {
     setNote("Requesting…");
     try {
       await apiPost("/api/agents/run/brief", {});
       setNote("Queued: the brief refreshes here when it is written.");
-      setTimeout(() => client.invalidateQueries({ queryKey: ["brief"] }), 30_000);
+      setWaitingSince(shownAsOf.current ?? "");
     } catch (err) {
       const status = err instanceof ApiError ? err.status : 0;
       setNote(status === 409 ? "Already running." : status === 402 ? "Daily AI budget reached." : status === 503 ? "AI agents are disabled." : `Failed: ${(err as Error).message}`);
