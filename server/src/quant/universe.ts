@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { db } from "../db.js";
+import "../history/store.js"; // creates the symbols (exchange listings) table
 import { isForeignSymbol } from "../history/universe.js";
 import { LISTED_EXCHANGES } from "../research/bulk-store.js";
 import type { UniverseSettings } from "../scan/contracts.js";
@@ -97,6 +98,18 @@ function watchlistSymbols(ids: number[] | null): string[] {
   return rows.map((r) => r.symbol);
 }
 
+/**
+ * Symbols that are US-listed securities: in the exchange listings (`symbols`)
+ * or the FMP profiles. Keeps crypto (DOGE), forex and index tickers that
+ * look like stocks out of the scans. Null when neither table is loaded yet.
+ */
+function listedSymbols(): Set<string> | null {
+  const rows = db
+    .prepare("SELECT symbol FROM symbols WHERE active = 1 UNION SELECT symbol FROM bulk_profiles")
+    .all() as Array<{ symbol: string }>;
+  return rows.length > 0 ? new Set(rows.map((r) => r.symbol)) : null;
+}
+
 /** The mode's set plus holdings (stocks and option underlyings), US tickers only, sorted. */
 export function resolveUniverse(settings = getUniverseSettings()): string[] {
   const base =
@@ -107,7 +120,10 @@ export function resolveUniverse(settings = getUniverseSettings()): string[] {
           ? marketSymbols(settings, true)
           : []
         : marketSymbols(settings, false);
-  return [...new Set([...base, ...heldSymbols()].map((s) => s.toUpperCase()))].filter(isScannable).sort();
+  const listed = listedSymbols();
+  // Holdings stay whatever the listings say (a new IPO may not be in them yet); the mode's set must be listed.
+  const mode = base.map((s) => s.toUpperCase()).filter((s) => !listed || listed.has(s));
+  return [...new Set([...mode, ...heldSymbols().map((s) => s.toUpperCase())])].filter(isScannable).sort();
 }
 
 /** FMP sectors and their industries, from the bulk profiles (stocks only), sorted, for the settings screen. */

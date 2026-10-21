@@ -30,9 +30,11 @@ beforeAll(async () => {
   row("GGG", { exchange: "OTC" });
   row("HHH", { industry: "Hardware" });
 
+  // Exchange listings: ZZZ is listed (an ETF, say) though it has no FMP profile; DOGE and the rest are not.
+  db.prepare("INSERT INTO symbols (symbol, active) VALUES ('ZZZ', 1), ('OLD', 0)").run();
   db.prepare("INSERT INTO watchlists (id, name) VALUES (1, 'One'), (2, 'Two')").run();
   const item = db.prepare("INSERT INTO watchlist_items (watchlist_id, symbol, position) VALUES (?, ?, ?)");
-  [[1, "AAA"], [1, "BBB"], [1, "^VIX"], [1, "BTC-USD"], [2, "ZZZ"], [2, "7203.T"], [2, "aaa"]].forEach(([id, s], i) => item.run(id, s, i));
+  [[1, "AAA"], [1, "BBB"], [1, "^VIX"], [1, "BTC-USD"], [2, "ZZZ"], [2, "7203.T"], [2, "DOGE"], [2, "OLD"], [2, "SHIB-USD"], [2, "aaa"]].forEach(([id, s], i) => item.run(id, s, i));
 });
 
 afterAll(async () => {
@@ -56,6 +58,13 @@ describe("settings", () => {
 describe("resolveUniverse", () => {
   it("watchlists mode: every list, US tickers only", () => {
     expect(uni.resolveUniverse(settings({}))).toEqual(["AAA", "BBB", "ZZZ"]);
+  });
+
+  it("drops symbols that are not US listings (crypto, delisted) but keeps held ones", () => {
+    expect(uni.resolveUniverse(settings({ watchlistIds: [2] }))).not.toContain("DOGE");
+    pos.importPositions("symbol,quantity\nNEWIPO,5");
+    expect(uni.resolveUniverse(settings({ watchlistIds: [2] }))).toEqual(["AAA", "NEWIPO", "ZZZ"]);
+    pos.importPositions("symbol,quantity");
   });
 
   it("watchlists mode: chosen lists", () => {
