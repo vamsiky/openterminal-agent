@@ -39,7 +39,9 @@ const latest = (path: string) => sockets(path).at(-1)!;
 
 // Snapshot responses by feed; a function lets a test fail one of them.
 let snapshotBody: (feed: string) => { status: number; body: unknown } = () => ({ status: 200, body: {} });
+let snapshotDelayMs = 0;
 const fetchMock = vi.fn(async (url: string) => {
+  if (snapshotDelayMs > 0) await new Promise((r) => setTimeout(r, snapshotDelayMs));
   const { status, body } = snapshotBody(new URL(url).searchParams.get("feed") ?? "");
   return { ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body), headers: new Headers() };
 });
@@ -169,6 +171,45 @@ describe("first-click snapshots", () => {
     fetchMock.mockClear();
     await focus(["DOWN2"]);
     expect(fetchMock).not.toHaveBeenCalled();
+    snapshotBody = () => ({ status: 200, body: {} });
+  });
+
+  it("shares one request between overlapping calls for the same ticker", async () => {
+    snapshotDelayMs = 500;
+    fetchMock.mockClear();
+    alpaca.resetThrottle();
+    const both = Promise.all([feed.focusOn(["DUP"]), feed.focusOn(["DUP", "DUP"])]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await both;
+    expect(fetchMock).toHaveBeenCalledTimes(2); // the tape and the overnight feed, once each
+    snapshotDelayMs = 0;
+  });
+
+  it("answers within the wait bound when the snapshot is slow, and applies it when it lands", async () => {
+    snapshotDelayMs = 5_000;
+    snapshotBody = (f) =>
+      f === "boats" ? { status: 200, body: {} } : { status: 200, body: { SLOW: { dailyBar: { t: "2026-10-16T04:00:00Z", o: 9, h: 11, l: 9, c: 10, v: 5 } } } };
+    fetchMock.mockClear();
+    alpaca.resetThrottle();
+    let answered = false;
+    const first = feed.focusOn(["SLOW"]).then(() => (answered = true));
+    await vi.advanceTimersByTimeAsync(feed.SNAPSHOT_WAIT_MS - 1);
+    expect(answered).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await first;
+    expect(feed.liveQuote("SLOW")).toBeNull();
+
+    // A poll while it's still out waits again, without asking again.
+    let polled = false;
+    const poll = feed.focusOn(["SLOW"]).then(() => (polled = true));
+    await vi.advanceTimersByTimeAsync(feed.SNAPSHOT_WAIT_MS);
+    await poll;
+    expect(polled).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(feed.liveQuote("SLOW")).toMatchObject({ price: 10, source: "alpaca" });
+    snapshotDelayMs = 0;
     snapshotBody = () => ({ status: 200, body: {} });
   });
 });

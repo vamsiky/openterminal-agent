@@ -125,26 +125,50 @@ function usStock(symbol: string): string | null {
 // Name, exchange and fundamentals for live quotes. These barely change during
 // a day, so they are fetched from the web sources in the background, at most
 // hourly per ticker, and never hold up a price.
+//
+// A ticker the web sources don't answer (unknown to them, or every source
+// failing or rate-limited) is asked again after 5 minutes, doubling with each
+// failure in a row up to 30 minutes, rather than on every poll: one fallback
+// chain per poll per ticker is what gets this server's IP banned. Its last good
+// fields stay on the quote meanwhile.
 type StaticFields = Pick<
   yahoo.Quote,
   "name" | "exchange" | "avgVolume" | "marketCap" | "pe" | "eps" | "dividendYield" | "week52High" | "week52Low" | "beta" | "sharesOutstanding"
 >;
 const STATIC_TTL = 3_600_000;
-const staticFields = new Map<string, { at: number; fields: StaticFields }>();
+const STATIC_RETRY_MS = 5 * 60_000;
+const STATIC_RETRY_MAX_MS = 30 * 60_000;
+const staticFields = new Map<string, { fields: StaticFields | null; next: number; failures: number }>();
 const staticInFlight = new Set<string>();
 
-function refreshStatic(symbol: string): void {
-  const known = staticFields.get(symbol);
-  if ((known && Date.now() - known.at < STATIC_TTL) || staticInFlight.has(symbol)) return;
-  staticInFlight.add(symbol);
-  webQuotes([symbol])
-    .then(([q]) => {
-      if (!q) return;
-      const { name, exchange, avgVolume, marketCap, pe, eps, dividendYield, week52High, week52Low, beta, sharesOutstanding } = q;
-      staticFields.set(symbol, { at: Date.now(), fields: { name, exchange, avgVolume, marketCap, pe, eps, dividendYield, week52High, week52Low, beta, sharesOutstanding } });
+/** Refresh the static fields of the live tickers that are due, in one background web request. */
+function refreshStatic(symbols: string[]): void {
+  const now = Date.now();
+  const due = symbols.filter((s) => !staticInFlight.has(s) && (staticFields.get(s)?.next ?? 0) <= now);
+  if (due.length === 0) return;
+  for (const s of due) staticInFlight.add(s);
+  webQuotes(due)
+    .catch(() => [] as yahoo.Quote[])
+    .then((quotes) => {
+      const got = new Map(quotes.map((q) => [q.symbol, q]));
+      const at = Date.now();
+      for (const s of due) {
+        const q = got.get(s);
+        if (q) {
+          const { name, exchange, avgVolume, marketCap, pe, eps, dividendYield, week52High, week52Low, beta, sharesOutstanding } = q;
+          const fields = { name, exchange, avgVolume, marketCap, pe, eps, dividendYield, week52High, week52Low, beta, sharesOutstanding };
+          staticFields.set(s, { fields, next: at + STATIC_TTL, failures: 0 });
+        } else {
+          const known = staticFields.get(s);
+          const failures = (known?.failures ?? 0) + 1;
+          const wait = Math.min(STATIC_RETRY_MS * 2 ** (failures - 1), STATIC_RETRY_MAX_MS);
+          staticFields.set(s, { fields: known?.fields ?? null, next: at + wait, failures });
+        }
+      }
     })
-    .catch(() => {})
-    .finally(() => staticInFlight.delete(symbol));
+    .finally(() => {
+      for (const s of due) staticInFlight.delete(s);
+    });
 }
 
 /**
@@ -161,13 +185,11 @@ async function getQuotes(symbols: string[]): Promise<yahoo.Quote[]> {
   for (const s of symbols) {
     const a = mapped.get(s);
     const q = a ? live.liveQuote(a, s) : null;
-    if (!q) {
-      rest.push(s);
-      continue;
-    }
-    refreshStatic(s);
-    out.set(s, { ...q, ...staticFields.get(s)?.fields });
+    if (q) out.set(s, q);
+    else rest.push(s);
   }
+  refreshStatic([...out.keys()]);
+  for (const [s, q] of out) out.set(s, { ...q, ...staticFields.get(s)?.fields });
   if (rest.length > 0) for (const q of await webQuotes(rest)) out.set(q.symbol, q);
   return symbols.map((s) => out.get(s)).filter((q): q is yahoo.Quote => Boolean(q));
 }

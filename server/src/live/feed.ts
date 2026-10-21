@@ -28,6 +28,10 @@ import { regularCloseAt, nyInstant, sessionAt, type Session } from "./session.js
 // ("boats"); opt out with LIVE_OVERNIGHT=0.
 
 const FOCUS_TTL_MS = 10 * 60_000;
+// How long a quote request waits for a first-click snapshot. Behind the shared
+// request limiter or Alpaca's 429 backoff it can take far longer; past this the
+// web sources answer and the snapshot lands for the next poll.
+export const SNAPSHOT_WAIT_MS = 1_500;
 const SNAPSHOT_EVERY_MS = 5 * 60_000;
 const SNAPSHOT_BATCH = 500;
 const RESUBSCRIBE_EVERY_MS = 30_000;
@@ -88,6 +92,7 @@ export type LiveEntry = {
 const entries = new Map<string, LiveEntry>();
 const focus = new Map<string, number>(); // symbol → last requested (ms)
 const unknownToAlpaca = new Map<string, number>(); // symbol → when a snapshot came back empty (ms)
+const snapshotsInFlight = new Map<string, Promise<void>>(); // symbol → its first-click snapshot request
 let minuteSet = new Set<string>(); // symbols whose minute bars are stored
 const minuteBuffer: MinuteBar[] = [];
 
@@ -421,8 +426,9 @@ export function enabled(): boolean {
  * Mark tickers as open on someone's screen: they get every trade from the
  * next subscription update (within a second), and a snapshot now if nothing
  * is known about them yet, so the first answer doesn't wait for a trade.
+ * Waits at most `waitMs` for those snapshots; overlapping calls share them.
  */
-export async function focusOn(symbols: string[]): Promise<void> {
+export async function focusOn(symbols: string[], waitMs = SNAPSHOT_WAIT_MS): Promise<void> {
   if (!started) return;
   const now = Date.now();
   let added = false;
@@ -431,22 +437,38 @@ export async function focusOn(symbols: string[]): Promise<void> {
     focus.set(s, now);
   }
   if (added) scheduleResubscribe();
-  // Ask once per FOCUS_TTL_MS about tickers Alpaca had nothing for, not on every poll.
-  const unknown = symbols.filter((s) => entries.get(s)?.price == null && now - (unknownToAlpaca.get(s) ?? 0) > FOCUS_TTL_MS);
+  // Ask once per FOCUS_TTL_MS about tickers Alpaca had nothing for, not on
+  // every poll, and not again while a request for them is out.
+  const unknown = symbols.filter(
+    (s) => !snapshotsInFlight.has(s) && entries.get(s)?.price == null && now - (unknownToAlpaca.get(s) ?? 0) > FOCUS_TTL_MS
+  );
   if (unknown.length > 0) {
-    try {
-      const [snaps, night] = await Promise.all([
-        alpaca.snapshots(unknown),
-        overnightEnabled ? alpaca.snapshots(unknown, "boats").catch(() => ({})) : Promise.resolve({}),
-      ]);
-      for (const [s, snap] of Object.entries(snaps)) applySnapshot(s, snap);
-      for (const [s, snap] of Object.entries(night)) applyOvernightSnapshot(s, snap);
-      for (const s of unknown) if (entries.get(s)?.price == null) unknownToAlpaca.set(s, now);
-    } catch (err) {
-      // Don't retry on every poll while Alpaca is failing; the web sources answer meanwhile.
-      for (const s of unknown) unknownToAlpaca.set(s, now);
-      lastError = `snapshot: ${err instanceof Error ? err.message : String(err)}`;
-    }
+    const request: Promise<void> = firstSnapshots(unknown, now).finally(() => {
+      for (const s of unknown) if (snapshotsInFlight.get(s) === request) snapshotsInFlight.delete(s);
+    });
+    for (const s of unknown) snapshotsInFlight.set(s, request);
+  }
+  const pending = [...new Set(symbols.flatMap((s) => snapshotsInFlight.get(s) ?? []))];
+  if (pending.length === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([Promise.all(pending), new Promise<void>((r) => (timer = setTimeout(r, waitMs)))]);
+  clearTimeout(timer);
+}
+
+/** Snapshots for tickers nothing is known about yet, from the tape and the overnight feed. */
+async function firstSnapshots(unknown: string[], now: number): Promise<void> {
+  try {
+    const [snaps, night] = await Promise.all([
+      alpaca.snapshots(unknown),
+      overnightEnabled ? alpaca.snapshots(unknown, "boats").catch(() => ({})) : Promise.resolve({}),
+    ]);
+    for (const [s, snap] of Object.entries(snaps)) applySnapshot(s, snap);
+    for (const [s, snap] of Object.entries(night)) applyOvernightSnapshot(s, snap);
+    for (const s of unknown) if (entries.get(s)?.price == null) unknownToAlpaca.set(s, now);
+  } catch (err) {
+    // Don't retry on every poll while Alpaca is failing; the web sources answer meanwhile.
+    for (const s of unknown) unknownToAlpaca.set(s, now);
+    lastError = `snapshot: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 
@@ -610,6 +632,7 @@ export function resetLiveFeed(): void {
   entries.clear();
   focus.clear();
   unknownToAlpaca.clear();
+  snapshotsInFlight.clear();
   minuteSet = new Set();
   minuteBuffer.length = 0;
   for (const st of [sip, boats]) {
