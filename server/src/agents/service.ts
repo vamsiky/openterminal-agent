@@ -1,6 +1,6 @@
 import { nyClock } from "../history/scheduler.js";
 import { ensureCalendar, isTradingDay } from "../providers/alpaca-calendar.js";
-import { analysisTarget, analyze, findIdea } from "./analysis.js";
+import { analysisNeedUsd, analysisTarget, analyze, findIdea } from "./analysis.js";
 import { type PendingAnalysis, runBrief } from "./brief.js";
 import { agentsEnabled, analysisCapUsd, capUsd, dailyBudgetUsd, model } from "./config.js";
 import type { AgentName, AgentsStatus, MacroReport } from "./contracts.js";
@@ -98,7 +98,7 @@ export async function drain(now = () => new Date()): Promise<void> {
       const day = nyClock(t).date;
       const item = queue.pending().find((i) => eligible(i, t));
       if (!item) return;
-      if (!canAfford("bull", analysisCapUsd(), t)) {
+      if (!canAfford("judge", analysisNeedUsd(analysisTarget(item), t), t)) {
         // Waits for the next day (or for the brief's floor to release); counted once per item and day.
         if (queue.noteBudgetSkip(item.id, day)) insertRun({ day, agent: "bull", symbol: item.symbol, model: "-", status: "skipped", error: "budget_exhausted", now: t });
         return;
