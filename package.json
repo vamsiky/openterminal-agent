@@ -1,7 +1,7 @@
 {
   "name": "openterminal",
   "private": true,
-  "workspaces": ["server", "web"],
+  "workspaces": ["server", "web", "mcp"],
   "overrides": {
     "qs": "^6.16.0"
   },
@@ -9,8 +9,8 @@
     "dev": "concurrently -n api,web -c yellow,cyan \"npm run dev -w server\" \"npm run dev -w web\"",
     "build": "npm run build -w server && npm run build -w web",
     "start": "concurrently -n api,web \"npm run start -w server\" \"npm run start -w web\"",
-    "test": "npm run test -w server && npm run test -w web",
-    "lint": "npm run lint -w server && npm run lint -w web"
+    "test": "npm run test -w server && npm run test -w web && npm test -w mcp",
+    "lint": "npm run lint -w server && npm run lint -w web && npm run lint -w mcp"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

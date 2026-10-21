@@ -326,7 +326,7 @@ function withStatic(q: Quote, f: StaticFields | null | undefined): Quote {
  * for anything on screen), everything else, or anything the feed doesn't know
  * yet, from webQuotes below.
  */
-async function getQuotes(symbols: string[]): Promise<Quote[]> {
+export async function getQuotes(symbols: string[]): Promise<Quote[]> {
   const out = new Map<string, Quote>();
   let rest = symbols;
   if (live.enabled()) {
@@ -986,21 +986,16 @@ marketRouter.get("/earnings-history/:symbol", async (req, res) => {
     const data = await cached(`earnings-history:${symbol}`, 3_600_000, async () => {
       const [surprises, candles] = await Promise.all([fmp.earnings(symbol), yearOfCloses(symbol)]);
       const sorted = [...candles].sort((a, b) => a.time - b.time);
-      // Nearest trading-day close on/after a given date, and the close of the
-      // trading day right after that — the "day after earnings" move.
-      const closeOnOrAfter = (unixSeconds: number) => {
-        for (let i = 0; i < sorted.length; i++) {
-          if (sorted[i].time >= unixSeconds - 3 * 86_400) return i;
-        }
-        return -1;
-      };
+      // The price reaction: a before-open report moves the report day (its
+      // close against the previous close), any other the next trading day
+      // (its close against the report day's).
+      const timing = timingsFor([fmp.fmpSymbol(symbol)]).get(fmp.fmpSymbol(symbol))?.timing ?? null;
       return surprises.map((s) => {
         if (s.upcoming) return { ...s, dayAfterChangePercent: null };
-        const idx = closeOnOrAfter(s.dateReported);
-        const dayAfterChangePercent =
-          idx >= 0 && idx + 1 < sorted.length
-            ? ((sorted[idx + 1].close - sorted[idx].close) / sorted[idx].close) * 100
-            : null;
+        const idx = sorted.findIndex((c) => c.time >= s.dateReported);
+        if (idx < 0 || sorted[idx].time - s.dateReported > 3 * 86_400) return { ...s, dayAfterChangePercent: null };
+        const [from, to] = timing === "bmo" ? [sorted[idx - 1], sorted[idx]] : [sorted[idx], sorted[idx + 1]];
+        const dayAfterChangePercent = from && to ? ((to.close - from.close) / from.close) * 100 : null;
         return { ...s, dayAfterChangePercent };
       });
     });

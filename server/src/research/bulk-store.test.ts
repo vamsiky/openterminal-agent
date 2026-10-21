@@ -117,10 +117,13 @@ describe("refresh", () => {
     store.upsertRows(d, [{ symbol: "NVDA", date: "2026-04-26", period: "Q1", fiscalYear: "2027", revenue: 44e9 }], "2026-10-01T00:00:00.000Z");
     await store.runDataset(ds("profile"), NOW);
     const r = await store.runDataset(d, NOW);
-    expect(r.calls).toBe(10); // two fiscal years × FY, Q1..Q4
+    expect(r.calls).toBe(15); // three fiscal years (next, current, previous) × FY, Q1..Q4
     expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("income-statement-bulk")).map((c) => new URL(c[0]).searchParams.get("period"))).toEqual([
-      "FY", "Q1", "Q2", "Q3", "Q4", "FY", "Q1", "Q2", "Q3", "Q4",
+      "FY", "Q1", "Q2", "Q3", "Q4", "FY", "Q1", "Q2", "Q3", "Q4", "FY", "Q1", "Q2", "Q3", "Q4",
     ]);
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("income-statement-bulk")).map((c) => new URL(c[0]).searchParams.get("year"))).toEqual(
+      ["2027", "2026", "2025"].flatMap((y) => Array(5).fill(y))
+    );
     // The same Q2 row comes back for every call (the mock ignores params); it is stored once.
     const rows = db.prepare("SELECT symbol, date, period, fiscal_year, revenue FROM bulk_income_statements ORDER BY date").all();
     expect(rows).toEqual([

@@ -277,6 +277,23 @@ describe("features that need FMP_API_KEY", () => {
     ]);
   });
 
+  it("measures a before-open report from the previous close, and others from the report day", async () => {
+    vi.mocked(fmp.isConfigured).mockReturnValue(true);
+    const d = (n: number) => Date.UTC(2026, 7, n) / 1000;
+    const bar = (n: number, close: number) => ({ time: d(n), open: close, high: close, low: close, close, volume: 0 });
+    vi.mocked(alpaca.isConfigured).mockReturnValue(true);
+    vi.mocked((await import("../live/history.js")).alpacaHistory).mockResolvedValue([bar(25, 100), bar(26, 120), bar(27, 90)]);
+    const row = { fiscalQtrEnd: "", surprisePercent: null, revenue: null, revenueEstimate: null, eps: 1, consensusForecast: 1 };
+    vi.mocked(fmp.earnings).mockResolvedValue([{ ...row, dateReported: d(26) }]);
+    const { recordTiming } = await import("../estimates/timing.js");
+    recordTiming("BMOCO", { timing: "bmo", matched: 4, total: 4 }, "2026-08-27");
+    recordTiming("AMCCO", { timing: "amc", matched: 4, total: 4 }, "2026-08-27");
+    const bmo = await call("/earnings-history/:symbol", { params: { symbol: "BMOCO" } });
+    expect(bmo.body[0].dayAfterChangePercent).toBeCloseTo(20);
+    const amc = await call("/earnings-history/:symbol", { params: { symbol: "AMCCO" } });
+    expect(amc.body[0].dayAfterChangePercent).toBeCloseTo(-25);
+  });
+
   it("asks FMP per symbol only for symbols the captured calendar lacks", async () => {
     vi.mocked(fmp.isConfigured).mockReturnValue(true);
     vi.mocked(fmp.earningsInfo).mockResolvedValue([{ symbol: "NVDA", nextEarningsDate: 1, lastEarningsDate: 0, epsForecast: 1.2 }]);

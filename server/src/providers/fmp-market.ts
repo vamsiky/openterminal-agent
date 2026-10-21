@@ -5,6 +5,16 @@
 // on 2026-10-21. Responses keep FMP's field names.
 
 import { isForeignSymbol } from "../history/universe.js";
+
+/**
+ * FMP writes US share classes with a dash (BRK-B), so in FMP's calendars any
+ * dotted symbol is a foreign listing, including the single-letter suffixes
+ * (BBY.L, AFM.V) that isForeignSymbol lets through for US classes like MKC.V.
+ */
+function usListed(r: { symbol?: unknown }): boolean {
+  const symbol = String(r.symbol ?? "");
+  return symbol !== "" && !symbol.includes(".") && !isForeignSymbol(symbol);
+}
 import { cached, fmpSymbol, get } from "./fmp-core.js";
 
 const CALENDAR_TTL = 3_600_000;
@@ -46,7 +56,7 @@ export function lockupExpiry(ipoDay: string): { date: string; estimated: true; b
 }
 
 async function ipoCalendarRaw(from: string, to: string): Promise<Row[]> {
-  return cached(`mkt:ipos:${from}:${to}`, CALENDAR_TTL, async () => rows(await get("ipos-calendar", { from, to })).filter((r) => !isForeignSymbol(String(r.symbol ?? ""))));
+  return cached(`mkt:ipos:${from}:${to}`, CALENDAR_TTL, async () => rows(await get("ipos-calendar", { from, to })).filter(usListed));
 }
 
 async function prospectusRaw(from: string, to: string): Promise<Row[]> {
@@ -126,7 +136,7 @@ export async function mergers(limit: number): Promise<Row[]> {
 }
 
 async function calendar(path: string, from: string, to: string): Promise<Row[]> {
-  return cached(`mkt:${path}:${from}:${to}`, CALENDAR_TTL, async () => rows(await get(path, { from, to })).filter((r) => !isForeignSymbol(String(r.symbol ?? ""))));
+  return cached(`mkt:${path}:${from}:${to}`, CALENDAR_TTL, async () => rows(await get(path, { from, to })).filter(usListed));
 }
 
 /** US-listed stock splits in the range, ascending by date. */

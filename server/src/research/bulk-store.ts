@@ -68,7 +68,8 @@ function nyYear(now: Date): number {
 function statementCalls(path: string) {
   return (now: Date) => {
     const year = nyYear(now);
-    return [year, year - 1].flatMap((y) => STATEMENT_PERIODS.map((period) => ({ path, params: { year: y, period } })));
+    // year + 1: fiscal years that run ahead of the calendar year (NVDA's FY2027 began in 2026).
+    return [year + 1, year, year - 1].flatMap((y) => STATEMENT_PERIODS.map((period) => ({ path, params: { year: y, period } })));
   };
 }
 
@@ -259,7 +260,7 @@ export const DATASETS: Dataset[] = [
     snapshot: false,
     calls: (now) => {
       const year = nyYear(now);
-      return [year, year - 1].map((y) => ({ path: "income-statement-growth-bulk", params: { year: y, period: "FY" } }));
+      return [year + 1, year, year - 1].map((y) => ({ path: "income-statement-growth-bulk", params: { year: y, period: "FY" } }));
     },
     cols: [...statementCols, { name: "growth_revenue", field: "growthRevenue" }, { name: "growth_eps", field: "growthEPS" }],
   },

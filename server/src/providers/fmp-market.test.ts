@@ -67,10 +67,16 @@ describe("fmp-market", () => {
   it("drops foreign symbols from split and dividend calendars and sorts ascending", async () => {
     mockFmp({
       "splits-calendar": [{ symbol: "B", date: "2026-11-02" }, { symbol: "0646.HK", date: "2026-11-01" }, { symbol: "A", date: "2026-11-01" }],
-      "dividends-calendar": [{ symbol: "KO", date: "2026-11-05" }, { symbol: "0A26.L", date: "2026-11-04" }],
+      "dividends-calendar": [
+        { symbol: "KO", date: "2026-11-05" },
+        { symbol: "0A26.L", date: "2026-11-04" },
+        { symbol: "BBY.L", date: "2026-11-04" }, // single-letter suffix: foreign in FMP data (US classes use BRK-B)
+        { symbol: "AFM.V", date: "2026-11-04" },
+        { symbol: "BRK-B", date: "2026-11-06" },
+      ],
     });
     expect((await market.splits("2026-11-01", "2026-11-30")).map((r) => r.symbol)).toEqual(["A", "B"]);
-    expect((await market.dividends("2026-11-01", "2026-11-30")).map((r) => r.symbol)).toEqual(["KO"]);
+    expect((await market.dividends("2026-11-01", "2026-11-30")).map((r) => r.symbol)).toEqual(["KO", "BRK-B"]);
   });
 
   it("joins sector performance with P/E, best first, and walks back past empty days", async () => {

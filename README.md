@@ -228,6 +228,7 @@ Portfolio data persists in the `terminal-data` volume (SQLite, WAL mode). Ports 
 │       ├── routes/          # market (+ market-rows, econ-calendar), portfolio, ai, watchlists, bars
 │       ├── cache.ts         # TTL cache with stale-while-revalidate fallback
 │       └── db.ts            # SQLite (better-sqlite3, WAL)
+├── mcp/                     # Read-only MCP server over the research API (stdio)
 └── web/                      # Next.js 15 + React 19 + Tailwind 4
     ├── components/           # TopBar, Sidebar, Workspace, CommandPalette
     ├── components/widgets/   # Chart, Quote, Watchlist, News, Screener, Heatmap, Crypto, Options, Macro, Portfolio, Calendar, AI
@@ -236,6 +237,44 @@ Portfolio data persists in the `terminal-data` volume (SQLite, WAL mode). Ports 
 ```
 
 Run tests with `npm test` (Vitest, no network calls). CI runs on every push — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+<br/>
+
+## Research API & MCP
+
+With `FMP_API_KEY` set (Ultimate plan), the server exposes FMP data for analysis under `/api/research/...` (same `x-api-key` as the rest of `/api`). Per-symbol routes are `/api/research/:symbol/<dataset>` and market-wide ones `/api/research/market/<dataset>`. Every response is `{ symbol?, dataset, source: "fmp", asOf, data }`. US-listed symbols only; errors are 400 (bad input), 503 `needs FMP_API_KEY`, 502 (FMP failed).
+
+The `mcp/` workspace wraps this in a read-only, local **MCP server** so AI agents (Claude Code, Claude Desktop, ...) can use it as tools. It talks HTTP only to the running app and never imports server code.
+
+**Run it**
+- Start the app (`npm run dev`), then `npx tsx mcp/src/index.ts` (or `npm start -w mcp`). It speaks MCP over stdio, so you normally don't run it by hand.
+- Claude Code picks it up automatically from [`.mcp.json`](.mcp.json) (server name `openterminal`) when you open this repo.
+- Claude Desktop or any other stdio client: add this to its MCP config, with an absolute path:
+  ```json
+  { "mcpServers": { "openterminal": { "command": "npx", "args": ["tsx", "/path/to/openterminal-agent/mcp/src/index.ts"] } } }
+  ```
+
+**Settings** (environment of the MCP process)
+- `OPENTERMINAL_API_URL`: the app's API, default `http://127.0.0.1:4000`.
+- `OPENTERMINAL_API_KEY`: the key; default is read from `data/.api-key` (or `$DATA_DIR/.api-key`).
+- `OPENTERMINAL_MAX_CHARS`: longest result in characters, default 40000. Longer results are cut with a note on how to narrow the request.
+
+**Tools** (all read-only)
+| Tool | What it returns |
+| --- | --- |
+| `research_summary(symbol)` | Profile, quote, TTM metrics, DCF, analyst consensus, estimates, next earnings, in one call |
+| `fundamentals(symbol, section, period?, type?, limit?)` | `statements`, `metrics`, `growth`, `scores`, `segments`, `estimates`, `analysts`, `valuation`, `peers` |
+| `ownership(symbol, section, year?, quarter?, limit?)` | `institutional` (13F), `insiders`, `congress`, `float` |
+| `transcripts(symbol, year?, quarter?)` | List of earnings call transcripts, or one transcript's text |
+| `search_transcripts(symbol, query)` | Snippets from stored transcripts containing all words |
+| `content(symbol, section, type?, from?, to?, limit?)` | `press-releases`, `news`, `filings` |
+| `quote(symbols[])`, `price_history(symbol, range?)` | Live quotes; OHLCV candles |
+| `earnings_calendar(symbols[])`, `estimate_revisions(symbol)` | Next report date/timing; consensus drift over 7-90 days |
+| `economic_calendar()` | Upcoming US macro releases |
+| `market(section, params?)` | `ipos`, `lockups`, `mergers`, `splits`, `dividends`, `sectors`, `industries`, `index`, `index-changes`, `etf-holdings`, `etf-exposure`, `insiders-latest`, `congress-latest`, `institutional-latest`, `press-releases-latest`, `filings-8k-latest`, `datasets` |
+| `screen(filters)` | Screen ~4,000 US stocks by sector, market cap, P/E, growth, yield, rating, analyst upside |
+
+Test with `npm test -w mcp` (mocked `fetch`).
 
 <br/>
 

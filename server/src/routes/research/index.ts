@@ -4,6 +4,7 @@ import { router as content, marketRouter as contentMarket } from "./content.js";
 import { router as fundamentals } from "./fundamentals.js";
 import { router as market, symbolRouter as marketSymbol } from "./market.js";
 import { router as ownership, marketRouter as ownershipMarket } from "./ownership.js";
+import { router as summary } from "./summary.js";
 
 export const researchRouter = Router();
 
@@ -17,3 +18,5 @@ researchRouter.use(fundamentals);
 researchRouter.use(ownership);
 researchRouter.use(content);
 researchRouter.use(marketSymbol);
+// GET /:symbol (the one-call snapshot) last, after every /:symbol/... route.
+researchRouter.use(summary);

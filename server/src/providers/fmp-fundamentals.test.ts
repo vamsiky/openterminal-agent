@@ -26,6 +26,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("statements", () => {
+  it("trims grades and monthly grades to limit after the date filter", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ symbol: "A", date: `2026-09-${String(30 - i).padStart(2, "0")}` }));
+    stub({ grades: many, "grades-historical": many });
+    const { data } = await analysts("A", 5, { from: "2026-09-10" });
+    expect(data.grades.map((g) => g.date)).toEqual(["2026-09-30", "2026-09-29", "2026-09-28", "2026-09-27", "2026-09-26"]);
+    expect(data.gradesHistorical).toHaveLength(5);
+  });
+
   it("asks for the period endpoint and filters by date", async () => {
     const mock = stub({ "income-statement": [{ date: "2026-06-27", filingDate: "2026-07-31", revenue: 2 }, { date: "2026-03-28", revenue: 1 }] });
     const r = await statements("BRK.B", "income", "quarter", 8, { from: "2026-05-01" });

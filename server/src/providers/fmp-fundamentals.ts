@@ -176,10 +176,10 @@ export async function analysts(symbol: string, limit: number, range: Range): Pro
     data: {
       priceTargetSummary: summary(sum.rows[0]),
       priceTargetConsensus: cons.rows[0] ?? null,
-      priceTargets: inRange(targets.rows, range, "publishedDate"),
-      grades: inRange(grades.rows, range),
+      priceTargets: inRange(targets.rows, range, "publishedDate").slice(0, limit),
+      grades: inRange(grades.rows, range).slice(0, limit), // FMP ignores limit and sends the whole history
       gradesConsensus: gcons.rows[0] ?? null,
-      gradesHistorical: inRange(ghist.rows, range),
+      gradesHistorical: inRange(ghist.rows, range).slice(0, limit),
       ratingsSnapshot: snap.rows[0] ?? null,
     },
     asOf: oldest(...fetched),
