@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CALENDAR_CHUNK, fetchCalendar, fmtDay, groupEarnings, inDays, type EarningsEntry } from "./earnings";
+import { CALENDAR_CHUNK, fetchCalendar, fmtDay, groupEarnings, inDays, timingLabel, timingTitle, type EarningsEntry } from "./earnings";
 
 const at = (day: string) => Date.parse(day + "T00:00:00Z") / 1000;
 const entry = (symbol: string, next: string | null, extra: Partial<EarningsEntry> = {}): EarningsEntry => ({
@@ -53,6 +53,24 @@ describe("groupEarnings", () => {
     expect(g.reported.map((r) => r.symbol)).toEqual(["Y", "W"]);
     expect(g.upcoming.map((u) => u.label)).toEqual(["Later"]);
     expect(g.noDate.map((e) => e.symbol)).toEqual(["OLD", "TOOOLD", "SPY"]); // no upcoming date, whatever they reported
+  });
+});
+
+describe("timing", () => {
+  it("orders a day's reports BMO, DMH, AMC, then unknown, then by symbol", () => {
+    const g = groupEarnings(
+      [entry("A", "2026-10-22", { timing: "amc" }), entry("B", "2026-10-22"), entry("C", "2026-10-22", { timing: "dmh" }), entry("D", "2026-10-22", { timing: "bmo" }), entry("E", "2026-10-22", { timing: "bmo" }), entry("F", "2026-10-21")],
+      now
+    );
+    expect(g.upcoming[0].rows.map((r) => r.symbol)).toEqual(["F"]);
+    expect(g.upcoming[1].rows.map((r) => r.symbol)).toEqual(["D", "E", "C", "A", "B"]);
+  });
+
+  it("labels the column and explains it in the tooltip", () => {
+    expect((["bmo", "amc", "dmh", null, undefined] as const).map((t) => timingLabel(t))).toEqual(["BMO", "AMC", "DMH", "—", "—"]);
+    expect(timingTitle({ timing: "amc", timingBasis: { matched: 4, total: 4 } })).toBe("Usually after close: 4 of 4 recent earnings releases (FMP press releases)");
+    expect(timingTitle({ timing: "bmo", timingBasis: { matched: 3, total: 4 } })).toBe("Usually before the open: 3 of 4 recent earnings releases (FMP press releases)");
+    expect(timingTitle({ timing: null })).toBe("Time of day unknown");
   });
 });
 

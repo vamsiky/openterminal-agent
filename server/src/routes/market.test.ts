@@ -318,9 +318,21 @@ describe("features that need FMP_API_KEY", () => {
         lastEpsEstimate: 1,
         lastSurprisePercent: 50,
         lastRevenue: 95,
+        timing: null,
+        timingBasis: null,
       });
       // The capture already ran today, so a symbol with no dates (an ETF) is not chased.
       expect(body[142]).toMatchObject({ symbol: "SPY", nextEarningsDate: null });
+      expect(fmp.earningsInfo).not.toHaveBeenCalled();
+    });
+
+    it("adds the stored timing and its basis from the table, without calling FMP", async () => {
+      vi.mocked(fmp.isConfigured).mockReturnValue(true);
+      const { recordTiming } = await import("../estimates/timing.js");
+      recordTiming("ZC3", { timing: "amc", matched: 4, total: 4 }, today);
+      recordTiming("ZC4", { timing: null, matched: 1, total: 4 }, today);
+      const { body } = await call("/calendar", { query: { symbols: "ZC3,ZC4,ZC5" } });
+      expect(body.map((r: { timing: unknown; timingBasis: unknown }) => [r.timing, r.timingBasis])).toEqual([["amc", { matched: 4, total: 4 }], [null, null], [null, null]]);
       expect(fmp.earningsInfo).not.toHaveBeenCalled();
     });
 

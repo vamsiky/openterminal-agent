@@ -1,5 +1,6 @@
 import * as fmp from "../providers/fmp.js";
 import { tradingDay } from "../history/time.js";
+import { refreshTimingsInBackground } from "./timing.js";
 import { addDays, hasRun, recordCalendar, recordRun, recordSnapshots, type SnapshotInput } from "./store.js";
 
 // Once per New York calendar day, snapshot the consensus estimates of every
@@ -87,7 +88,10 @@ export function startEstimateCapture(): void {
     try {
       const today = tradingDay(new Date().toISOString());
       const result = await captureDay(today);
-      if (result) console.log(`[estimates] ${today}: ${result.rows} calendar rows, ${result.stored} stored${result.failed ? `, ${result.failed} windows failed` : ""}`);
+      if (result) {
+        console.log(`[estimates] ${today}: ${result.rows} calendar rows, ${result.stored} stored${result.failed ? `, ${result.failed} windows failed` : ""}`);
+        void refreshTimingsInBackground(today);
+      }
     } catch (err) {
       console.error("[estimates] capture failed:", err);
     } finally {

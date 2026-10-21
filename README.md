@@ -107,6 +107,7 @@ Every source below allows automated use under its terms. Results are cached with
 | Economic calendar (dates, times) | BLS, BEA, Federal Reserve, EIA; FRED release dates with `FRED_API_KEY` | — |
 | Economic calendar (forecast, previous, actual) | FMP (if keyed) | Empty without FMP |
 | Earnings calendar and history | FMP (requires `FMP_API_KEY`) | The widget says the key is missing |
+| Earnings time of day (BMO / AMC / DMH) | FMP press releases: the time of day of each symbol's last four earnings releases (needs a plan with the press-release endpoint, e.g. Ultimate) | Shown as “—” |
 | Short volume, insider trades | FINRA, SEC EDGAR | — |
 
 **Removed sources.** Yahoo Finance, TradingView (scanner and search), Nasdaq's public API (`api.nasdaq.com`), Google News and Yahoo RSS, Forex Factory and Binance are no longer used: their terms or robots rules forbid automated access (and Binance blocks US users). Stooq's terms are unclear, so it is only the last price fallback.
@@ -118,7 +119,8 @@ Every source below allows automated use under its terms. Results are cached with
 | Variable | Unlocks |
 |---|---|
 | `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY` | US stock and ETF prices and charts, crypto, options, news, the heatmap, screener and recap. Without them only Stooq prices, FRED/ECB macro, CoinGecko and the official calendars work. |
-| `FMP_API_KEY` (optional) | [Financial Modeling Prep](https://site.financialmodelingprep.com/developer/docs): quote fundamentals, OTC names and indices, FMP sectors and market caps, earnings calendar and history, and forecast/actual values on the economic calendar. FMP's Starter plan covers US listings, including quarterly financial statements and trailing‑twelve‑month ratios; analyst estimates are annual only on Starter, batch quotes need Premium, and non‑US exchanges need a higher plan. US-listed symbols only. |
+| `FMP_API_KEY` (optional) | [Financial Modeling Prep](https://site.financialmodelingprep.com/developer/docs): quote fundamentals, OTC names and indices, FMP sectors and market caps, earnings calendar and history, and forecast/actual values on the economic calendar. FMP's Starter plan covers US listings, including quarterly financial statements and trailing‑twelve‑month ratios; analyst estimates are annual only on Starter, batch quotes need Premium, and non‑US exchanges need a higher plan. US-listed symbols only. The code paths also run on Ultimate: `FMP_MAX_REQ_PER_MIN` sets the call rate (300 Starter, 750 Premium, 3000 Ultimate; default 300), and the earnings calendar's BMO/AMC/DMH column comes from FMP press releases (FMP's earnings rows carry no time of day). |
+| `FMP_MAX_REQ_PER_MIN` (optional) | Calls per minute the app may make to FMP: 300 Starter (default), 750 Premium, 3000 Ultimate. |
 | `FRED_API_KEY` (optional) | Adds FRED's release dates to the economic calendar. |
 | `SEC_EDGAR_CONTACT` | Your email, sent in the User‑Agent that SEC EDGAR and BLS require. Without it insider trades, SEC shares/sectors and the BLS schedule are skipped. |
 

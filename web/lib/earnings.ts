@@ -1,8 +1,12 @@
 import { apiGet } from "./api";
 import { symbolsParam } from "./symbol";
 
+export type Timing = "bmo" | "amc" | "dmh";
+
 export type EarningsEntry = {
   symbol: string;
+  timing?: Timing | null;
+  timingBasis?: { matched: number; total: number } | null;
   nextEarningsDate: number | null; // unix seconds, UTC midnight
   lastEarningsDate: number | null;
   epsForecast: number | null;
@@ -34,6 +38,19 @@ export type EarningsGroups = {
 };
 
 const DAY = 86_400;
+const TIMING_RANK: Record<Timing, number> = { bmo: 0, dmh: 1, amc: 2 };
+const timingRank = (t: Timing | null | undefined) => (t ? TIMING_RANK[t] : 3);
+
+export const timingLabel = (t: Timing | null | undefined) => (t ? t.toUpperCase() : "—");
+
+const WHEN: Record<Timing, string> = { bmo: "before the open", amc: "after close", dmh: "during market hours" };
+
+/** "Usually after close: 4 of 4 recent earnings releases (FMP press releases)"; empty when unknown. */
+export function timingTitle(e: Pick<EarningsEntry, "timing" | "timingBasis">): string {
+  if (!e.timing) return "Time of day unknown";
+  const basis = e.timingBasis ? `: ${e.timingBasis.matched} of ${e.timingBasis.total} recent earnings releases (FMP press releases)` : "";
+  return `Usually ${WHEN[e.timing]}${basis}`;
+}
 const nyDay = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
 
 /** Calendar-day bucket of an upcoming report, `days` after today (New York), weeks running Monday to Sunday. */
@@ -72,11 +89,11 @@ export function groupEarnings(entries: EarningsEntry[], now: Date): EarningsGrou
     }
     if (!placed && e.nextEarningsDate === null) noDate.push(e);
   }
-  reported.sort((a, b) => b.days - a.days || a.symbol.localeCompare(b.symbol));
+  reported.sort((a, b) => b.days - a.days || timingRank(a.timing) - timingRank(b.timing) || a.symbol.localeCompare(b.symbol));
   return {
     upcoming: GROUP_LABELS.filter((l) => upcoming.has(l)).map((label) => ({
       label,
-      rows: upcoming.get(label)!.sort((a, b) => a.days - b.days || a.symbol.localeCompare(b.symbol)),
+      rows: upcoming.get(label)!.sort((a, b) => a.days - b.days || timingRank(a.timing) - timingRank(b.timing) || a.symbol.localeCompare(b.symbol)),
     })),
     reported,
     noDate,

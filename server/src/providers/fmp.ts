@@ -132,13 +132,20 @@ function requireKey(): string {
   return key;
 }
 
-// Spacing limiter: FMP's plans allow 300 calls/min and up.
-const GAP_MS = 60_000 / 300;
+/** Requests per minute from FMP_MAX_REQ_PER_MIN; blank or invalid means the default. */
+export function maxRequestsPerMinute(raw = process.env.FMP_MAX_REQ_PER_MIN): number {
+  const n = Number(raw?.trim() || NaN);
+  return Number.isFinite(n) && n >= 1 ? n : 300;
+}
+
+// Spacing limiter: FMP's plans allow 300 calls/min (Starter), 750 (Premium)
+// and 3,000 (Ultimate); FMP_MAX_REQ_PER_MIN raises it.
 let nextSlot = 0;
 async function throttle(): Promise<void> {
+  const gap = 60_000 / maxRequestsPerMinute();
   const now = Date.now();
   const wait = Math.max(0, nextSlot - now);
-  nextSlot = Math.max(now, nextSlot) + GAP_MS;
+  nextSlot = Math.max(now, nextSlot) + gap;
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
 
@@ -419,6 +426,32 @@ export async function earningsCalendar(from: string, to: string): Promise<Earnin
   return cached(`earn-cal:${from}:${to}`, CALENDAR_TTL, async () => {
     const rows = await get("earnings-calendar", { from, to });
     return (Array.isArray(rows) ? rows : []).map(earningsRow).filter((r): r is EarningsCalendarRow => r !== null);
+  });
+}
+
+export type PressRelease = { publishedAt: string; title: string; publisher: string | null; url: string | null };
+
+/**
+ * Company press releases, newest first. GET /news/press-releases. `publishedAt`
+ * is New York wall time, "YYYY-MM-DD HH:MM:SS" ("00:00:00" when only the date
+ * is known). Without a range it reaches back only about three months, so older
+ * releases need `from`/`to` (YYYY-MM-DD). A plan without the endpoint (402/403) yields [].
+ */
+export async function pressReleases(symbol: string, limit = 100, range?: { from: string; to: string }): Promise<PressRelease[]> {
+  requireKey();
+  return cached(`press:${symbol}:${limit}:${range?.from ?? ""}:${range?.to ?? ""}`, PROFILE_TTL, async () => {
+    const rows = await get("news/press-releases", { symbols: symbol, limit, from: range?.from, to: range?.to }).catch((err) => {
+      if (err instanceof FmpError && (err.status === 402 || err.status === 403)) return [];
+      throw err;
+    });
+    return (Array.isArray(rows) ? rows : [])
+      .filter((r: any) => typeof r?.publishedDate === "string" && typeof r?.title === "string")
+      .map((r: any) => ({
+        publishedAt: r.publishedDate as string,
+        title: r.title as string,
+        publisher: typeof r.publisher === "string" ? r.publisher : null,
+        url: typeof r.url === "string" ? r.url : null,
+      }));
   });
 }
 

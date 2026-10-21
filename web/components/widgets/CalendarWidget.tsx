@@ -5,7 +5,7 @@ import { Fragment, useMemo, useState } from "react";
 import { apiGet, fmt, fmtBig, pctClass } from "../../lib/api";
 import ErrorNote from "../ErrorNote";
 import EstimateRevisions from "../EstimateRevisions";
-import { fetchCalendar, fmtDay, groupEarnings, inDays } from "../../lib/earnings";
+import { fetchCalendar, fmtDay, groupEarnings, inDays, timingLabel, timingTitle, type EarningsEntry } from "../../lib/earnings";
 import { useTerminal } from "../../store/terminal";
 
 type EconEvent = {
@@ -227,7 +227,7 @@ function EarningsTab() {
 
   const header = (label: string, dim = false) => (
     <tr key={`h-${label}`}>
-      <td colSpan={5} className={`!text-left uppercase text-[10px] tracking-wide pt-2 ${dim ? "dim" : "amber"}`}>
+      <td colSpan={6} className={`!text-left uppercase text-[10px] tracking-wide pt-2 ${dim ? "dim" : "amber"}`}>
         {label}
       </td>
     </tr>
@@ -235,12 +235,17 @@ function EarningsTab() {
   const detail = (symbol: string) =>
     expanded === symbol && (
       <tr key={`d-${symbol}`}>
-        <td colSpan={5} className="!text-left p-0">
+        <td colSpan={6} className="!text-left p-0">
           <EarningsHistoryRows symbol={symbol} />
         </td>
       </tr>
     );
   const toggle = (symbol: string) => () => setExpanded(expanded === symbol ? null : symbol);
+  const timeCell = (e: EarningsEntry) => (
+    <td className={e.timing ? "" : "dim"} title={timingTitle(e)}>
+      {timingLabel(e.timing)}
+    </td>
+  );
   const symbolCell = (symbol: string) => <td className="!text-left text-[var(--text)] font-bold underline decoration-1">{symbol}</td>;
 
   return (
@@ -249,6 +254,7 @@ function EarningsTab() {
         <tr>
           <th>Date</th>
           <th></th>
+          <th title="Usually before the open, after the close or during market hours">Time</th>
           <th className="!text-left">Sym</th>
           <th>EPS est</th>
           <th>Rev est</th>
@@ -263,6 +269,7 @@ function EarningsTab() {
                 <tr onClick={toggle(e.symbol)} className="cursor-pointer" title="Click for earnings history">
                   <td className="!text-left whitespace-nowrap">{fmtDay(e.nextEarningsDate!)}</td>
                   <td className="dim whitespace-nowrap">{inDays(e.days)}</td>
+                  {timeCell(e)}
                   {symbolCell(e.symbol)}
                   <td title="EPS estimate">{money(e.epsForecast)}</td>
                   <td className="dim" title="Revenue estimate">{e.revenueForecast != null ? `$${fmtBig(e.revenueForecast)}` : "—"}</td>
@@ -280,6 +287,7 @@ function EarningsTab() {
               <tr onClick={toggle(e.symbol)} className="cursor-pointer" title="Click for earnings history">
                 <td className="!text-left whitespace-nowrap dim">{fmtDay(e.lastEarningsDate!)}</td>
                 <td className="dim whitespace-nowrap">{-e.days}d ago</td>
+                {timeCell(e)}
                 {symbolCell(e.symbol)}
                 <td className={cls} title="EPS actual vs estimate">
                   {money(e.lastEps)} <span className="dim">vs {money(e.lastEpsEstimate)}</span>
@@ -296,6 +304,7 @@ function EarningsTab() {
             <tr onClick={toggle(e.symbol)} className="cursor-pointer dim" title="Click for earnings history">
               <td className="!text-left">—</td>
               <td />
+              <td />
               {symbolCell(e.symbol)}
               <td />
               <td />
@@ -305,7 +314,7 @@ function EarningsTab() {
         ))}
         {data.length === 0 && (
           <tr>
-            <td colSpan={5} className="dim p-3">
+            <td colSpan={6} className="dim p-3">
               No upcoming earnings data for your watchlist.
             </td>
           </tr>

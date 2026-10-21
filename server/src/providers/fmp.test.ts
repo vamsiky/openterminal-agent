@@ -9,6 +9,8 @@ import {
   economicCalendar,
   historical,
   isConfigured,
+  maxRequestsPerMinute,
+  pressReleases,
   profiles,
   quotes,
   ratiosTtm,
@@ -316,5 +318,51 @@ describe("fmp provider", () => {
   it("treats a 200 Error Message body as an error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ "Error Message": "Special Endpoint" })));
     await expect(earningsCalendar("2026-01-01", "2026-02-01")).rejects.toBeInstanceOf(FmpError);
+  });
+
+  it("reads the request rate from FMP_MAX_REQ_PER_MIN, defaulting to 300 when blank or invalid", () => {
+    expect(maxRequestsPerMinute(undefined)).toBe(300);
+    expect(maxRequestsPerMinute("")).toBe(300);
+    expect(maxRequestsPerMinute("  ")).toBe(300);
+    expect(maxRequestsPerMinute("abc")).toBe(300);
+    expect(maxRequestsPerMinute("0")).toBe(300);
+    expect(maxRequestsPerMinute("3000")).toBe(3000);
+    process.env.FMP_MAX_REQ_PER_MIN = "750";
+    expect(maxRequestsPerMinute()).toBe(750);
+    delete process.env.FMP_MAX_REQ_PER_MIN;
+  });
+
+  it("maps press releases, caches them, and answers [] when the plan lacks the endpoint", async () => {
+    const fetchMock = vi.fn(async () =>
+      ok([
+        { symbol: "NVDA", publishedDate: "2026-08-26 16:20:00", publisher: "GlobeNewswire", title: "NVIDIA Announces Financial Results", url: "https://x/a", text: "..." },
+        { symbol: "NVDA", publishedDate: "2026-08-20 00:00:00", title: "Other" },
+        { symbol: "NVDA", title: "no date" },
+      ])
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const rows = await pressReleases("NVDA");
+    expect(rows).toEqual([
+      { publishedAt: "2026-08-26 16:20:00", title: "NVIDIA Announces Financial Results", publisher: "GlobeNewswire", url: "https://x/a" },
+      { publishedAt: "2026-08-20 00:00:00", title: "Other", publisher: null, url: null },
+    ]);
+    const url = new URL((fetchMock.mock.calls[0] as unknown as [string])[0]);
+    expect(url.pathname).toBe("/stable/news/press-releases");
+    expect(url.searchParams.get("symbols")).toBe("NVDA");
+    expect(url.searchParams.get("limit")).toBe("100");
+    await pressReleases("NVDA");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await pressReleases("NVDA", 100, { from: "2025-08-27", to: "2025-08-27" });
+    const ranged = new URL((fetchMock.mock.calls[1] as unknown as [string])[0]);
+    expect([ranged.searchParams.get("from"), ranged.searchParams.get("to")]).toEqual(["2025-08-27", "2025-08-27"]);
+
+    for (const status of [402, 403]) {
+      resetState();
+      vi.stubGlobal("fetch", vi.fn(async () => fail(status)));
+      expect(await pressReleases("AAPL")).toEqual([]);
+    }
+    resetState();
+    vi.stubGlobal("fetch", vi.fn(async () => fail(500)));
+    await expect(pressReleases("AAPL")).rejects.toBeInstanceOf(FmpError);
   });
 });

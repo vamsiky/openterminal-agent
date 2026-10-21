@@ -22,6 +22,7 @@ import { alpacaSymbol, isForeignSymbol } from "../history/universe.js";
 import { AlpacaNotConfigured, companyName, snapshotPrice, usMarketRows } from "./market-rows.js";
 import { withConsensus } from "./econ-calendar.js";
 import * as estimates from "../estimates/store.js";
+import { timingsFor } from "../estimates/timing.js";
 import { tradingDay } from "../history/time.js";
 
 // Yahoo Finance, TradingView, Nasdaq's public API, Google News, Forex Factory
@@ -928,7 +929,13 @@ marketRouter.get("/calendar", async (req, res) => {
         if (i) Object.assign(r, { nextEarningsDate: i.nextEarningsDate, lastEarningsDate: i.lastEarningsDate, epsForecast: i.epsForecast });
       }
     }
-    res.json(rows.map((r) => ({ ...r, found: undefined })));
+    const timings = timingsFor(symbols);
+    res.json(
+      rows.map((r) => {
+        const t = timings.get(r.symbol);
+        return { ...r, found: undefined, timing: t?.timing ?? null, timingBasis: t?.timing ? { matched: t.matched, total: t.total } : null };
+      })
+    );
   } catch (err) {
     fail(req, res, err);
   }

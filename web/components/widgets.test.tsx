@@ -99,6 +99,30 @@ describe("CalendarWidget", () => {
     fireEvent.click(screen.getByText("EARNINGS"));
     await screen.findByText(/Needs an FMP API key/);
   });
+  it("shows the Time column with a tooltip, ordered within a day, and keeps the history expansion", async () => {
+    useTerminal.setState({ watchlist: ["AMCCO", "BMOCO", "UNKCO"] });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-21T16:00:00Z"));
+    const at = Date.parse("2026-10-22T00:00:00Z") / 1000;
+    const row = (symbol: string, timing: string | null, timingBasis: unknown) => ({ symbol, nextEarningsDate: at, lastEarningsDate: null, epsForecast: 1, timing, timingBasis });
+    stubApi([
+      ["/api/econ-calendar", () => reply([])],
+      ["/api/earnings-history", () => reply([])],
+      ["/api/calendar", () => reply([row("UNKCO", null, null), row("AMCCO", "amc", { matched: 4, total: 4 }), row("BMOCO", "bmo", { matched: 3, total: 4 })])],
+    ]);
+    const { container } = wrap(<CalendarWidget />);
+    fireEvent.click(screen.getByText("EARNINGS"));
+    try {
+      await screen.findByText("AMC");
+    } finally {
+      vi.useRealTimers();
+    }
+    expect([...container.querySelectorAll("tbody tr")].slice(1).map((tr) => tr.children[3].textContent)).toEqual(["BMOCO", "AMCCO", "UNKCO"]);
+    expect(screen.getByText("AMC").getAttribute("title")).toBe("Usually after close: 4 of 4 recent earnings releases (FMP press releases)");
+    expect(container.querySelector("td[title='Time of day unknown']")?.textContent).toBe("—");
+    fireEvent.click(screen.getByText("AMCCO"));
+    await screen.findByText("No earnings history for AMCCO.");
+  });
   it("renders official events with missing numbers and odd impact as dashes", async () => {
     stubApi([
       [
