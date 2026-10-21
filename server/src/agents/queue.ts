@@ -23,8 +23,9 @@ export type EnqueueInput = { symbol: string; strategy: ThesisStrategy; contract?
 /**
  * Adds an item. Automatic items are deduped per day: by (symbol, strategy) for options, since the idea's contract
  * re-centres as the price moves (the thesis still records the contract analysed), and by (symbol, strategy) for stocks.
- * A row already queued, running or done today stops them. Manual items (the user's Analyse button) are per contract,
- * skip the per-day dedupe and only refuse a row for that contract that is queued or running right now.
+ * A row already queued, running or done today stops them. Manual items (the user's Analyse button) are per contract and
+ * skip the per-day dedupe: one already queued is promoted to the front (ahead of automatic items, in request order);
+ * only one running right now refuses it.
  * Returns the item's position (1 = next) or null when refused.
  */
 export function enqueue(input: EnqueueInput, opts: { manual?: boolean; now?: Date } = {}): { position: number } | null {
@@ -33,12 +34,21 @@ export function enqueue(input: EnqueueInput, opts: { manual?: boolean; now?: Dat
   const real = input.contract ?? "";
   const manual = opts.manual ? 1 : 0;
   const key = manual ? real : "";
+  if (manual) {
+    // A manual request promotes the same item when it is already queued (automatic or not); only a running one refuses it.
+    const row = db.prepare("SELECT id, status FROM agent_queue WHERE symbol = ? AND strategy = ? AND item_contract = ? AND status IN ('queued','running') ORDER BY id DESC").get(input.symbol, input.strategy, real) as { id: number; status: string } | undefined;
+    if (row?.status === "running") return null;
+    if (row) {
+      db.prepare("UPDATE agent_queue SET manual = 1, reason = ?, queued_at = ? WHERE id = ?").run(input.reason, now.toISOString(), row.id);
+      return { position: pending().findIndex((i) => i.id === row.id) + 1 };
+    }
+  }
   const active = manual
-    ? db.prepare("SELECT id FROM agent_queue WHERE symbol = ? AND strategy = ? AND item_contract = ? AND status IN ('queued','running')").get(input.symbol, input.strategy, real)
+    ? undefined
     : db.prepare("SELECT id, status FROM agent_queue WHERE symbol = ? AND strategy = ? AND status IN ('queued','running') ORDER BY id DESC").get(input.symbol, input.strategy);
   if (active) {
     // A queued automatic item follows the idea's current contract.
-    if (!manual && (active as { status: string }).status === "queued") db.prepare("UPDATE agent_queue SET item_contract = ? WHERE id = ?").run(real, (active as { id: number }).id);
+    if ((active as { status: string }).status === "queued") db.prepare("UPDATE agent_queue SET item_contract = ? WHERE id = ?").run(real, (active as { id: number }).id);
     return null;
   }
   const today = db.prepare("SELECT id, status FROM agent_queue WHERE day = ? AND symbol = ? AND strategy = ? AND contract = ?").get(day, input.symbol, input.strategy, key) as { id: number; status: string } | undefined;
@@ -61,13 +71,15 @@ export function pending(): QueueItem[] {
   const held = new Set(heldSymbols());
   return (db.prepare("SELECT * FROM agent_queue WHERE status = 'queued'").all() as any[])
     .map(toItem)
-    .sort((a, b) => Number(b.manual) - Number(a.manual) || Number(held.has(b.symbol)) - Number(held.has(a.symbol)) || a.rank - b.rank || a.id - b.id);
+    .sort((a, b) => Number(b.manual) - Number(a.manual) || (a.manual && b.manual ? a.queuedAt.localeCompare(b.queuedAt) : 0) || Number(held.has(b.symbol)) - Number(held.has(a.symbol)) || a.rank - b.rank || a.id - b.id);
 }
 
 export function running(): QueueItem[] {
   return (db.prepare("SELECT * FROM agent_queue WHERE status = 'running' ORDER BY id").all() as any[]).map(toItem);
 }
 
+export const isRunning = (symbol: string, strategy: ThesisStrategy, contract: string | null): boolean =>
+  db.prepare("SELECT 1 FROM agent_queue WHERE symbol = ? AND strategy = ? AND item_contract = ? AND status = 'running'").get(symbol, strategy, contract ?? "") !== undefined;
 export const isBusy = (symbol: string, strategy: ThesisStrategy, contract: string | null): boolean =>
   db.prepare("SELECT 1 FROM agent_queue WHERE symbol = ? AND strategy = ? AND item_contract = ? AND status IN ('queued','running')").get(symbol, strategy, contract ?? "") !== undefined;
 

@@ -76,14 +76,19 @@ describe("queue", () => {
     const c = (contract: string) => ({ ...item("MU"), strategy: "short_put" as const, kind: "option" as const, contract });
     expect(queue.enqueue(c("A"), { manual: true, now: NOW })).not.toBeNull();
     expect(queue.enqueue(c("B"), { manual: true, now: NOW })).not.toBeNull();
-    expect(queue.enqueue(c("A"), { manual: true, now: NOW })).toBeNull();
+    expect(queue.enqueue(c("A"), { manual: true, now: NOW })).not.toBeNull(); // promotes the queued one
+    expect(queue.pending()).toHaveLength(2);
     expect(queue.isBusy("MU", "short_put", "B")).toBe(true);
     expect(queue.isBusy("MU", "short_put", "C")).toBe(false);
   });
 
-  it("lets a manual request redo a finished item but not one queued or running", () => {
-    queue.enqueue(item("MU"), { now: NOW });
-    expect(queue.enqueue(item("MU"), { manual: true, now: NOW })).toBeNull();
+  it("promotes a queued item on a manual request, and refuses only a running one", () => {
+    queue.enqueue(item("A", 1), { now: NOW });
+    queue.enqueue(item("MU", 9), { now: NOW });
+    expect(queue.pending().map((i) => i.symbol)).toEqual(["A", "MU"]);
+    expect(queue.enqueue(item("MU"), { manual: true, now: new Date(NOW.getTime() + 1000) })).toEqual({ position: 1 });
+    expect(queue.pending().map((i) => [i.symbol, i.manual])).toEqual([["MU", true], ["A", false]]);
+    expect(queue.pending()).toHaveLength(2);
     const id = queue.pending()[0].id;
     queue.markRunning(id);
     expect(queue.enqueue(item("MU"), { manual: true, now: NOW })).toBeNull();
@@ -141,13 +146,25 @@ describe("guardrail", () => {
 
 describe("price warning", () => {
   const t = (over = {}) => ({ entry: { low: 90, high: 95 }, target: { price: 130 }, invalidation: { price: 80 }, ...over });
-  it("flags levels more than 50% from the current price, without rejecting", async () => {
+  const opt = (over = {}) => ({ entry: { low: 2.1, high: 2.3 }, target: { price: 4.6 }, invalidation: { price: 150 }, ...over });
+  it("flags stock levels more than 50% from the current price, without rejecting", async () => {
     const { priceWarning } = await import("./guardrail.js");
-    expect(priceWarning(t(), 100)).toBeNull();
-    expect(priceWarning(t({ target: { price: 160 } }), 100)).toMatch(/target 160 more than 50%/);
-    expect(priceWarning(t({ invalidation: { price: 40 } }), 100)).toMatch(/invalidation 40/);
-    expect(priceWarning(t({ target: { price: 160 } }), null)).toBeNull();
-    expect(priceWarning({ entry: null, target: null, invalidation: null }, 100)).toBeNull();
+    const ref = { underlying: 100 };
+    expect(priceWarning(t(), ref)).toBeNull();
+    expect(priceWarning(t({ target: { price: 160 } }), ref)).toMatch(/target 160 vs 100/);
+    expect(priceWarning(t({ invalidation: { price: 40 } }), ref)).toMatch(/invalidation 40/);
+    expect(priceWarning(t({ target: { price: 160 } }), { underlying: null })).toBeNull();
+    expect(priceWarning({ entry: null, target: null, invalidation: null }, ref)).toBeNull();
+  });
+  it("checks option premiums against the contract mid and invalidation against the underlying", async () => {
+    const { priceWarning } = await import("./guardrail.js");
+    // ROKU-like: premium 2.30 against a stock at 157.74 is fine.
+    expect(priceWarning(opt(), { underlying: 157.74, premium: 2.2, option: true })).toBeNull();
+    expect(priceWarning(opt({ entry: { low: 4, high: 5 } }), { underlying: 157.74, premium: 2.2, option: true })).toMatch(/entry/);
+    expect(priceWarning(opt({ target: { price: 30 } }), { underlying: 157.74, premium: 2.2, option: true })).toMatch(/target \(premium\) 30/);
+    expect(priceWarning(opt({ invalidation: { price: 2 } }), { underlying: 157.74, premium: 2.2, option: true })).toMatch(/invalidation 2 vs 157.74/);
+    // No contract quote: premium checks are skipped, invalidation still checked.
+    expect(priceWarning(opt({ entry: { low: 40, high: 50 }, target: { price: 90 } }), { underlying: 157.74, premium: null, option: true })).toBeNull();
   });
   it("is added to a stored thesis's statusReason with status unchanged", async () => {
     quotes.MU = { price: 100, change: 0, changePercent: 0, asOf: null, extended: {} };
@@ -161,6 +178,21 @@ describe("price warning", () => {
     const r = await analysis.analyze({ symbol: "MU", strategy: "buy", contract: null, ideaId: null, kind: "stock" }, NOW);
     expect(r.outcome === "done" && r.thesis).toMatchObject({ status: "ok", verdict: "wait" });
     expect(r.outcome === "done" && r.thesis.statusReason).toMatch(/target 400/);
+  });
+  it("does not warn on an option thesis whose premium is near the streamed mid", async () => {
+    const { setOptionQuoteSource } = await import("./option-quote.js");
+    setOptionQuoteSource(() => ({ bid: 2.2, ask: 2.4, last: null }));
+    quotes.ROKU = { price: 157.74, change: 0, changePercent: 0, asOf: null, extended: {} };
+    queryMock.mockImplementation(({ prompt }: { prompt: string }) => (async function* () {
+      yield { type: "system", subtype: "init", apiKeySource: "none", mcp_servers: [{ name: "openterminal", status: "connected" }] };
+      const out = prompt.startsWith("Decide")
+        ? { verdict: "wait", confidence: 50, horizon: "d", entry: { low: 2.1, high: 2.3, note: "" }, target: { price: 4.5, note: "" }, invalidation: { price: 150, condition: "" }, exitPlan: "x", catalysts: [], risks: [], summary: "s", evidence: [] }
+        : { summary: "s", points: [{ point: "p", evidence: [] }] };
+      yield { type: "result", subtype: "success", is_error: false, total_cost_usd: 0.01, duration_ms: 1, num_turns: 1, usage: {}, structured_output: out, errors: [] };
+    })());
+    const r = await analysis.analyze({ symbol: "ROKU", strategy: "long_call", contract: "ROKU261120C00160000", ideaId: null, kind: "option" }, NOW);
+    expect(r.outcome === "done" && r.thesis.statusReason).toBeNull();
+    setOptionQuoteSource(null);
   });
 });
 

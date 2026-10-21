@@ -96,11 +96,16 @@ describe("GET", () => {
 });
 
 describe("POST /analyze", () => {
-  it("queues with 202 and a position, then answers 409 for the same idea", async () => {
-    const res = await post("/analyze", { symbol: "mu", strategy: "buy" });
-    expect(res.status).toBe(202);
-    expect(await res.json()).toMatchObject({ queued: true });
-    const again = await post("/analyze", { symbol: "MU", strategy: "buy" });
+  it("queues with 202 and a position, promotes a queued item, and answers 409 only while it runs", async () => {
+    const { queue: _q } = { queue: await import("../agents/queue.js") };
+    // An automatic item sits queued: Analyse promotes it (202) instead of answering 409.
+    _q.enqueue({ symbol: "BNC", strategy: "buy", kind: "stock", reason: "new", rank: 3 });
+    const promoted = await post("/analyze", { symbol: "BNC", strategy: "buy" });
+    expect(promoted.status).toBe(202);
+    expect(await promoted.json()).toMatchObject({ queued: true });
+    // The worker picks it up at once (manual items ignore the stock window); the SDK mock never answers, so it stays running.
+    await new Promise((r) => setTimeout(r, 100));
+    const again = await post("/analyze", { symbol: "BNC", strategy: "buy" });
     expect(again.status).toBe(409);
     expect(await again.json()).toHaveProperty("error");
     // A different contract is a different idea.
