@@ -48,6 +48,16 @@ CREATE TABLE IF NOT EXISTS estimate_snapshots (
   revenue_estimate REAL,
   PRIMARY KEY (symbol, report_date, captured_day)
 );
+CREATE TABLE IF NOT EXISTS earnings_calendar (
+  symbol TEXT NOT NULL,
+  report_date TEXT NOT NULL,
+  eps_estimate REAL,
+  revenue_estimate REAL,
+  eps_actual REAL,
+  revenue_actual REAL,
+  last_seen_day TEXT NOT NULL,
+  PRIMARY KEY (symbol, report_date)
+);
 CREATE TABLE IF NOT EXISTS estimate_runs (
   day TEXT PRIMARY KEY,
   rows INTEGER NOT NULL,

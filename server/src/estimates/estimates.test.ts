@@ -75,11 +75,21 @@ describe("revisions", () => {
 });
 
 describe("windows", () => {
-  it("covers today through today + 91 in windows of at most 7 days", () => {
+  it("covers today through today + 120 in windows of at most 7 days", () => {
     const w = capture.windows("2026-10-20");
     expect(w[0]).toEqual(["2026-10-20", "2026-10-26"]);
     expect(w[1][0]).toBe("2026-10-27");
-    expect(w[w.length - 1][1]).toBe("2027-01-19");
+    expect(w[w.length - 1][1]).toBe("2027-02-17");
+    for (const [from, to] of w) expect((Date.parse(to) - Date.parse(from)) / 86_400_000).toBeLessThanOrEqual(6);
+    for (let i = 1; i < w.length; i++) expect(Date.parse(w[i][0]) - Date.parse(w[i - 1][1])).toBe(86_400_000);
+  });
+});
+
+describe("pastWindows", () => {
+  it("covers the 100 days before today in contiguous windows of at most 7 days", () => {
+    const w = capture.pastWindows("2026-10-20");
+    expect(w[0][0]).toBe("2026-07-12");
+    expect(w[w.length - 1][1]).toBe("2026-10-19");
     for (const [from, to] of w) expect((Date.parse(to) - Date.parse(from)) / 86_400_000).toBeLessThanOrEqual(6);
     for (let i = 1; i < w.length; i++) expect(Date.parse(w[i][0]) - Date.parse(w[i - 1][1])).toBe(86_400_000);
   });
@@ -100,7 +110,7 @@ describe("captureDay", () => {
     earningsCalendar.mockResolvedValue([row("ZZZ", 1)]);
     const first = await capture.captureDay("2026-11-01");
     expect(first).toMatchObject({ failed: 0, stored: 1 });
-    expect(earningsCalendar).toHaveBeenCalledTimes(capture.windows("2026-11-01").length);
+    expect(earningsCalendar).toHaveBeenCalledTimes(capture.pastWindows("2026-11-01").length + capture.windows("2026-11-01").length);
     earningsCalendar.mockClear();
     expect(await capture.captureDay("2026-11-01")).toBeNull();
     expect(earningsCalendar).not.toHaveBeenCalled();
@@ -115,5 +125,46 @@ describe("captureDay", () => {
     expect(store.hasRun("2026-11-02")).toBe(false);
     expect(await capture.captureDay("2026-11-02")).toMatchObject({ failed: 0 });
     expect(store.hasRun("2026-11-02")).toBe(true);
+  });
+
+  it("keeps past and future calendar rows and stamps them with the capture day", async () => {
+    const past = (symbol: string): EarningsCalendarRow => ({ ...row(symbol, 1), date: Date.parse("2026-12-20") / 1000, epsActual: 1.1, revenueActual: 11 });
+    earningsCalendar.mockImplementation(async (_from, to) => (to < "2026-12-25" ? [past("CAL")] : [row("CAL", 2)]));
+    await capture.captureDay("2026-12-25");
+    const rows = (await import("../db.js")).db.prepare("SELECT * FROM earnings_calendar WHERE symbol = 'CAL' ORDER BY report_date").all();
+    expect(rows).toEqual([
+      expect.objectContaining({ report_date: "2026-11-18", eps_estimate: 2, eps_actual: null, last_seen_day: "2026-12-25" }),
+      expect.objectContaining({ report_date: "2026-12-20", eps_actual: 1.1, revenue_actual: 11, last_seen_day: "2026-12-25" }),
+    ]);
+    // Past windows add no estimate snapshots.
+    expect(store.history("CAL", "2026-12-20")).toEqual([]);
+    earningsCalendar.mockImplementation(async () => [{ ...row("CAL", 3) }]);
+    await capture.captureDay("2026-12-26", true);
+    const again = (await import("../db.js")).db.prepare("SELECT eps_estimate AS e, last_seen_day AS d FROM earnings_calendar WHERE symbol = 'CAL' AND report_date = '2026-11-18'").get();
+    expect(again).toEqual({ e: 3, d: "2026-12-26" });
+  });
+});
+
+describe("calendarFor", () => {
+  const entry = (symbol: string, reportDate: string, seen: string, extra: Partial<Parameters<typeof store.recordCalendar>[0][0]> = {}) =>
+    store.recordCalendar([{ symbol, reportDate, epsEstimate: 1, revenueEstimate: 10, epsActual: null, revenueActual: null, ...extra }], seen);
+
+  it("ignores a future date that the latest capture no longer lists", () => {
+    store.recordRun("2027-02-01", 0, 0);
+    entry("MOVED", "2027-02-10", "2027-01-30"); // FMP listed it before, then moved the date
+    entry("MOVED", "2027-02-17", "2027-02-01");
+    entry("LAST", "2027-01-20", "2027-02-01", { epsActual: 1.2, revenueActual: 12 });
+    entry("LAST", "2027-02-18", "2027-02-01");
+    const [moved, last, none] = store.calendarFor(["MOVED", "LAST", "NONE"], "2027-02-05");
+    expect(moved).toMatchObject({ nextEarningsDate: Date.parse("2027-02-17") / 1000, found: true });
+    expect(last).toMatchObject({
+      nextEarningsDate: Date.parse("2027-02-18") / 1000,
+      lastEarningsDate: Date.parse("2027-01-20") / 1000,
+      lastEps: 1.2,
+      lastEpsEstimate: 1,
+      lastRevenue: 12,
+    });
+    expect(last.lastSurprisePercent).toBeCloseTo(20);
+    expect(none).toMatchObject({ found: false, nextEarningsDate: null, lastEarningsDate: null });
   });
 });

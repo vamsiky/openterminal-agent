@@ -21,6 +21,8 @@ import { alpacaHistory } from "../live/history.js";
 import { alpacaSymbol, isForeignSymbol } from "../history/universe.js";
 import { AlpacaNotConfigured, companyName, snapshotPrice, usMarketRows } from "./market-rows.js";
 import { withConsensus } from "./econ-calendar.js";
+import * as estimates from "../estimates/store.js";
+import { tradingDay } from "../history/time.js";
 
 // Yahoo Finance, TradingView, Nasdaq's public API, Google News, Forex Factory
 // and Binance were removed: their terms forbid automated use (Binance also
@@ -895,19 +897,38 @@ marketRouter.get("/recap", async (req, res) => {
   }
 });
 
-// ---- earnings calendar for a list of symbols (FMP only) ----
+// ---- earnings calendar for a list of symbols: the locally captured FMP calendar ----
+
+const CALENDAR_FALLBACK_MS = 2000;
 
 marketRouter.get("/calendar", async (req, res) => {
   const symbols = String(req.query.symbols ?? "")
     .split(",")
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean)
-    .slice(0, 30);
+    .slice(0, 500);
   if (symbols.length === 0) return res.status(400).json({ error: "symbols required" });
-  if (!fmp.isConfigured()) return needs(res, "FMP_API_KEY", req.path);
+  if (!fmp.isConfigured() && !estimates.hasCalendarRows()) return needs(res, "FMP_API_KEY", req.path);
   try {
-    const data = await cached(`calendar:${symbols.join(",")}`, 3_600_000, () => fmp.earningsInfo(symbols));
-    res.json(data);
+    const today = tradingDay(new Date().toISOString());
+    const rows = estimates.calendarFor(symbols, today);
+    // Symbols the captured calendar doesn't know, before today's capture has run: ask FMP per symbol, but only wait a moment; the rest arrive on the next request.
+    const missing = rows.filter((r) => !r.found).map((r) => r.symbol);
+    const captured = estimates.latestRunDay();
+    if (missing.length > 0 && fmp.isConfigured() && (captured === null || captured < today)) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const info = await Promise.race([
+        fmp.earningsInfo(missing).catch(() => null),
+        new Promise<null>((r) => (timer = setTimeout(() => r(null), CALENDAR_FALLBACK_MS))),
+      ]);
+      clearTimeout(timer);
+      const bySymbol = new Map((info ?? []).map((i) => [i.symbol.toUpperCase(), i]));
+      for (const r of rows) {
+        const i = bySymbol.get(r.symbol);
+        if (i) Object.assign(r, { nextEarningsDate: i.nextEarningsDate, lastEarningsDate: i.lastEarningsDate, epsForecast: i.epsForecast });
+      }
+    }
+    res.json(rows.map((r) => ({ ...r, found: undefined })));
   } catch (err) {
     fail(req, res, err);
   }

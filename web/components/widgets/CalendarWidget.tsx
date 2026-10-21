@@ -5,7 +5,7 @@ import { Fragment, useMemo, useState } from "react";
 import { apiGet, fmt, fmtBig, pctClass } from "../../lib/api";
 import ErrorNote from "../ErrorNote";
 import EstimateRevisions from "../EstimateRevisions";
-import { symbolsParam } from "../../lib/symbol";
+import { fetchCalendar, fmtDay, groupEarnings, inDays } from "../../lib/earnings";
 import { useTerminal } from "../../store/terminal";
 
 type EconEvent = {
@@ -16,13 +16,6 @@ type EconEvent = {
   forecast: string | null;
   previous: string | null;
   actual: string | null;
-};
-
-type EarningsEntry = {
-  symbol: string;
-  nextEarningsDate: number | null;
-  lastEarningsDate: number | null;
-  epsForecast: number | null;
 };
 
 const IMPACT_CLASS: Record<EconEvent["impact"], string> = {
@@ -189,7 +182,7 @@ function EarningsHistoryRows({ symbol }: { symbol: string }) {
           row.upcoming ? (
             <tr key={row.dateReported}>
               <td colSpan={7} className="!text-left amber">
-                Next: {fmtDate(row.dateReported)} · EPS est {row.consensusForecast != null ? row.consensusForecast.toFixed(2) : "—"} · Rev est{" "}
+                Next: {fmtDate(row.dateReported)} · EPS est {money(row.consensusForecast)} · Rev est{" "}
                 {row.revenueEstimate != null ? `$${fmtBig(row.revenueEstimate)}` : "—"}
                 <EstimateRevisions symbol={symbol} className="ml-3" />
               </td>
@@ -198,8 +191,8 @@ function EarningsHistoryRows({ symbol }: { symbol: string }) {
           <tr key={row.dateReported}>
             <td className="!text-left dim">{quarterLabel(row)}</td>
             <td className="!text-left dim">{fmtDate(row.dateReported)}</td>
-            <td className="dim">{row.consensusForecast != null ? `$${row.consensusForecast.toFixed(2)}` : "—"}</td>
-            <td className={surpriseClass(row)}>{row.eps != null ? `$${row.eps.toFixed(2)}` : "—"}</td>
+            <td className="dim">{money(row.consensusForecast)}</td>
+            <td className={surpriseClass(row)}>{money(row.eps)}</td>
             <td className={surpriseClass(row)}>{row.surprisePercent != null ? `${fmt(row.surprisePercent, 1)}%` : "—"}</td>
             <td className="dim" title={`Estimate ${fmtBig(row.revenueEstimate)}`}>{fmtBig(row.revenue)}</td>
             <td className={pctClass(row.dayAfterChangePercent)}>
@@ -213,66 +206,106 @@ function EarningsHistoryRows({ symbol }: { symbol: string }) {
   );
 }
 
+const money = (n: number | null | undefined) => (n != null ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—");
+
 function EarningsTab() {
   const watchlist = useTerminal((s) => s.watchlist);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const { data = [], isLoading, error } = useQuery({
     queryKey: ["calendar", watchlist],
-    queryFn: () => apiGet<EarningsEntry[]>(`/api/calendar?symbols=${symbolsParam(watchlist)}`),
+    queryFn: () => fetchCalendar(watchlist),
     enabled: watchlist.length > 0,
-    staleTime: 3_600_000,
+    staleTime: 900_000,
+    refetchOnWindowFocus: true,
   });
 
-  const sorted = useMemo(
-    () =>
-      [...data].sort((a, b) => {
-        if (a.nextEarningsDate === null && b.nextEarningsDate === null) return 0;
-        if (a.nextEarningsDate === null) return 1;
-        if (b.nextEarningsDate === null) return -1;
-        return a.nextEarningsDate - b.nextEarningsDate;
-      }),
-    [data]
-  );
+  const groups = useMemo(() => groupEarnings(data, new Date()), [data]);
 
   if (error) return <ErrorNote error={error} />;
   if (isLoading) return <div className="p-2 dim">Loading earnings…</div>;
+
+  const header = (label: string, dim = false) => (
+    <tr key={`h-${label}`}>
+      <td colSpan={5} className={`!text-left uppercase text-[10px] tracking-wide pt-2 ${dim ? "dim" : "amber"}`}>
+        {label}
+      </td>
+    </tr>
+  );
+  const detail = (symbol: string) =>
+    expanded === symbol && (
+      <tr key={`d-${symbol}`}>
+        <td colSpan={5} className="!text-left p-0">
+          <EarningsHistoryRows symbol={symbol} />
+        </td>
+      </tr>
+    );
+  const toggle = (symbol: string) => () => setExpanded(expanded === symbol ? null : symbol);
+  const symbolCell = (symbol: string) => <td className="!text-left text-[var(--text)] font-bold underline decoration-1">{symbol}</td>;
 
   return (
     <table className="data-table">
       <thead>
         <tr>
-          <th>Sym</th>
-          <th>Last Earnings</th>
-          <th>Next Earnings</th>
-          <th>EPS Est.</th>
+          <th>Date</th>
+          <th></th>
+          <th className="!text-left">Sym</th>
+          <th>EPS est</th>
+          <th>Rev est</th>
         </tr>
       </thead>
       <tbody>
-        {sorted.map((e) => (
-          <Fragment key={e.symbol}>
-            <tr
-              onClick={() => setExpanded(expanded === e.symbol ? null : e.symbol)}
-              className="cursor-pointer"
-              title="Click for earnings history"
-            >
-              <td className="!text-left text-[var(--text)] font-bold underline decoration-1">{e.symbol}</td>
-              <td className="dim">{fmtDate(e.lastEarningsDate)}</td>
-              <td className="amber">{fmtDate(e.nextEarningsDate)}</td>
-              <td>{e.epsForecast != null ? `$${e.epsForecast.toFixed(2)}` : "—"}</td>
-            </tr>
-            {expanded === e.symbol && (
-              <tr>
-                <td colSpan={4} className="!text-left p-0">
-                  <EarningsHistoryRows symbol={e.symbol} />
-                </td>
-              </tr>
-            )}
+        {groups.upcoming.map((g) => (
+          <Fragment key={g.label}>
+            {header(g.label)}
+            {g.rows.map((e) => (
+              <Fragment key={e.symbol}>
+                <tr onClick={toggle(e.symbol)} className="cursor-pointer" title="Click for earnings history">
+                  <td className="!text-left whitespace-nowrap">{fmtDay(e.nextEarningsDate!)}</td>
+                  <td className="dim whitespace-nowrap">{inDays(e.days)}</td>
+                  {symbolCell(e.symbol)}
+                  <td title="EPS estimate">{money(e.epsForecast)}</td>
+                  <td className="dim" title="Revenue estimate">{e.revenueForecast != null ? `$${fmtBig(e.revenueForecast)}` : "—"}</td>
+                </tr>
+                {detail(e.symbol)}
+              </Fragment>
+            ))}
           </Fragment>
         ))}
-        {sorted.length === 0 && (
+        {groups.reported.length > 0 && header("Reported (last 7 days)")}
+        {groups.reported.map((e) => {
+          const cls = pctClass(e.lastSurprisePercent);
+          return (
+            <Fragment key={`r-${e.symbol}`}>
+              <tr onClick={toggle(e.symbol)} className="cursor-pointer" title="Click for earnings history">
+                <td className="!text-left whitespace-nowrap dim">{fmtDay(e.lastEarningsDate!)}</td>
+                <td className="dim whitespace-nowrap">{-e.days}d ago</td>
+                {symbolCell(e.symbol)}
+                <td className={cls} title="EPS actual vs estimate">
+                  {money(e.lastEps)} <span className="dim">vs {money(e.lastEpsEstimate)}</span>
+                </td>
+                <td className={cls} title="Surprise">{e.lastSurprisePercent != null ? `${fmt(e.lastSurprisePercent, 1)}%` : "—"}</td>
+              </tr>
+              {detail(e.symbol)}
+            </Fragment>
+          );
+        })}
+        {groups.noDate.length > 0 && header("No date", true)}
+        {groups.noDate.map((e) => (
+          <Fragment key={`n-${e.symbol}`}>
+            <tr onClick={toggle(e.symbol)} className="cursor-pointer dim" title="Click for earnings history">
+              <td className="!text-left">—</td>
+              <td />
+              {symbolCell(e.symbol)}
+              <td />
+              <td />
+            </tr>
+            {detail(e.symbol)}
+          </Fragment>
+        ))}
+        {data.length === 0 && (
           <tr>
-            <td colSpan={4} className="dim p-3">
+            <td colSpan={5} className="dim p-3">
               No upcoming earnings data for your watchlist.
             </td>
           </tr>

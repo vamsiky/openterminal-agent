@@ -277,13 +277,77 @@ describe("features that need FMP_API_KEY", () => {
     ]);
   });
 
-  it("serves the earnings calendar from FMP when keyed", async () => {
+  it("asks FMP per symbol only for symbols the captured calendar lacks", async () => {
     vi.mocked(fmp.isConfigured).mockReturnValue(true);
-    const rows = [{ symbol: "NVDA", nextEarningsDate: 1, lastEarningsDate: 0, epsForecast: 1.2 }];
-    vi.mocked(fmp.earningsInfo).mockResolvedValue(rows);
+    vi.mocked(fmp.earningsInfo).mockResolvedValue([{ symbol: "NVDA", nextEarningsDate: 1, lastEarningsDate: 0, epsForecast: 1.2 }]);
     const { statusCode, body } = await call("/calendar", { query: { symbols: "NVDA" } });
     expect(statusCode).toBe(200);
-    expect(body).toEqual(rows);
+    expect(body).toEqual([expect.objectContaining({ symbol: "NVDA", nextEarningsDate: 1, lastEarningsDate: 0, epsForecast: 1.2, revenueForecast: null, lastEps: null })]);
+  });
+
+  describe("from the captured calendar", () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const day = (n: number) => new Date(Date.parse(today) + n * 86_400_000).toISOString().slice(0, 10);
+    const syms = Array.from({ length: 142 }, (_, i) => `ZC${i}`);
+
+    beforeAll(async () => {
+      const store = await import("../estimates/store.js");
+      store.recordCalendar(
+        syms.flatMap((symbol) => [
+          { symbol, reportDate: day(5), epsEstimate: 1, revenueEstimate: 100, epsActual: null, revenueActual: null },
+          { symbol, reportDate: day(-30), epsEstimate: 1, revenueEstimate: 90, epsActual: 1.5, revenueActual: 95 },
+        ]),
+        today
+      );
+      store.recordRun(today, 0, 0);
+    });
+    beforeEach(() => vi.mocked(fmp.earningsInfo).mockReset());
+
+    it("serves 142 symbols without calling FMP, with the new fields", async () => {
+      vi.mocked(fmp.isConfigured).mockReturnValue(true);
+      const { statusCode, body } = await call("/calendar", { query: { symbols: [...syms, "SPY"].join(",") } });
+      expect(statusCode).toBe(200);
+      expect(body).toHaveLength(143);
+      expect(body[0]).toEqual({
+        symbol: "ZC0",
+        nextEarningsDate: Date.parse(day(5)) / 1000,
+        lastEarningsDate: Date.parse(day(-30)) / 1000,
+        epsForecast: 1,
+        revenueForecast: 100,
+        lastEps: 1.5,
+        lastEpsEstimate: 1,
+        lastSurprisePercent: 50,
+        lastRevenue: 95,
+      });
+      // The capture already ran today, so a symbol with no dates (an ETF) is not chased.
+      expect(body[142]).toMatchObject({ symbol: "SPY", nextEarningsDate: null });
+      expect(fmp.earningsInfo).not.toHaveBeenCalled();
+    });
+
+    it("serves the table without an FMP key", async () => {
+      vi.mocked(fmp.isConfigured).mockReturnValue(false);
+      const { statusCode, body } = await call("/calendar", { query: { symbols: "ZC1" } });
+      expect(statusCode).toBe(200);
+      expect(body[0]).toMatchObject({ symbol: "ZC1", epsForecast: 1 });
+    });
+
+    it("falls back for missing symbols when the capture is older than today, and stops waiting after 2 s", async () => {
+      vi.mocked(fmp.isConfigured).mockReturnValue(true);
+      const { db } = await import("../db.js");
+      db.prepare("UPDATE estimate_runs SET day = ? WHERE day = ?").run(day(-1), today);
+      db.prepare("UPDATE earnings_calendar SET last_seen_day = ? WHERE symbol LIKE 'ZC%'").run(day(-1));
+      try {
+        vi.mocked(fmp.earningsInfo).mockReturnValue(new Promise((r) => setTimeout(() => r([]), 3000)));
+        const started = Date.now();
+        const { statusCode, body } = await call("/calendar", { query: { symbols: "ZC2,NEWCO" } });
+        expect(Date.now() - started).toBeLessThan(2900);
+        expect(statusCode).toBe(200);
+        expect(fmp.earningsInfo).toHaveBeenCalledWith(["NEWCO"]);
+        expect(body).toEqual([expect.objectContaining({ symbol: "ZC2", epsForecast: 1 }), expect.objectContaining({ symbol: "NEWCO", nextEarningsDate: null })]);
+      } finally {
+        db.prepare("UPDATE estimate_runs SET day = ? WHERE day = ?").run(today, day(-1));
+      }
+    });
   });
 });
 
