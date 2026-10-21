@@ -27,39 +27,46 @@ afterAll(async () => {
 
 describe("dueJobs", () => {
   it("runs the nightly scorecards at 07:00 and 16:30 New York, then the screen", () => {
-    expect(jobs.dueJobs(at(6, 59), ran({}), () => true)).toEqual([]);
-    expect(jobs.dueJobs(at(7, 1), ran({}), () => true)).toEqual(["stock-nightly"]);
-    expect(jobs.dueJobs(at(7, 2), ran({ "stock-nightly": at(7, 1) }), () => true)).toEqual(["ideas-screen"]);
-    expect(jobs.dueJobs(at(7, 3), ran({ "stock-nightly": at(7, 1), "ideas-screen": at(7, 2) }), () => true)).toEqual([]);
+    expect(jobs.dueJobs(at(6, 59), ran({}))).toEqual([]);
+    expect(jobs.dueJobs(at(7, 1), ran({}))).toEqual(["stock-nightly"]);
+    expect(jobs.dueJobs(at(7, 2), ran({ "stock-nightly": at(7, 1) }))).toEqual(["ideas-screen"]);
+    expect(jobs.dueJobs(at(7, 3), ran({ "stock-nightly": at(7, 1), "ideas-screen": at(7, 2) }))).toEqual([]);
     // The 07:00 run does not satisfy the 16:30 slot.
-    expect(jobs.dueJobs(at(16, 31), ran({ "stock-nightly": at(7, 1), "ideas-screen": at(7, 2) }), () => true)).toEqual(["stock-nightly"]);
+    expect(jobs.dueJobs(at(16, 31), ran({ "stock-nightly": at(7, 1), "ideas-screen": at(7, 2) }))).toEqual(["stock-nightly"]);
   });
 
   it("catches up a missed nightly after a restart", () => {
-    expect(jobs.dueJobs(at(11, 0), ran({ "stock-nightly": new Date(Date.UTC(2026, 9, 20, 21)) }), () => true)).toContain("stock-nightly");
+    expect(jobs.dueJobs(at(11, 0), ran({ "stock-nightly": new Date(Date.UTC(2026, 9, 20, 21)) }))).toContain("stock-nightly");
   });
 
   it("skips weekends", () => {
     const sat = new Date(Date.UTC(2026, 9, 24, 15));
-    expect(jobs.dueJobs(sat, ran({}), () => true)).toEqual([]);
+    expect(jobs.dueJobs(sat, ran({}))).toEqual([]);
   });
 
-  it("runs the option scan every 5 minutes and the stock scan every 15, from 09:45", () => {
+  it("runs the option scan every 5 minutes and the stock scan every 15, from 09:35", () => {
     const base = { "stock-nightly": at(7, 1), "ideas-screen": at(7, 2) };
-    expect(jobs.dueJobs(at(9, 44), ran(base), () => true)).toEqual([]);
-    expect(jobs.dueJobs(at(9, 45, 5), ran(base), () => true)).toEqual([]); // still inside the offset
-    expect(jobs.dueJobs(at(9, 46, 40), ran(base), () => true)).toEqual(["stock-intraday", "option-scan"]);
+    expect(jobs.dueJobs(at(9, 34), ran(base))).toEqual([]);
+    expect(jobs.dueJobs(at(9, 35, 5), ran(base))).toEqual([]); // still inside the offset
+    expect(jobs.dueJobs(at(9, 36, 40), ran(base))).toEqual(["option-scan"]); // the 15-minute slot is 09:45
+    expect(jobs.dueJobs(at(9, 46, 40), ran(base))).toEqual(["stock-intraday", "option-scan"]);
     const after = { ...base, "stock-intraday": at(9, 46, 40), "option-scan": at(9, 46, 41) };
-    expect(jobs.dueJobs(at(9, 50, 5), ran(after), () => true)).toEqual([]);
-    expect(jobs.dueJobs(at(9, 51, 40), ran(after), () => true)).toEqual(["option-scan"]);
-    expect(jobs.dueJobs(at(10, 1, 40), ran({ ...after, "option-scan": at(9, 56, 41) }), () => true)).toEqual(["stock-intraday", "option-scan"]);
+    expect(jobs.dueJobs(at(9, 50, 5), ran(after))).toEqual([]);
+    expect(jobs.dueJobs(at(9, 51, 40), ran(after))).toEqual(["option-scan"]);
+    expect(jobs.dueJobs(at(10, 1, 40), ran({ ...after, "option-scan": at(9, 56, 41) }))).toEqual(["stock-intraday", "option-scan"]);
   });
 
-  it("does not scan on a holiday (no SPY minute bars) or after the close", () => {
+  it("does not scan on a holiday, and respects the close", () => {
     const base = { "stock-nightly": at(7, 1), "ideas-screen": at(7, 2) };
     expect(jobs.dueJobs(at(10, 30), ran(base), () => false)).toEqual([]);
-    expect(jobs.dueJobs(at(16, 20), ran(base), () => true)).toEqual([]);
-    expect(jobs.dueJobs(at(16, 1, 40), ran(base), () => true)).toEqual(["stock-intraday", "option-scan"]); // the 16:00 slot
+    expect(jobs.dueJobs(at(16, 20), ran(base))).toEqual([]);
+    expect(jobs.dueJobs(at(15, 56, 40), ran({ ...base, "stock-intraday": at(15, 46) }))).toEqual(["option-scan"]); // the 15:55 slot is the last
+    expect(jobs.dueJobs(at(16, 0, 30), ran(base))).toEqual([]); // no run after the close
+    // Early close at 13:00: the 12:55 option slot is the last.
+    const early = (day: string) => Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)), 17);
+    expect(jobs.dueJobs(at(12, 56, 40), ran({ ...base, "stock-intraday": at(12, 46) }), () => true, early)).toEqual(["option-scan"]);
+    expect(jobs.dueJobs(at(13, 0, 30), ran(base), () => true, early)).toEqual([]);
+    expect(jobs.dueJobs(at(13, 20), ran(base), () => true, early)).toEqual([]);
   });
 });
 
@@ -84,5 +91,15 @@ describe("universeByPriority", () => {
     db.prepare("INSERT INTO option_scorecards (underlying, as_of, score, data) VALUES ('CCC', 'x', 60, '{}'), ('BBB', 'x', 80, '{}')").run();
     db.prepare("INSERT INTO scorecards (day, symbol, composite, groups, coverage, weights_version) VALUES ('2026-10-21', 'EEE', 70, '{}', 1, 'v'), ('2026-10-21', 'DDD', 50, '{}', 1, 'v')").run();
     expect(jobs.universeByPriority()).toEqual(["HELD", "BBB", "CCC", "EEE", "DDD", "AAA"]);
+  });
+});
+
+describe("stop", () => {
+  it("clears the deps and refuses forced runs afterwards", () => {
+    const handle = jobs.startQuantJobs({ optionMetrics: () => new Map(), optionsStatus: () => ({ ok: true }) });
+    expect(jobs.quantDeps()).not.toBeNull();
+    handle!.stop();
+    expect(jobs.quantDeps()).toBeNull();
+    expect(jobs.runJob("stock-nightly")).toBe(false);
   });
 });

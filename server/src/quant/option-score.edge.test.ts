@@ -125,9 +125,7 @@ describe("covered call gates", () => {
 });
 
 describe("earnings when the expiry is unknown", () => {
-  // BUG: earningsNote (option-score.ts, earningsNote) returns before=false when the next report date is known but the
-  // ATM expiry is not. "false" tells the user nothing falls before expiry, which we cannot know. Expected: null.
-  it.fails("reports earningsBeforeExpiry as null, not false, when there is no expiry to compare with", () => {
+  it("reports earningsBeforeExpiry as null, not false, when there is no expiry to compare with", () => {
     const sym = "NOEXPIRY";
     db.prepare("INSERT OR REPLACE INTO earnings_calendar (symbol, report_date, last_seen_day) VALUES (?, '2026-11-05', ?)").run(sym, TODAY);
     os.runOptionScan([sym], () => new Map([[sym, metrics({ underlying: sym, atmExpiry: null, atmCall: null, atmPut: null })]]), new Date("2026-10-21T14:00:00Z"));

@@ -31,6 +31,7 @@ beforeAll(async () => {
 
   db.prepare("INSERT INTO watchlists (id, name) VALUES (1, 'L')").run();
   db.prepare("INSERT INTO watchlist_items (watchlist_id, symbol, position) VALUES (1, 'AAA', 0), (1, 'BBB', 1)").run();
+  db.prepare("INSERT INTO symbols (symbol, active) VALUES ('NVDA', 1), ('AAPL', 1)").run(); // positions must be listed
   db.prepare(
     `INSERT INTO bulk_profiles (symbol, company_name, exchange, sector, industry, country, price, market_cap, average_volume, is_etf, is_fund, is_adr, is_actively_trading, data, updated_at)
      VALUES ('AAA', 'A', 'NASDAQ', 'Technology', 'Software', 'US', 50, 1e9, 1e6, 0, 0, 0, 1, '{}', ''), ('BBB', 'B', 'NYSE', 'Energy', 'Oil', 'US', 20, 1e9, 1e6, 0, 0, 0, 1, '{}', '')`

@@ -13,8 +13,12 @@ import { GROUP_LABELS, factorLabel, getLiveScorecard, topNightly } from "./stock
 
 export const STOCK_IDEAS = 25;
 export const OPTION_IDEAS = 20;
-/** Minimum option setup score to be listed. */
+/** Minimum option setup score to be listed, for underlyings with at least IV_HISTORY_DAYS_FULL days of IV history. */
 export const OPTION_IDEA_MIN_SCORE = 70;
+/** The lower bar while IV history is short, since IV is then judged against realised volatility only. */
+export const OPTION_IDEA_MIN_SCORE_EARLY = 60;
+export const IV_HISTORY_DAYS_FULL = 20;
+export const EARLY_IV_REASON = "IV history < 20 days: IV judged against 20-day realised volatility";
 /** A stock idea needs this share of factors with data. */
 export const MIN_COVERAGE = 0.6;
 /** Consecutive scans an option idea may miss before it is dropped. */
@@ -152,7 +156,7 @@ export function refreshStockIdeas(now = new Date()): number {
 }
 
 /**
- * The 5-minute option pass: the best setups scoring 70+ (top 20, one per
+ * The 5-minute option pass: the best setups scoring 70+ (60+ while IV history is under 20 days; top 20, one per
  * symbol and strategy) are active; one that is missing from two scans in a
  * row is dropped.
  */
@@ -160,8 +164,10 @@ export function updateOptionIdeas(now = new Date()): { listed: number; dropped: 
   const iso = now.toISOString();
   const candidates: Candidate[] = [];
   for (const card of allOptionScorecards()) {
+    const early = (card.metrics?.ivHistoryDays ?? 0) < IV_HISTORY_DAYS_FULL;
     for (const s of card.setups) {
-      if (s.score >= OPTION_IDEA_MIN_SCORE) candidates.push({ symbol: card.underlying, strategy: s.strategy, contract: s.contract, score: s.score, reasons: s.reasons });
+      if (s.score < (early ? OPTION_IDEA_MIN_SCORE_EARLY : OPTION_IDEA_MIN_SCORE)) continue;
+      candidates.push({ symbol: card.underlying, strategy: s.strategy, contract: s.contract, score: s.score, reasons: early ? [...s.reasons, EARLY_IV_REASON] : s.reasons });
     }
   }
   candidates.sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol));

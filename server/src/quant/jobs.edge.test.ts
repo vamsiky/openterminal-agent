@@ -30,9 +30,9 @@ afterAll(async () => {
 });
 
 describe("session windows", () => {
-  it("runs nothing from the session scans before 09:45 or after 16:03", () => {
+  it("runs nothing from the session scans before 09:35 or after the close", () => {
     const ran = started({ "stock-nightly": at(7, 0, 5), "ideas-screen": at(7, 0, 10) });
-    for (const t of [at(9, 0), at(9, 44, 59), at(16, 3, 1)]) {
+    for (const t of [at(9, 0), at(9, 34, 59), at(16, 0, 1), at(16, 3, 1)]) {
       expect(jobs.dueJobs(t, ran, () => true)).toEqual([]);
     }
     // After 16:30 the evening nightly is due until it has run.
@@ -46,6 +46,8 @@ describe("session windows", () => {
     expect(jobs.dueJobs(at(9, 45, 25), ran, () => true)).toEqual(["stock-intraday"]);
     expect(jobs.dueJobs(at(9, 46, 0), ran, () => true)).toEqual(["stock-intraday"]);
     expect(jobs.dueJobs(at(9, 46, 45), ran, () => true)).toEqual(["stock-intraday", "option-scan"]);
+    // The first session slot is 09:35 (option only; the first 15-minute slot is 09:45).
+    expect(jobs.dueJobs(at(9, 36, 45), ran, () => true)).toEqual(["option-scan"]);
   });
 
   it("does not run a session scan on a day SPY did not trade, however late in the day", () => {

@@ -3,6 +3,7 @@ import { db } from "../db.js";
 import { isForeignSymbol } from "../history/universe.js";
 import { LISTED_EXCHANGES } from "../research/bulk-store.js";
 import type { UniverseSettings } from "../scan/contracts.js";
+import { listedSymbols } from "./listings.js";
 import { heldSymbols } from "./positions.js";
 
 // Which symbols the scans cover. The mode picks a base set (watchlists, FMP
@@ -107,7 +108,10 @@ export function resolveUniverse(settings = getUniverseSettings()): string[] {
           ? marketSymbols(settings, true)
           : []
         : marketSymbols(settings, false);
-  return [...new Set([...base, ...heldSymbols()].map((s) => s.toUpperCase()))].filter(isScannable).sort();
+  const listed = listedSymbols();
+  // Holdings stay whatever the listings say (a new IPO may not be in them yet); the mode's set must be listed.
+  const mode = base.map((s) => s.toUpperCase()).filter((s) => !listed || listed.has(s));
+  return [...new Set([...mode, ...heldSymbols().map((s) => s.toUpperCase())])].filter(isScannable).sort();
 }
 
 /** FMP sectors and their industries, from the bulk profiles (stocks only), sorted, for the settings screen. */

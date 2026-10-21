@@ -82,6 +82,17 @@ describe("nightly scorecards", () => {
     expect(pe("T7").value).toBe(-5);
   });
 
+  it("leaves foreign-looking listings out of the nightly pass", () => {
+    db.prepare(
+      `INSERT INTO bulk_profiles (symbol, company_name, exchange, sector, industry, country, price, market_cap, average_volume, is_etf, is_fund, is_adr, is_actively_trading, data, updated_at)
+       VALUES ('7203.T', 'Toyota', 'NASDAQ', 'Technology', 'x', 'JP', 100, 1e9, 1e6, 0, 0, 0, 1, '{}', '')`
+    ).run();
+    ss.runNightlyScorecards(NOW);
+    expect(ss.getStockScorecard("7203.T")).toBeNull();
+    expect(ss.getStockScorecard("T0")).not.toBeNull();
+    db.prepare("DELETE FROM bulk_profiles WHERE symbol = '7203.T'").run();
+  });
+
   it("treats higher ROIC as better and higher leverage as worse", () => {
     const f = (s: string, k: string) => ss.getStockScorecard(s)!.factors.find((x) => x.key === k)!.score!;
     expect(f("T7", "roic")).toBeGreaterThan(f("T0", "roic"));
@@ -100,6 +111,10 @@ describe("nightly scorecards", () => {
     const m = (k: string) => t0.factors.find((f) => f.key === k)!;
     expect(m("ret_6m").value).toBeCloseTo((50 + 299 * 0.5) / (50 + 173 * 0.5) - 1, 6);
     expect(m("vs_sma50").value!).toBeGreaterThan(0);
+    // Relative strength: 6-month excess over flat SPY, 3-month excess over the flat sector ETF (XLK), both ranked market-wide.
+    expect(m("rs_spy").value).toBeCloseTo(m("ret_6m").value!, 9);
+    expect(m("rs_sector").value).toBeCloseTo((50 + 299 * 0.5) / (50 + 236 * 0.5) - 1, 6);
+    expect(t0.weightsVersion).toBe("stock-v2");
     expect(t0.groups.momentum).not.toBeNull();
     expect(t0.groups.analysts).toBeNull();
     expect(t0.composite).not.toBeNull();

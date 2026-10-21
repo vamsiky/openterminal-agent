@@ -17,6 +17,8 @@ beforeAll(async () => {
   ({ db } = await import("../db.js"));
   uni = await import("./universe.js");
   pos = await import("./positions.js");
+  // Positions are only accepted for listed symbols.
+  db.prepare("INSERT INTO symbols (symbol, active) VALUES ('HOLD', 1), ('NVDA', 1), ('KO', 1), ('EDGE5', 1)").run();
 
   const profile = db.prepare(
     `INSERT INTO bulk_profiles (symbol, company_name, exchange, sector, industry, country, price, market_cap, average_volume, is_etf, is_fund, is_adr, is_actively_trading, data, updated_at)

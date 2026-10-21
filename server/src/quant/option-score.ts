@@ -5,6 +5,8 @@ import { minuteBars } from "../history/store.js";
 import { tradingDay } from "../history/time.js";
 import type { OptionMetrics, OptionScorecard, OptionSetup } from "../scan/contracts.js";
 import { atr, ema, rollup, rsi, vwap, type Bar } from "./indicators.js";
+import { hourlySeries } from "./hourly.js";
+import { nextExDividends } from "./dividends.js";
 import { sharesHeld } from "./positions.js";
 import { compositeMap, getLiveScorecard, loadDaily } from "./stock-score.js";
 
@@ -38,6 +40,8 @@ export const WOULD_OWN_COMPOSITE = 60;
 export const SHARES_PER_CONTRACT = 100;
 /** Points taken off a setup when earnings fall before its expiry. */
 export const EARNINGS_PENALTY = { long_call: 25, short_put: 15, covered_call: 10 } as const;
+/** Points taken off when an ex-dividend date falls before expiry: early assignment risk for a short call, a small note for a short put. */
+export const EX_DIVIDEND_PENALTY = { covered_call: 30, short_put: 3 } as const;
 /** Every setup that passes its gates starts here and earns the rest from its factors. */
 const SETUP_BASE = 40;
 /** Minute-bar history used for the intraday trend scores (calendar days). */
@@ -98,14 +102,19 @@ export function trendScore(bars: Bar[], sessionVwap: number | null = null): numb
 
 export type Momentum = OptionScorecard["momentum"];
 
-/** The four timeframes from minute bars (oldest first, several sessions) and daily bars. Intraday ones include price against today's VWAP. */
-export function momentumOf(minute: Bar[], daily: Bar[]): Momentum {
+/**
+ * The four timeframes from minute bars (oldest first, several sessions),
+ * daily bars and the hourly series (cached hours plus today's). The intraday
+ * ones include price against today's VWAP. When the hourly series is too short
+ * (nothing cached yet) the minute bars are rolled up instead.
+ */
+export function momentumOf(minute: Bar[], daily: Bar[], hourly?: Bar[]): Momentum {
   const lastDay = minute.length > 0 ? tradingDay(minute[minute.length - 1].ts ?? 0) : null;
   const today = lastDay ? minute.filter((b) => tradingDay(b.ts ?? 0) === lastDay) : [];
   const v = vwap(today);
   const sessionVwap = v.length > 0 ? v[v.length - 1].value : null;
   const score = (minutes: number) => trendScore(rollup(minute, minutes), sessionVwap);
-  return { m5: score(5), m15: score(15), h1: score(60), d1: trendScore(daily) };
+  return { m5: score(5), m15: score(15), h1: (hourly && trendScore(hourly, sessionVwap)) ?? score(60), d1: trendScore(daily) };
 }
 
 export type SetupInputs = {
@@ -117,6 +126,8 @@ export type SetupInputs = {
   sharesHeld: number;
   /** Next report date (YYYY-MM-DD) or null when unknown. */
   nextEarnings: string | null;
+  /** Next ex-dividend date (YYYY-MM-DD) within the calendar's window, or null. */
+  nextExDividend?: string | null;
   today: string;
 };
 
@@ -148,9 +159,17 @@ function ivRichness(m: OptionMetrics): { value: number; text: string; rich: bool
 
 function earningsNote(i: SetupInputs): { before: boolean | null; text: string | null } {
   const expiry = i.metrics?.atmExpiry;
-  if (!expiry || !i.nextEarnings) return { before: i.nextEarnings === null ? null : false, text: null };
+  // Without an expiry, or without a known report date, nothing can be said either way.
+  if (!expiry || !i.nextEarnings) return { before: null, text: null };
   const before = i.nextEarnings >= i.today && i.nextEarnings <= expiry;
   return { before, text: before ? `earnings on ${i.nextEarnings} fall before the ${expiry} expiry` : null };
+}
+
+/** The ex-dividend date if it falls from today up to the contract's expiry. */
+function exDividendBefore(i: SetupInputs): string | null {
+  const expiry = i.metrics?.atmExpiry;
+  const ex = i.nextExDividend;
+  return expiry && ex && ex >= i.today && ex <= expiry ? ex : null;
 }
 
 /** The three setups that pass their gates, best first. */
@@ -198,6 +217,11 @@ export function buildSetups(i: SetupInputs): OptionSetup[] {
       score -= EARNINGS_PENALTY.short_put;
       reasons.push(`caution: ${earn.text}`);
     }
+    const exDiv = exDividendBefore(i);
+    if (exDiv) {
+      score -= EX_DIVIDEND_PENALTY.short_put;
+      reasons.push(`note: ex-dividend ${exDiv} before expiry`);
+    }
     out.push({ strategy: "short_put", score: round1(clamp(score, 0, 100)), contract: m.atmPut, reasons });
   }
 
@@ -213,6 +237,11 @@ export function buildSetups(i: SetupInputs): OptionSetup[] {
     if (earn.text) {
       score -= EARNINGS_PENALTY.covered_call;
       reasons.push(`caution: ${earn.text}`);
+    }
+    const exDiv = exDividendBefore(i);
+    if (exDiv) {
+      score -= EX_DIVIDEND_PENALTY.covered_call;
+      reasons.push(`ex-dividend ${exDiv} before expiry: early assignment risk`);
     }
     out.push({ strategy: "covered_call", score: round1(clamp(score, 0, 100)), contract: m.atmCall, reasons });
   }
@@ -231,6 +260,7 @@ export function runOptionScan(symbols: string[], optionMetrics: (symbols: string
   const metrics = optionMetrics(symbols);
   const composites = compositeMap(symbols);
   const nowSec = Math.floor(now.getTime() / 1000);
+  const exDivs = nextExDividends(symbols, today);
   const earnings = new Map(calendarFor(symbols, today).map((e) => [e.symbol, e.nextEarningsDate ? new Date(e.nextEarningsDate * 1000).toISOString().slice(0, 10) : null]));
   const asOf = now.toISOString();
 
@@ -242,12 +272,17 @@ export function runOptionScan(symbols: string[], optionMetrics: (symbols: string
     const minute = minuteBars(symbol, nowSec - LOOKBACK_DAYS * 86_400, nowSec + 60).map((b) => ({ ...b }) as Bar);
     const daily = loadDaily(symbol);
     const dailyBars = daily.closes.map((c, i) => ({ ...toBar({ close: c, volume: daily.volumes[i] }), time: i }));
-    const momentum = momentumOf(minute, dailyBars);
+    // Today's running price joins the daily series until its own daily bar exists.
+    const lastMinute = minute[minute.length - 1];
+    if (lastMinute && daily.days.length > 0 && daily.days[daily.days.length - 1] < today && tradingDay(lastMinute.ts ?? 0) === today) {
+      dailyBars.push({ time: dailyBars.length, open: lastMinute.close, high: lastMinute.close, low: lastMinute.close, close: lastMinute.close, volume: 0 });
+    }
+    const momentum = momentumOf(minute, dailyBars, hourlySeries(symbol, minute, today, nowSec));
     const m = metrics.get(symbol) ?? null;
     const nextEarnings = earnings.get(symbol) ?? null;
     const live = getLiveScorecard(symbol);
     const rv = live?.factors.find((f) => f.key === "rel_volume")?.value ?? null;
-    const setups = buildSetups({ momentum, metrics: m, composite: composites.get(symbol) ?? null, relVolume: rv, sharesHeld: sharesHeld(symbol), nextEarnings, today });
+    const setups = buildSetups({ momentum, metrics: m, composite: composites.get(symbol) ?? null, relVolume: rv, sharesHeld: sharesHeld(symbol), nextEarnings, nextExDividend: exDivs.get(symbol) ?? null, today });
     const earn = m ? earningsNote({ momentum, metrics: m, composite: null, relVolume: null, sharesHeld: 0, nextEarnings, today }) : { before: null };
     cards.push({
       underlying: symbol,
