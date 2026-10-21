@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { db } from "../db.js";
-import "../history/store.js"; // creates the symbols (exchange listings) table
 import { isForeignSymbol } from "../history/universe.js";
 import { LISTED_EXCHANGES } from "../research/bulk-store.js";
 import type { UniverseSettings } from "../scan/contracts.js";
+import { listedSymbols } from "./listings.js";
 import { heldSymbols } from "./positions.js";
 
 // Which symbols the scans cover. The mode picks a base set (watchlists, FMP
@@ -96,18 +96,6 @@ function watchlistSymbols(ids: number[] | null): string[] {
       : db.prepare("SELECT DISTINCT symbol FROM watchlist_items WHERE watchlist_id IN (SELECT value FROM json_each(?))")
   ).all(...(ids === null ? [] : [JSON.stringify(ids)])) as Array<{ symbol: string }>;
   return rows.map((r) => r.symbol);
-}
-
-/**
- * Symbols that are US-listed securities: in the exchange listings (`symbols`)
- * or the FMP profiles. Keeps crypto (DOGE), forex and index tickers that
- * look like stocks out of the scans. Null when neither table is loaded yet.
- */
-function listedSymbols(): Set<string> | null {
-  const rows = db
-    .prepare("SELECT symbol FROM symbols WHERE active = 1 UNION SELECT symbol FROM bulk_profiles")
-    .all() as Array<{ symbol: string }>;
-  return rows.length > 0 ? new Set(rows.map((r) => r.symbol)) : null;
 }
 
 /** The mode's set plus holdings (stocks and option underlyings), US tickers only, sorted. */

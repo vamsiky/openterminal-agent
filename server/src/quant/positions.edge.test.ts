@@ -100,11 +100,24 @@ describe("option rows", () => {
     expect(errors.every((e) => /US-listed/.test(e.message))).toBe(true);
   });
 
-  // BUG: a single-letter exchange suffix passes as a US ticker. isForeignSymbol (history/universe.ts:150-153)
-  // only flags two-or-more letter suffixes (".US" style) and leading digits, so "VOD.L" (London) is accepted.
-  // BRK.B must stay valid, so the fix needs a suffix list rather than a regex alone.
-  it.fails("rejects a London listing such as VOD.L as an option underlying", () => {
-    expect(pos.parsePositionsCsv("symbol,quantity,expiry,strike,right\nVOD.L,1,2026-11-20,10,call").errors).toHaveLength(1);
+  // isForeignSymbol lets a single-letter suffix through (BRK.B must stay valid), so "VOD.L" (London) is caught by
+  // the listings check instead: a symbol that is in neither the exchange listings nor the FMP profiles is rejected.
+  it("rejects a London listing such as VOD.L as an option underlying once listings are loaded", async () => {
+    const { db } = await import("../db.js");
+    db.prepare("INSERT INTO symbols (symbol, active) VALUES ('BRK.B', 1), ('NVDA', 1)").run();
+    try {
+      const csv = "symbol,quantity,expiry,strike,right\nVOD.L,1,2026-11-20,10,call\nNVDA,1,2026-11-20,10,call\nBRK.B,1,2026-11-20,10,call";
+      const { errors } = pos.parsePositionsCsv(csv);
+      expect(errors.map((e) => e.line)).toEqual([2]);
+      expect(errors[0].message).toMatch(/US-listed/);
+      expect(pos.parsePositionsCsv("symbol,quantity\nVOD.L,5").errors).toHaveLength(1);
+    } finally {
+      db.prepare("DELETE FROM symbols WHERE symbol IN ('BRK.B', 'NVDA')").run();
+    }
+  });
+
+  it("skips the listings check while both listing tables are empty", () => {
+    expect(pos.parsePositionsCsv("symbol,quantity\nVOD.L,5").errors).toEqual([]);
   });
 
   it("rejects an option row with a strike of zero or without a right", () => {
@@ -131,11 +144,19 @@ describe("whole-file rejection", () => {
     expect(after.importedAt! >= before!).toBe(true);
   });
 
-  // BUG: a row with more cells than the header (e.g. an unquoted "1,000") is silently truncated:
-  // "NVDA,1,000" reads as quantity 1 and the extra cell is dropped. Expected: a line error.
-  // Actual: positions.ts parsePositionsCsv ignores cells beyond the header.
-  it.fails("rejects a row with more cells than the header", () => {
+  it("rejects a row with more cells than the header, but not trailing empty cells", () => {
     const { errors } = pos.parsePositionsCsv("symbol,quantity\nNVDA,1,000");
-    expect(errors).toHaveLength(1);
+    expect(errors).toEqual([{ line: 2, message: expect.stringMatching(/3 cells but the header has 2/) }]);
+    expect(pos.parsePositionsCsv("symbol,quantity\nNVDA,1,,\n").errors).toEqual([]);
+  });
+
+  it("rejects long and short lots of the same instrument, and still merges same-sign lots", () => {
+    const { errors } = pos.parsePositionsCsv("symbol,quantity,cost\nNVDA,10,100\nNVDA,-4,110");
+    expect(errors).toEqual([{ line: 3, message: "long and short lots of NVDA in one file; net them before importing" }]);
+    const occ = pos.parsePositionsCsv("symbol,quantity\nAAPL261120C00200000,1\nAAPL261120C00200000,-1");
+    expect(occ.errors).toHaveLength(1);
+    const same = pos.parsePositionsCsv("symbol,quantity,cost\nNVDA,-1,2\nNVDA,-3,4");
+    expect(same.errors).toEqual([]);
+    expect(same.positions[0]).toMatchObject({ quantity: -4, cost: 3.5 });
   });
 });

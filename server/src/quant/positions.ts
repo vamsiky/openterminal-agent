@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { isForeignSymbol } from "../history/universe.js";
+import { isUsListed, listedSymbols } from "./listings.js";
 import { parseOcc } from "../providers/alpaca-options.js";
 import type { OptionPosition, Position, StockPosition } from "../scan/contracts.js";
 
@@ -120,6 +120,8 @@ export function parsePositionsCsv(csv: string): ParseResult {
     return { positions: [], errors: [{ line: headerAt + 1, message: "the header row needs symbol and quantity columns" }] };
   }
 
+  const listed = listedSymbols();
+  const headerCells = fields(lines[headerAt]).length;
   const merged = new Map<string, Position>();
   for (let i = headerAt + 1; i < lines.length; i++) {
     if (lines[i].trim() === "") continue;
@@ -128,6 +130,11 @@ export function parsePositionsCsv(csv: string): ParseResult {
     const get = (name: string) => (col.has(name) ? f[col.get(name)!] ?? "" : "");
     const fail = (message: string) => errors.push({ line, message });
 
+    // A cell too many ("1,000" unquoted) would silently shift or drop data; trailing empty cells are fine.
+    if (f.length > headerCells && f.slice(headerCells).some((c) => c !== "")) {
+      fail(`the row has ${f.length} cells but the header has ${headerCells}; quote values that contain commas, like "1,000"`);
+      continue;
+    }
     const rawSymbol = get("symbol").toUpperCase().replace(/^O:/, "").replace(/\s+/g, "");
     if (!rawSymbol) {
       fail("symbol is empty");
@@ -186,13 +193,13 @@ export function parsePositionsCsv(csv: string): ParseResult {
           continue;
         }
       }
-      if (!TICKER.test(underlying) || isForeignSymbol(underlying)) {
+      if (!TICKER.test(underlying) || !isUsListed(underlying, listed)) {
         fail(`${underlying} is not a US-listed underlying`);
         continue;
       }
       position = { kind: "option", occ: occSymbol(underlying, expiry, right, strike), underlying, expiry, strike, right, quantity, cost, openedAt };
     } else {
-      if (!TICKER.test(rawSymbol) || isForeignSymbol(rawSymbol)) {
+      if (!TICKER.test(rawSymbol) || !isUsListed(rawSymbol, listed)) {
         fail(`${rawSymbol} is not a US-listed ticker`);
         continue;
       }
@@ -203,7 +210,9 @@ export function parsePositionsCsv(csv: string): ParseResult {
     const key = position.kind === "option" ? position.occ : position.symbol;
     const prev = merged.get(key);
     if (!prev) merged.set(key, position);
-    else {
+    else if (prev.quantity * position.quantity < 0) {
+      fail(`long and short lots of ${key} in one file; net them before importing`);
+    } else {
       const q = prev.quantity + position.quantity;
       const weights = Math.abs(prev.quantity) + Math.abs(position.quantity);
       prev.cost =
