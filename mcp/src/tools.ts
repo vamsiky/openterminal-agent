@@ -302,6 +302,47 @@ export const tools: Tool[] = [
       return apiGet(cfg, "/api/research/screen", { ...rest, fields: fields?.join(",") });
     },
   },
+  {
+    name: "ideas",
+    description:
+      "The app's current trade candidates from its scan engine (never orders). kind=stock: top-ranked stocks by multi-factor score (months horizon). " +
+      "kind=option: intraday-to-swing setups: long_call (buy call), short_put (sell cash-secured put), covered_call (sell call against owned shares); puts are only ever sold. " +
+      "Each idea has symbol, strategy, contract (OCC, options), score 0-100, rank, reasons, firstSeen/lastSeen.",
+    shape: {
+      kind: z.enum(["stock", "option"]).optional().describe("Default stock."),
+      limit: z.number().int().min(1).max(100).optional().describe("Max ideas, best first (default 25)."),
+    },
+    run: (a, cfg) => apiGet(cfg, "/api/scan/ideas", { kind: a.kind ?? "stock", status: "active", ...pick(a, ["limit"]) }),
+  },
+  {
+    name: "scorecard",
+    description:
+      "Scan-engine scorecards for one symbol: `stock` (nightly 0-100 composite, per-group scores for valuation/quality/growth/earnings/analysts/momentum, per-factor values and 20-day change), " +
+      "`live` (intraday momentum refresh) and `options` (momentum, IV metrics, earnings-before-expiry flag and option setups). Any part may be null when not scored.",
+    shape: { symbol },
+    run: (a, cfg) => apiGet(cfg, `/api/scan/scorecard/${enc(a.symbol)}`),
+  },
+  {
+    name: "universe",
+    description: "The symbols the scan engine scores (watchlists, sectors or whole market, plus holdings), the settings that define them, and scan job status.",
+    shape: {},
+    async run(_a, cfg) {
+      const [universe, symbols, status] = await Promise.all([
+        apiGet(cfg, "/api/scan/universe"),
+        apiGet(cfg, "/api/scan/universe/symbols"),
+        apiGet(cfg, "/api/scan/status"),
+      ]);
+      return { ...universe, symbols: symbols?.symbols, status };
+    },
+  },
+  {
+    name: "option_metrics",
+    description:
+      "Options-data metrics for one underlying from the 5-minute sweep: ATM IV, 30-day IV, IV rank/percentile, 20-day realised vol, implied move, term slope, put/call volume ratio, " +
+      "unusual volume contracts and the streamed ATM call/put quotes with delta.",
+    shape: { symbol },
+    run: (a, cfg) => apiGet(cfg, `/api/options-data/metrics/${enc(a.symbol)}`),
+  },
 ];
 
 /** Compact JSON, cut at `max` characters with a note on how to get the rest. */
