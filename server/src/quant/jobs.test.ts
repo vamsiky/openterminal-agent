@@ -60,10 +60,12 @@ describe("dueJobs", () => {
     const base = { "stock-nightly": at(7, 1), "ideas-screen": at(7, 2) };
     expect(jobs.dueJobs(at(10, 30), ran(base), () => false)).toEqual([]);
     expect(jobs.dueJobs(at(16, 20), ran(base))).toEqual([]);
-    expect(jobs.dueJobs(at(16, 1, 40), ran(base))).toEqual(["stock-intraday", "option-scan"]); // the 16:00 slot
-    // Early close at 13:00: the 13:00 slot is the last.
+    expect(jobs.dueJobs(at(15, 56, 40), ran({ ...base, "stock-intraday": at(15, 46) }))).toEqual(["option-scan"]); // the 15:55 slot is the last
+    expect(jobs.dueJobs(at(16, 0, 30), ran(base))).toEqual([]); // no run after the close
+    // Early close at 13:00: the 12:55 option slot is the last.
     const early = (day: string) => Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)), 17);
-    expect(jobs.dueJobs(at(13, 1, 40), ran(base), () => true, early)).toEqual(["stock-intraday", "option-scan"]);
+    expect(jobs.dueJobs(at(12, 56, 40), ran({ ...base, "stock-intraday": at(12, 46) }), () => true, early)).toEqual(["option-scan"]);
+    expect(jobs.dueJobs(at(13, 0, 30), ran(base), () => true, early)).toEqual([]);
     expect(jobs.dueJobs(at(13, 20), ran(base), () => true, early)).toEqual([]);
   });
 });

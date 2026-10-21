@@ -227,7 +227,7 @@ describe("end to end: holdings, nightly scorecards, ideas screen", () => {
     const idea = ideas.find((i) => i.symbol === "ENJ")!;
     expect(Math.abs(idea.score - card.stock.composite)).toBeLessThan(0.05);
     expect(card.stock.sector).toBe("Energy");
-    expect(card.stock.weightsVersion).toBe("stock-v1");
+    expect(card.stock.weightsVersion).toBe("stock-v2");
     expect(card.stock.groups.valuation).toBeCloseTo(100, 0); // P/E, EV/EBITDA and the rest all rank it first in its sector
     expect(card.stock.factors).toHaveLength(26);
     // Two factors (the EPS revisions) have no data in this seed, so coverage is 24 of 26.

@@ -92,8 +92,6 @@ const isWeekday = (weekday: string) => weekday !== "Sat" && weekday !== "Sun";
 
 /** First session scan, after the open's first minutes have bars. */
 const SESSION_START = { h: 9, m: 35 };
-/** How long after a slot's close a slot still runs (the 16:00 slot lands a minute or two later). */
-const AFTER_CLOSE_MS = 3 * 60_000;
 
 /**
  * Jobs due at `now`. `started(job)` is when the job last started (epoch ms);
@@ -120,13 +118,13 @@ export function dueJobs(
   const anchor = nyInstant(ny.date, 9, 30);
   const first = nyInstant(ny.date, SESSION_START.h, SESSION_START.m);
   const close = closeAt(ny.date);
-  if (t >= first && t <= close + AFTER_CLOSE_MS) {
+  if (t >= first && t <= close) {
     // Slots sit on the clock (:00, :05, ... / :00, :15, ...) counted from the open.
-    const slotOf = (min: number) => anchor + Math.floor((Math.min(t, close) - anchor) / (min * 60_000)) * min * 60_000;
+    const slotOf = (min: number) => anchor + Math.floor((t - anchor) / (min * 60_000)) * min * 60_000;
     const stockSlot = slotOf(15);
     const optionSlot = slotOf(5);
-    if (stockSlot >= first && t >= stockSlot + STOCK_OFFSET_MS && (started("stock-intraday") ?? 0) < stockSlot) due.push("stock-intraday");
-    if (optionSlot >= first && t >= optionSlot + OPTION_OFFSET_MS && (started("option-scan") ?? 0) < optionSlot) due.push("option-scan");
+    if (stockSlot >= first && stockSlot < close && t >= stockSlot + STOCK_OFFSET_MS && (started("stock-intraday") ?? 0) < stockSlot) due.push("stock-intraday");
+    if (optionSlot >= first && optionSlot < close && t >= optionSlot + OPTION_OFFSET_MS && (started("option-scan") ?? 0) < optionSlot) due.push("option-scan");
   }
   return due;
 }
