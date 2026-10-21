@@ -36,9 +36,9 @@ export function getWatchlist(name: string): string[] | null {
 }
 
 /** Every saved list, oldest first. */
-export function listWatchlists(): Array<{ name: string; symbols: string[] }> {
-  const lists = db.prepare("SELECT name FROM watchlists ORDER BY id").all() as Array<{ name: string }>;
-  return lists.map((l) => ({ name: l.name, symbols: getWatchlist(l.name) ?? [] }));
+export function listWatchlists(): Array<{ id: number; name: string; symbols: string[] }> {
+  const lists = db.prepare("SELECT id, name FROM watchlists ORDER BY id").all() as Array<{ id: number; name: string }>;
+  return lists.map((l) => ({ id: l.id, name: l.name, symbols: getWatchlist(l.name) ?? [] }));
 }
 
 export function deleteWatchlist(name: string): void {

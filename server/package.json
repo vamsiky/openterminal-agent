@@ -10,10 +10,12 @@
     "test": "vitest run",
     "lint": "eslint .",
     "history": "tsx src/history/cli.ts",
+    "backfill-iv": "tsx src/options/backfill-cli.ts",
     "watchlists": "tsx src/watchlists/cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
+    "@msgpack/msgpack": "^3.1.3",
     "better-sqlite3": "^13.0.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",

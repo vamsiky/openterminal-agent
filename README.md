@@ -278,6 +278,16 @@ Test with `npm test -w mcp` (mocked `fetch`).
 
 <br/>
 
+## Scan engine, positions and options data
+
+The API also scores the stock and option universe on a schedule and lists the best candidates in the Ideas widget. Ideas are candidates only: nothing places orders, and the scans read market data and write to the local database.
+
+- [Scan engine](docs/scan-engine.md): the universe (watchlists, sectors or the whole US market; holdings always included), the stock and options scorecards, the schedule, and the scan and positions endpoints.
+- [Positions CSV](docs/positions-csv.md): the file format for your holdings, with stock and option examples and how import errors are reported.
+- [Options data](docs/options-data.md): the live option stream, the 5-minute chain sweep, the metrics it computes, the IV history backfill, and storage and retention.
+
+<br/>
+
 ## 🗺️ Roadmap
 
 - [ ] Chart drawing tools & multi‑asset comparison overlay

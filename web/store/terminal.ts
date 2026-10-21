@@ -20,7 +20,8 @@ export type WidgetType =
   | "insider"
   | "fundamentals"
   | "tv"
-  | "recap";
+  | "recap"
+  | "ideas";
 
 export type WidgetInstance = {
   id: string;
@@ -94,6 +95,7 @@ const SIZE_BY_TYPE: Record<WidgetType, { w: number; h: number }> = {
   fundamentals: { w: 7, h: 12 },
   tv: { w: 6, h: 11 },
   recap: { w: 5, h: 12 },
+  ideas: { w: 8, h: 12 },
 };
 
 const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "SPY"];

@@ -41,7 +41,7 @@ export function maxRequestsPerMinute(raw = process.env.ALPACA_MAX_REQ_PER_MIN): 
 // ALPACA_MAX_REQ_PER_MIN (default 180, under the 200/min of Alpaca's basic
 // plan; paid plans allow far more and can raise it).
 let nextSlot = 0;
-async function throttle(): Promise<void> {
+export async function throttle(): Promise<void> {
   const gap = 60_000 / maxRequestsPerMinute();
   const now = Date.now();
   const wait = Math.max(0, nextSlot - now);

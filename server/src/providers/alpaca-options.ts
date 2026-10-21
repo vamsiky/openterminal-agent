@@ -74,6 +74,8 @@ function toRow(contract: string, occ: OccSymbol, snap: any, underlyingPrice: num
 
 export type ChainFilter = {
   expiry?: string; // YYYY-MM-DD
+  expiryMin?: string; // inclusive range, YYYY-MM-DD
+  expiryMax?: string;
   type?: "call" | "put";
   strikeMin?: number;
   strikeMax?: number;
@@ -82,16 +84,24 @@ export type ChainFilter = {
 const PAGE_LIMIT = 1000;
 const MAX_PAGES = 10;
 
-/** Walk the snapshot pages for an underlying; stops at MAX_PAGES so a huge chain can't run away. */
-async function snapshotPages(underlying: string, filter: ChainFilter): Promise<Record<string, any>> {
+/** OPRA by default; ALPACA_OPTIONS_FEED=indicative for plans without OPRA. */
+export function optionsFeed(): string {
+  return process.env.ALPACA_OPTIONS_FEED?.trim() || "opra";
+}
+
+/** Walk the snapshot pages for an underlying; stops at maxPages so a huge chain can't run away. */
+async function snapshotPages(underlying: string, filter: ChainFilter, maxPages = MAX_PAGES, stats?: { requests: number }): Promise<Record<string, any>> {
   const out: Record<string, any> = {};
   let pageToken: string | undefined;
-  for (let page = 0; page < MAX_PAGES; page++) {
+  for (let page = 0; page < maxPages; page++) {
+    if (stats) stats.requests++;
     const data = await dataFetch(`/v1beta1/options/snapshots/${encodeURIComponent(underlying)}`, {
-      feed: "opra",
+      feed: optionsFeed(),
       limit: String(PAGE_LIMIT),
       type: filter.type,
       expiration_date: filter.expiry,
+      expiration_date_gte: filter.expiryMin,
+      expiration_date_lte: filter.expiryMax,
       strike_price_gte: filter.strikeMin === undefined ? undefined : String(filter.strikeMin),
       strike_price_lte: filter.strikeMax === undefined ? undefined : String(filter.strikeMax),
       page_token: pageToken,
@@ -101,6 +111,16 @@ async function snapshotPages(underlying: string, filter: ChainFilter): Promise<R
     if (!pageToken) break;
   }
   return out;
+}
+
+/**
+ * Raw snapshots (latest quote/trade, day bar, greeks) for an underlying's
+ * contracts across an expiry range and strike band, keyed by OCC symbol.
+ * Used by the options sweep, which walks more pages than a chain view does;
+ * `stats.requests` counts the page requests made.
+ */
+export async function optionSnapshots(underlying: string, filter: ChainFilter, maxPages = 30, stats?: { requests: number }): Promise<Record<string, any>> {
+  return snapshotPages(underlying.toUpperCase(), filter, maxPages, stats);
 }
 
 async function underlyingPrice(symbol: string): Promise<number | null> {
@@ -148,4 +168,32 @@ export async function chain(underlying: string, filter: Omit<ChainFilter, "type"
     puts.sort((a, b) => a.strike! - b.strike!);
   }
   return { symbol, underlyingPrice: price, expirationDates, selectedDate, calls, puts };
+}
+
+export type OptionDayBar = { t: string; o: number; h: number; l: number; c: number; v: number };
+
+/**
+ * Daily bars for many option contracts (expired ones too, back to early 2024)
+ * between two dates, all pages. Contracts with no bars are absent from the
+ * result. `stats.requests` counts the page requests.
+ */
+export async function optionDailyBars(symbols: string[], start: string, end: string, stats?: { requests: number }, maxPages = 50): Promise<Record<string, OptionDayBar[]>> {
+  const out: Record<string, OptionDayBar[]> = {};
+  let pageToken: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    if (stats) stats.requests++;
+    const data = await dataFetch("/v1beta1/options/bars", {
+      symbols: symbols.join(","),
+      timeframe: "1Day",
+      start,
+      end,
+      limit: "10000",
+      sort: "asc",
+      page_token: pageToken,
+    });
+    for (const [occ, bars] of Object.entries<OptionDayBar[]>(data?.bars ?? {})) (out[occ] ??= []).push(...bars);
+    pageToken = data?.next_page_token ?? undefined;
+    if (!pageToken) break;
+  }
+  return out;
 }
