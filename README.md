@@ -103,7 +103,7 @@ Every source below allows automated use under its terms. Results are cached with
 | Screener / heatmap / sectors | S&P 500 + Nasdaq‑100 (Wikipedia) × Alpaca prices; sector and market cap from FMP (if keyed), else SEC EDGAR (SIC‑derived sector, not GICS) | Europe is not available |
 | Options chain | Alpaca options snapshots (OPRA) | Open interest is empty |
 | News | Alpaca News (Benzinga) | — |
-| Macro (Treasury yields, VIX; euro‑area yields, ECB rate, HICP) | FRED, ECB | — |
+| Macro (Treasury yields, VIX, fed funds, CPI; euro‑area yields, ECB rate, HICP) | FMP (if keyed): treasury rates, ^VIX, federal funds, CPI year over year; ECB | FRED is the per-series fallback for the US yields, VIX, fed funds (FEDFUNDS) and CPI (CPIAUCSL). Without FMP, FRED fills them all. The `sources` map of `/api/macro` names where each value came from. |
 | Economic calendar (dates, times) | BLS, BEA, Federal Reserve, EIA; FRED release dates with `FRED_API_KEY` | — |
 | Economic calendar (forecast, previous, actual) | FMP (if keyed) | Empty without FMP |
 | Earnings calendar and history | FMP (requires `FMP_API_KEY`) | The widget says the key is missing |
