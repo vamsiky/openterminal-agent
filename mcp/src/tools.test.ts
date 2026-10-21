@@ -45,6 +45,7 @@ describe("tool list", () => {
     expect(list.tools.map((t) => t.name)).toEqual([
       "research_summary", "fundamentals", "ownership", "transcripts", "search_transcripts", "content",
       "quote", "price_history", "earnings_calendar", "estimate_revisions", "economic_calendar", "market", "screen",
+      "ideas", "scorecard", "universe", "option_metrics",
     ]);
     for (const t of list.tools) {
       expect(t.annotations?.readOnlyHint).toBe(true);
@@ -150,6 +151,40 @@ describe("URLs", () => {
     expect(Object.fromEntries(last().searchParams)).toEqual({
       sector: "Technology", marketCapMin: "100000000000", sort: "marketCap", order: "desc", limit: "10", fields: "priceToEarningsRatioTTM,upsidePercent",
     });
+  });
+});
+
+describe("scan tools", () => {
+  it("ideas defaults to active stock ideas and forwards kind and limit", async () => {
+    await call("ideas", {});
+    expect(last().pathname + last().search).toBe("/api/scan/ideas?kind=stock&status=active");
+    await call("ideas", { kind: "option", limit: 5 });
+    expect(last().pathname + last().search).toBe("/api/scan/ideas?kind=option&status=active&limit=5");
+  });
+
+  it("scorecard and option_metrics hit their symbol routes", async () => {
+    await call("scorecard", { symbol: "BRK.B" });
+    expect(last().pathname).toBe("/api/scan/scorecard/BRK.B");
+    await call("option_metrics", { symbol: "AAPL" });
+    expect(last().pathname).toBe("/api/options-data/metrics/AAPL");
+  });
+
+  it("universe merges settings, symbols and status", async () => {
+    respond = (url) => ({
+      body: url.pathname.endsWith("/symbols") ? { symbols: ["AAPL"] } : url.pathname.endsWith("/status") ? { runs: {} } : { settings: { mode: "watchlists" }, symbolCount: 1 },
+    });
+    const { text } = await call("universe", {}, { ...cfg, maxChars: 100_000 });
+    expect(JSON.parse(text)).toEqual({ settings: { mode: "watchlists" }, symbolCount: 1, symbols: ["AAPL"], status: { runs: {} } });
+    expect(calls.map((c) => c.url.pathname).sort()).toEqual(["/api/scan/status", "/api/scan/universe", "/api/scan/universe/symbols"]);
+  });
+
+  it("rejects bad kind and limit before any request", async () => {
+    for (const args of [{ kind: "put" }, { limit: 0 }]) {
+      let rejected = false;
+      try { rejected = (await call("ideas", args)).res.isError === true; } catch { rejected = true; }
+      expect(rejected).toBe(true);
+    }
+    expect(calls).toHaveLength(0);
   });
 });
 
