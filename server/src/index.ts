@@ -8,6 +8,12 @@ import { watchlistsRouter } from "./routes/watchlists.js";
 import { barsRouter } from "./routes/bars.js";
 import { estimatesRouter } from "./routes/estimates.js";
 import { researchRouter } from "./routes/research/index.js";
+import { scanRouter } from "./routes/scan.js";
+import { positionsRouter } from "./routes/positions.js";
+import { optionsDataRouter } from "./routes/options-data.js";
+import { startQuantJobs, universeByPriority } from "./quant/jobs.js";
+import { stockHoldings, optionHoldings } from "./quant/positions.js";
+import { startOptionsJobs } from "./options/jobs.js";
 import { startEstimateCapture } from "./estimates/capture.js";
 import { startBulkJobs } from "./research/bulk-store.js";
 import { startContentJobs } from "./research/transcripts-job.js";
@@ -57,6 +63,10 @@ app.use("/api/watchlists", requireApiKey, watchlistsRouter);
 app.use("/api/estimates", requireApiKey, estimatesRouter);
 // FMP research datasets for the analysis agents (routes/research/).
 app.use("/api/research", requireApiKey, researchRouter);
+// Quant scans and ideas, broker positions, and the options data layer (quant/, options/).
+app.use("/api/scan", requireApiKey, scanRouter);
+app.use("/api/positions", requireApiKey, positionsRouter);
+app.use("/api/options-data", requireApiKey, optionsDataRouter);
 // Locally stored price history (history/); read-only, no provider calls.
 app.use("/api/bars", barsRouter);
 app.use(
@@ -92,3 +102,6 @@ startEstimateCapture();
 startBulkJobs();
 startContentJobs();
 live.startLiveFeed();
+// quant/ and options/ never import each other; they meet here.
+const options = startOptionsJobs({ underlyings: universeByPriority, optionHoldings, stockHoldings });
+startQuantJobs({ optionMetrics: options.latestOptionMetrics, optionsStatus: options.status });
