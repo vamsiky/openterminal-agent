@@ -19,6 +19,7 @@ beforeAll(async () => {
   jobs = await import("../options/jobs.js");
   const { optionsDataRouter } = await import("./options-data.js");
   const app = express();
+  app.use(express.json());
   app.use("/api/options-data", optionsDataRouter);
   server = app.listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
@@ -46,6 +47,11 @@ describe("/api/options-data", () => {
     expect((await get("/stream")).body).toEqual({ status: null, contracts: [] });
   });
 
+  it("answers backfill-iv with 503 when the jobs are not running", async () => {
+    const res = await fetch(`${base}/backfill-iv`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(res.status).toBe(503);
+  });
+
   it("serves the latest metrics, 404 when none", async () => {
     store.saveOptionMetrics({
       underlying: "SPY", asOf: "2026-10-21T15:00:00Z", price: 500, atmExpiry: null, atmCall: null, atmPut: null, atmIv: 0.2, iv30: 0.21,
@@ -66,6 +72,29 @@ describe("/api/options-data", () => {
     expect((await get("/iv/ivx")).body.history.map((r: any) => r.day)).toEqual(["2026-10-19", "2026-10-20", "2026-10-21"]);
     expect((await get("/iv/ivx?days=2")).body.history).toHaveLength(2);
     expect((await get("/iv/ivx?days=0")).status).toBe(400);
+  });
+
+  it("starts a backfill and refuses a second while it runs", async () => {
+    process.env.OPTIONS_STREAM = "0";
+    process.env.OPTIONS_SWEEP = "0";
+    process.env.OPTIONS_BACKFILL = "0";
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    // One day of closes and a held fetch, so the first backfill stays running.
+    jobs.startOptionsJobs(
+      { underlyings: () => [], optionHoldings: () => [], stockHoldings: () => [] },
+      {},
+      { closes: () => [{ day: "2026-09-01", close: 100 }], today: "2026-09-02", bars: async () => ({}), pause: () => gate, write: () => undefined }
+    );
+    const post = (body: unknown) => fetch(`${base}/backfill-iv`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    expect((await post({ symbols: ["held"] })).status).toBe(202);
+    const second = await post({ symbols: ["held"] });
+    expect(second.status).toBe(409);
+    expect((await second.json()).backfill.running).toBe(true);
+    expect((await post({ symbols: "SPY" })).status).toBe(400);
+    release();
+    await new Promise((r) => setTimeout(r, 100));
+    expect((await post({})).status).toBe(202); // nothing needs a backfill: finishes at once
   });
 
   it("serves minute bars in a range", async () => {
