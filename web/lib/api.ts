@@ -34,16 +34,6 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
-export async function apiPut<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw await failure(res);
-  return res.json();
-}
-
 /** True when a route answered 503 because FMP_API_KEY isn't set. */
 export function needsFmpKey(error: unknown): boolean {
   return error instanceof ApiError && error.status === 503 && /FMP_API_KEY/.test(error.message);

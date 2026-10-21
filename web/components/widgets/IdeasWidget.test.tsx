@@ -97,11 +97,11 @@ describe("IdeasWidget", () => {
     expect(await screen.findByText(/412 contracts streamed/)).toBeTruthy();
   });
 
-  it("saves universe settings with PUT", async () => {
+  it("saves universe settings with POST", async () => {
     const settings = { mode: "watchlists", watchlistIds: null, sectors: [], industries: [], minPrice: 5, minAvgDollarVolume: 20_000_000, requireOptions: true };
     table = [
       ["/api/scan/ideas", () => reply({ asOf: null, ideas: [] })],
-      ["/api/scan/universe", (init) => reply({ settings: init?.method === "PUT" ? { ...settings, ...JSON.parse(String(init.body)) } : settings, symbolCount: 42 })],
+      ["/api/scan/universe", (init) => reply({ settings: init?.method === "POST" ? { ...settings, ...JSON.parse(String(init.body)) } : settings, symbolCount: 42 })],
       ["/api/scan/sectors", () => reply({ sectors: ["Technology"], industries: [] })],
       ["/api/watchlists", () => reply([{ id: 3, name: "core", symbols: ["AAPL"] }])],
       ["/api/positions", () => reply({ importedAt: null, positions: [] })],
@@ -111,7 +111,7 @@ describe("IdeasWidget", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Whole market" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText(/Saved: 42 symbols/);
-    const put = calls.find((c) => c.init?.method === "PUT")!;
+    const put = calls.find((c) => c.init?.method === "POST")!;
     expect(JSON.parse(String(put.init!.body)).mode).toBe("market");
   });
 

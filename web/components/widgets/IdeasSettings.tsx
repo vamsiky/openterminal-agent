@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, apiGet, apiPost, apiPut } from "../../lib/api";
+import { ApiError, apiGet, apiPost } from "../../lib/api";
 import { ago, type ImportError, type PositionsResponse, type UniverseSettings } from "../../lib/ideas";
 import ErrorNote from "../ErrorNote";
 
@@ -47,7 +47,7 @@ export default function IdeasSettings() {
     if (!draft) return;
     setSaved("Saving…");
     try {
-      const res = await apiPut<UniverseResponse>("/api/scan/universe", draft);
+      const res = await apiPost<UniverseResponse>("/api/scan/universe", draft);
       setDraft(res.settings);
       client.setQueryData(["scan-universe"], res);
       client.invalidateQueries({ queryKey: ["ideas"] });
