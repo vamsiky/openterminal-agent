@@ -26,6 +26,8 @@ export type FactorDef = {
   lowerBetter?: boolean;
   /** A zero or negative raw value is the worst possible (a P/E of -5 is not cheap). */
   positiveOnly?: boolean;
+  /** Ranked against the whole US market, not the stock's sector (cross-sector strength). */
+  market?: boolean;
 };
 
 export const FACTORS: FactorDef[] = [
@@ -53,8 +55,8 @@ export const FACTORS: FactorDef[] = [
   { key: "vs_sma50", group: "momentum", label: "price vs 50-day average" },
   { key: "vs_sma200", group: "momentum", label: "price vs 200-day average" },
   { key: "rsi14", group: "momentum", label: "RSI(14)" },
-  { key: "rs_spy", group: "momentum", label: "strength vs SPY" },
-  { key: "rs_sector", group: "momentum", label: "strength vs sector ETF" },
+  { key: "rs_spy", group: "momentum", label: "6-month excess return over SPY, market-wide", market: true },
+  { key: "rs_sector", group: "momentum", label: "3-month excess return over its sector ETF, market-wide", market: true },
 ];
 
 /** Added to the momentum group by the 15-minute pass only; scored with fixed maps, not percentiles. */
@@ -184,7 +186,7 @@ function scoreFactor(dists: Dists, def: FactorDef, sector: string, raw: number |
   const v = rankValue(def, raw);
   const d = dists.get(def.key);
   if (v === null || !d) return null;
-  const peers = d.bySector.get(sector);
+  const peers = def.market ? undefined : d.bySector.get(sector);
   const sample = peers && peers.length >= MIN_PEERS ? peers : d.all;
   return sample.length === 0 ? null : percentile(sample, v);
 }
@@ -301,11 +303,11 @@ export function loadDaily(symbol: string): Daily {
 
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 
-type Bench = { spy6m: number | null; etf6m: Map<string, number | null> };
+type Bench = { spy6m: number | null; etf3m: Map<string, number | null> };
 
 function loadBench(): Bench {
-  const six = (s: string) => periodReturn(loadDaily(s).closes, 126);
-  return { spy6m: six("SPY"), etf6m: new Map(Object.values(SECTOR_ETF).map((e) => [e, six(e)])) };
+  const back = (s: string, days: number) => periodReturn(loadDaily(s).closes, days);
+  return { spy6m: back("SPY", 126), etf3m: new Map(Object.values(SECTOR_ETF).map((e) => [e, back(e, 63)])) };
 }
 
 /** Momentum factors from closes (oldest first, the last being the price in force). */
@@ -320,7 +322,8 @@ export function momentumRaw(closes: number[], sector: string, bench: Bench): Rec
   const bars: Bar[] = closes.slice(-120).map((c) => ({ open: c, high: c, low: c, close: c, volume: 0 }));
   const r = n >= 30 ? rsi(bars, 14) : [];
   const etf = SECTOR_ETF[sector];
-  const etf6 = etf ? bench.etf6m.get(etf) ?? null : null;
+  const r3 = periodReturn(closes, 63);
+  const etf3 = etf ? bench.etf3m.get(etf) ?? null : null;
   return {
     ret_12_1: r12,
     ret_6m: r6,
@@ -328,7 +331,7 @@ export function momentumRaw(closes: number[], sector: string, bench: Bench): Rec
     vs_sma200: s200 ? price / s200 - 1 : null,
     rsi14: r.length > 0 ? r[r.length - 1].value : null,
     rs_spy: r6 !== null && bench.spy6m !== null ? r6 - bench.spy6m : null,
-    rs_sector: r6 !== null && etf6 !== null ? r6 - etf6 : null,
+    rs_sector: r3 !== null && etf3 !== null ? r3 - etf3 : null,
   };
 }
 
@@ -589,16 +592,16 @@ export function runIntradayStockScan(symbols: string[], now = new Date()): Intra
   const { dists } = cache;
   // Benchmarks move intraday too.
   const livePrice = (s: string, daily: Daily) => liveQuote(s, s, now)?.price ?? daily.closes[daily.closes.length - 1];
-  const bench: Bench = { spy6m: null, etf6m: new Map() };
-  const withLive = (s: string): number | null => {
+  const bench: Bench = { spy6m: null, etf3m: new Map() };
+  const withLive = (s: string, days: number): number | null => {
     const d = loadDaily(s);
     if (d.closes.length === 0) return null;
     const p = livePrice(s, d);
     const closes = d.days[d.days.length - 1] >= today ? [...d.closes.slice(0, -1), p] : [...d.closes, p];
-    return periodReturn(closes, 126);
+    return periodReturn(closes, days);
   };
-  bench.spy6m = withLive("SPY");
-  for (const e of Object.values(SECTOR_ETF)) bench.etf6m.set(e, withLive(e));
+  bench.spy6m = withLive("SPY", 126);
+  for (const e of Object.values(SECTOR_ETF)) bench.etf3m.set(e, withLive(e, 63));
 
   const day = latestScorecardDay();
   const nightly = new Map<string, CardRow>();

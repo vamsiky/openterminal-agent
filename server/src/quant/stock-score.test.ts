@@ -100,6 +100,10 @@ describe("nightly scorecards", () => {
     const m = (k: string) => t0.factors.find((f) => f.key === k)!;
     expect(m("ret_6m").value).toBeCloseTo((50 + 299 * 0.5) / (50 + 173 * 0.5) - 1, 6);
     expect(m("vs_sma50").value!).toBeGreaterThan(0);
+    // Relative strength: 6-month excess over flat SPY, 3-month excess over the flat sector ETF (XLK), both ranked market-wide.
+    expect(m("rs_spy").value).toBeCloseTo(m("ret_6m").value!, 9);
+    expect(m("rs_sector").value).toBeCloseTo((50 + 299 * 0.5) / (50 + 236 * 0.5) - 1, 6);
+    expect(t0.weightsVersion).toBe("stock-v2");
     expect(t0.groups.momentum).not.toBeNull();
     expect(t0.groups.analysts).toBeNull();
     expect(t0.composite).not.toBeNull();
