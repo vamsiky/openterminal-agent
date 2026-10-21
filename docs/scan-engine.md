@@ -183,8 +183,13 @@ The engine checks three setups for each underlying. Each setup gets a score from
 
 **Buy call (`long_call`)**
 
-- Required: the average of the 15-minute and hourly trends is at least 40, both are above zero, and the daily trend is not negative.
-- Score: a base of 40, plus up to 25 for stronger momentum, plus up to 10 for the daily trend. Up to 15 more for cheap implied volatility, and up to 10 for relative volume. A call loses 25 points when earnings fall before its expiry.
+- Required: the average of the 15-minute and hourly trends is at least 40, both are above zero, and the daily trend is at least 25 (a real uptrend, not just a flat one).
+- Score: a base of 40, plus up to 25 for stronger momentum, plus up to 10 for the daily trend. Up to 15 more for cheap implied volatility, and up to 10 for relative volume. A call loses 25 points when earnings fall before its expiry, and it loses the stretch penalty below.
+- Stretch guard: a call bought after the stock has already run too far today is penalised. Three conditions are checked, and each one met costs 10 points, capped at 30 in total:
+  - the last price is more than 2 ATRs above the session VWAP (ATR is the 14-period average true range of 15-minute bars);
+  - the 15-minute RSI(14) is above 75;
+  - today's move from the previous close is more than 1.5 times the stock's normal daily move. The normal move is hv20 divided by the square root of 252, or the daily ATR as a percent of price when hv20 is unknown.
+  The reason reads, for example, `stretched: 2.4 ATR above VWAP, 15-min RSI 78: consider waiting for a pullback`.
 - Contract: the streamed ATM call.
 
 **Sell cash-secured put (`short_put`)**
@@ -218,10 +223,11 @@ Ideas are stored in the `ideas` table. Each idea has a `status` of `active` or `
 ### Stock ideas
 
 - **When.** The screen runs right after each nightly run, at 07:00 and 16:30 New York time on weekdays. A fresh install runs it once at startup.
-- **Who.** The 25 highest composites in the universe, among stocks with a coverage of at least 0.6.
+- **Who.** The 25 highest composites in the universe, among stocks with a coverage of at least 0.6. The screen looks at the top 75 first, so that removing a second share class still leaves 25.
+- **One listing per company.** When two share classes of one company rank high (for example GOOG and GOOGL), only the one with the higher dollar volume (price times average volume) stays. Companies are matched by CIK, or by company name when a stock has no CIK.
 - **Drop rule.** An active stock idea that is not in the top 25 at a screen is marked dropped.
 - **Between screens.** Each intraday scan refreshes the score, the reasons and the rank of every active stock idea from its live card.
-- **Reasons.** The three strongest groups, each with its score and its best factor against sector peers. When the next earnings date is less than 30 days away, the date is added.
+- **Reasons.** The three strongest groups, each with its score and its best factor, read as `against sector peers`, or `against the whole market` for the two market-wide relative-strength factors. When the next earnings date is less than 30 days away, the date is added.
 
 ### Option ideas
 
@@ -254,7 +260,7 @@ All times are New York time. Jobs run on trading days only, using the Alpaca tra
 | Job | When | Notes |
 | --- | --- | --- |
 | Dividend calendar | Once a day, when the server is running | Upcoming ex-dividend dates for the next 60 days, from FMP. |
-| Hourly bars | 07:30, once a day | Hourly bars for the universe. A failure is retried after an hour. |
+| Hourly bars | 07:30 | Each symbol is asked for once a day. The first run of the day covers every symbol not yet asked for that day. Later runs fetch only symbols with no bars cached and not asked today, such as a new listing. A run cut short resumes where it stopped. A failure is retried after an hour. |
 | Nightly stock scorecards | 07:00 and 16:30 | Every US stock with a profile. Runs on weekdays. |
 | Stock ideas screen | Right after each nightly run | |
 | Intraday stock scan | 09:45, 10:00, … up to 15:45 | Every 15 minutes, starting 15 minutes after the open. Each run starts about 20 seconds into its slot. |

@@ -69,6 +69,28 @@ describe("stock ideas", () => {
     expect(ideas.listIdeas({ kind: "stock", status: "dropped" }).map((i) => i.symbol)).toEqual(["S24"]);
   });
 
+  it("words market-wide factors as against the whole market", () => {
+    const card = { symbol: "S99", asOf: "", sector: "Technology", industry: null, composite: 80, groups: { momentum: 90 }, coverage: 1, weightsVersion: "stock-v2",
+      factors: [{ key: "rs_spy", group: "momentum", value: 0.2, score: 97, change: null }, { key: "ret_6m", group: "momentum", value: 0.2, score: 80, change: null }] };
+    expect(ideas.stockReasons(card, "2026-10-21")[0]).toBe("momentum 90/100; best: 6-month excess return over SPY, 97/100 against the whole market");
+    card.factors[0].score = 50;
+    expect(ideas.stockReasons(card, "2026-10-21")[0]).toBe("momentum 90/100; best: 6-month return, 80/100 against sector peers");
+  });
+
+  it("keeps one listing per company: the share class with the higher dollar volume", () => {
+    const profile = db.prepare(
+      `INSERT INTO bulk_profiles (symbol, company_name, exchange, sector, industry, country, price, market_cap, average_volume, is_etf, is_fund, is_adr, is_actively_trading, data, updated_at)
+       VALUES (?, ?, 'NASDAQ', 'Technology', 'x', 'US', 100, 1e9, ?, 0, 0, 0, 1, ?, '')`
+    );
+    profile.run("GOOG", "Alphabet Inc.", 20_000_000, '{"cik":"0001652044"}');
+    profile.run("GOOGL", "Alphabet Inc. Class A", 30_000_000, '{"cik":"0001652044"}');
+    profile.run("NOCIK1", "Same Name Corp", 1_000_000, "{}");
+    profile.run("NOCIK2", "Same Name Corp", 5_000_000, "{}");
+    profile.run("LONER", "Loner", 1, "{}");
+    const cards = ["GOOG", "NOCIK1", "GOOGL", "LONER", "NOCIK2", "UNKNOWN"].map((symbol) => ({ symbol }));
+    expect(ideas.onePerCompany(cards).map((c) => c.symbol)).toEqual(["LONER", "NOCIK2", "GOOGL", "UNKNOWN"].sort((a, b) => cards.findIndex((c) => c.symbol === a) - cards.findIndex((c) => c.symbol === b)));
+  });
+
   it("re-scores active stock ideas from the live cards", () => {
     db.prepare(
       "INSERT OR REPLACE INTO scorecards_live (symbol, as_of, sector, industry, composite, groups, factors, coverage, weights_version, rank) VALUES ('S01', ?, 'Technology', 'x', 99.5, '{\"momentum\":99}', '{}', 0.9, 'stock-v1', 1)"
@@ -122,5 +144,15 @@ describe("option ideas", () => {
     const list = ideas.listIdeas({ kind: "option", limit: 100 });
     expect(list.slice(0, 20).map((i) => i.symbol)).toEqual(Array.from({ length: 20 }, (_, i) => `X${String(i).padStart(2, "0")}`));
     expect(list.slice(20).every((i) => !i.symbol.startsWith("X"))).toBe(true); // ideas that missed this scan once are carried below
+  });
+});
+
+describe("share classes in the screen", () => {
+  it("screens one listing per company", () => {
+    seedCards({ GOOG: 95.5, GOOGL: 95.4 }, "2026-10-21");
+    ideas.runStockScreen(["GOOG", "GOOGL"], later(60 * 9));
+    const active = ideas.listIdeas({ kind: "stock", limit: 100 }).map((i) => i.symbol);
+    expect(active).toContain("GOOGL");
+    expect(active).not.toContain("GOOG");
   });
 });

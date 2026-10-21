@@ -1,8 +1,18 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { JobName } from "./jobs.js";
+
+let failBars = false;
+vi.mock("../providers/alpaca.js", async (orig) => ({
+  ...(await orig<typeof import("../providers/alpaca.js")>()),
+  isConfigured: () => true,
+  stockBars: async function* () {
+    if (failBars) throw new Error("alpaca 500");
+    yield {};
+  },
+}));
 
 let tmpDir: string;
 let jobs: typeof import("./jobs.js");
@@ -101,5 +111,31 @@ describe("stop", () => {
     handle!.stop();
     expect(jobs.quantDeps()).toBeNull();
     expect(jobs.runJob("stock-nightly")).toBe(false);
+  });
+});
+
+describe("runHourlyIfNeeded", () => {
+  const noon = new Date("2026-10-21T16:00:00Z"); // 12:00 New York, a Wednesday
+
+  it("closes out its run record on failure, waits an hour, and does not repeat once the symbols were asked for", async () => {
+    db.prepare("INSERT OR IGNORE INTO watchlists (id, name) VALUES (1, 'L')").run();
+    db.prepare("INSERT OR IGNORE INTO watchlist_items (watchlist_id, symbol, position) VALUES (1, 'AAA', 0), (1, 'BBB', 1)").run();
+    expect(await jobs.runHourlyIfNeeded(new Date("2026-10-21T10:00:00Z"))).toBe(false); // 06:00, before 07:30
+    failBars = true;
+    expect(await jobs.runHourlyIfNeeded(noon)).toBe(true);
+    let run = jobs.lastRuns()["hourly-bars"];
+    expect(run).toMatchObject({ status: "error", error: "alpaca 500" });
+    expect(run.finished_at).not.toBeNull();
+    expect(run.duration_ms).not.toBeNull();
+    expect(run.symbols).toBeGreaterThan(0);
+    expect(await jobs.runHourlyIfNeeded(new Date(noon.getTime() + 60_000))).toBe(false); // an hour's wait
+
+    failBars = false;
+    expect(await jobs.runHourlyIfNeeded(new Date(noon.getTime() + 2 * 3_600_000))).toBe(true);
+    run = jobs.lastRuns()["hourly-bars"];
+    expect(run).toMatchObject({ status: "ok", error: null });
+    expect(run.finished_at).not.toBeNull();
+    // Alpaca had no bars for either symbol, yet they were asked for today: nothing more to do.
+    expect(await jobs.runHourlyIfNeeded(new Date(noon.getTime() + 4 * 3_600_000))).toBe(false);
   });
 });
