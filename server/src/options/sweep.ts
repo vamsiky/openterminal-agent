@@ -1,12 +1,14 @@
 import { mapWithConcurrency } from "../concurrency.js";
 import { db } from "../db.js";
 import { tradingDay } from "../history/time.js";
-import { regularCloseAt, nyInstant } from "../live/session.js";
+import { regularCloseAt } from "../live/session.js";
+import { isTradingDay, sessionClose } from "../providers/alpaca-calendar.js";
 import { optionSnapshots, parseOcc, type ChainFilter } from "../providers/alpaca-options.js";
 import * as alpaca from "../providers/alpaca.js";
 import type { OptionMetrics, OptionPosition } from "../scan/contracts.js";
 import { greeks, impliedVol, midPrice, riskFreeRate, yearsToExpiry } from "./black-scholes.js";
 import { daysBetween, selectContracts, type ExpiryStrikes, type Pair, type Selection } from "./selection.js";
+import { ensureOpenInterest } from "./open-interest.js";
 import { ivHistory, ivRank, saveOptionMetrics, upsertIvDay } from "./store.js";
 
 // The 5-minute snapshot sweep: one chain snapshot per underlying (expiries up
@@ -53,7 +55,7 @@ export type ParsedContract = {
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
 /** Turn raw snapshots into contracts with our own IV and delta from the quote mid (Alpaca's IV only appears with a fresh quote). */
-export function parseSnapshots(snaps: Record<string, any>, price: number, nowMs: number, rate = riskFreeRate()): ParsedContract[] {
+export function parseSnapshots(snaps: Record<string, any>, price: number, nowMs: number, rate = riskFreeRate(), openInterest?: Map<string, number>): ParsedContract[] {
   const out: ParsedContract[] = [];
   for (const [occ, snap] of Object.entries(snaps)) {
     const p = parseOcc(occ);
@@ -68,7 +70,7 @@ export function parseSnapshots(snaps: Record<string, any>, price: number, nowMs:
     const delta = iv === null ? num(snap?.greeks?.delta) : greeks({ ...base, vol: iv }).delta;
     out.push({
       occ, expiry: p.expiry, right: p.type, strike: p.strike, bid, ask, mid,
-      volume: num(snap?.dailyBar?.v), openInterest: num(snap?.openInterest), iv, delta,
+      volume: num(snap?.dailyBar?.v), openInterest: openInterest?.get(occ) ?? num(snap?.openInterest), iv, delta,
     });
   }
   return out;
@@ -130,8 +132,8 @@ export const UNUSUAL_RATIO = 2;
 
 /**
  * Contracts trading at least twice their open interest and at least 500 lots.
- * Alpaca's market-data host serves no open interest today, so openInterest is
- * null and nothing is flagged until a source for it exists.
+ * Open interest comes from the contract reference data (open-interest.ts);
+ * a contract without it is never flagged.
  */
 export function unusualContracts(contracts: ParsedContract[]): OptionMetrics["unusual"] {
   return contracts
@@ -230,6 +232,8 @@ export type SweepDeps = {
   prices?: (symbols: string[]) => Promise<Map<string, number>>;
   snapshots?: (underlying: string, filter: ChainFilter, stats: { requests: number }) => Promise<Record<string, any>>;
   hv20?: (symbol: string) => number | null;
+  /** Today's open interest for the underlyings (cached per day); defaults to Alpaca's contract data. */
+  openInterest?: (underlyings: string[], day: string, expiryMax: string, stats: { requests: number }) => Promise<Map<string, number>>;
   live?: (occ: string) => LiveContractQuote | null;
   now?: () => number;
   /** The last selection's pairs, for strike hysteresis. */
@@ -264,7 +268,8 @@ async function stockPrices(symbols: string[]): Promise<Map<string, number>> {
 /** After 15:55 ET the sweep's iv30 is recorded as the day's value (later sweeps overwrite it). */
 export function recordsIvDay(nowMs: number): boolean {
   const day = tradingDay(nowMs / 1000);
-  return nowMs >= nyInstant(day, 15, 55) && nowMs <= regularCloseAt(day) + 10 * 60_000;
+  const close = sessionClose(day);
+  return isTradingDay(day) && nowMs >= close - 5 * 60_000 && nowMs <= close + 10 * 60_000;
 }
 
 export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
@@ -282,6 +287,13 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
   const fetchSnaps = deps.snapshots ?? ((u, f, st) => optionSnapshots(u, f, undefined, st));
   const expiryMax = new Date(Date.parse(`${day}T00:00:00Z`) + cfg.maxDte * 86_400_000).toISOString().slice(0, 10);
 
+  let oi = new Map<string, number>();
+  try {
+    oi = await (deps.openInterest ?? ((u, d, e, st) => ensureOpenInterest(u, d, e, st, started)))(underlyings, day, expiryMax, stats);
+  } catch (err) {
+    errors.push({ symbol: "open-interest", message: err instanceof Error ? err.message : String(err) });
+  }
+
   const parsed = new Map<string, ParsedContract[]>();
   await mapWithConcurrency(underlyings.filter((u) => prices.has(u)), cfg.concurrency, async (u) => {
     const price = prices.get(u)!;
@@ -290,7 +302,7 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
         expiryMin: day, expiryMax,
         strikeMin: price * (1 - cfg.strikeRange), strikeMax: price * (1 + cfg.strikeRange),
       }, stats);
-      parsed.set(u, parseSnapshots(snaps, price, started));
+      parsed.set(u, parseSnapshots(snaps, price, started, undefined, oi));
     } catch (err) {
       errors.push({ symbol: u, message: err instanceof Error ? err.message : String(err) });
     }

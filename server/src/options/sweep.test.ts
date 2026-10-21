@@ -100,6 +100,8 @@ describe("runSweep", () => {
         return fakeChain(u, 100.4, vols, 600);
       },
       hv20: () => 0.25,
+      // 600 lots traded in the fake chain: AAA ATM call has 250 OI (flagged), the put 400 (not).
+      openInterest: async () => new Map([["AAA261030C00100000", 250], ["AAA261030P00100000", 400]]),
       now: () => NOW,
       config: cfg,
     });
@@ -121,7 +123,8 @@ describe("runSweep", () => {
     expect(m.impliedMovePct).toBeLessThan(10);
     expect(m.putCallVolumeRatio).toBeCloseTo(1, 6);
     expect(m.ivRank).toBeNull(); // no history yet
-    expect(m.unusual).toEqual([]); // no open interest on the data host
+    expect(m.unusual).toEqual([{ occ: "AAA261030C00100000", volume: 600, openInterest: 250, ratio: 2.4 }]);
+    expect(result.requests).toBeGreaterThanOrEqual(1);
     expect(m.atmCallQuote?.delta).toBeGreaterThan(0.4);
     expect(m.atmPutQuote?.delta).toBeLessThan(-0.3);
     expect(result.selection.contracts).toEqual(["AAA261030C00100000", "AAA261030P00100000"]);
@@ -140,6 +143,7 @@ describe("runSweep", () => {
       prices: async (syms) => { order.push(...syms); return new Map(syms.map((s) => [s, 100])); },
       snapshots: async (u) => fakeChain(u, 100, { "2026-11-20": 0.3 }),
       hv20: () => null,
+      openInterest: async () => new Map<string, number>(),
       now: () => NOW,
       config: { ...cfg, streamMax: 3 },
     });
@@ -155,7 +159,8 @@ describe("runSweep", () => {
       sweep.runSweep({
         underlyings: () => ["LIV"], holdings: () => [], prices: async () => new Map([["LIV", 100]]),
         snapshots: async (u) => fakeChain(u, 100, { "2026-11-20": 0.3 }),
-        hv20: () => null, now: () => NOW, config: cfg,
+        hv20: () => null,
+      openInterest: async () => new Map<string, number>(), now: () => NOW, config: cfg,
         live: () => ({ bid: 1.5, ask: 1.6, delta: 0.99, at }),
       });
     expect((await run(NOW - 30_000)).metrics[0].atmCallQuote).toEqual({ bid: 1.5, ask: 1.6, delta: 0.99 });
@@ -172,7 +177,8 @@ describe("runSweep", () => {
       sweep.runSweep({
         underlyings: () => ["RNK"], holdings: () => [], prices: async () => new Map([["RNK", 100]]),
         snapshots: async (u) => fakeChain(u, 100, { "2026-11-20": 0.3, "2026-10-30": 0.3, "2026-12-18": 0.3 }),
-        hv20: () => null, now: () => now, config: cfg,
+        hv20: () => null,
+      openInterest: async () => new Map<string, number>(), now: () => now, config: cfg,
       });
     const midday = await run(NOW);
     expect(midday.metrics[0].ivHistoryDays).toBe(26); // 25 prior days plus today
