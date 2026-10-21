@@ -22,6 +22,7 @@ import { alpacaSymbol, isForeignSymbol } from "../history/universe.js";
 import { AlpacaNotConfigured, companyName, snapshotPrice, usMarketRows } from "./market-rows.js";
 import { withConsensus } from "./econ-calendar.js";
 import * as estimates from "../estimates/store.js";
+import * as bulkStore from "../research/bulk-store.js";
 import { timingsFor } from "../estimates/timing.js";
 import { tradingDay } from "../history/time.js";
 
@@ -185,9 +186,10 @@ const FALLBACK_PER_SYMBOL_CAP = 20;
 
 // Name, exchange and fundamentals for US stock quotes. These barely change
 // during a day, so they are fetched in the background, at most hourly per
-// ticker, and never hold up a price: from FMP when FMP_API_KEY is set, else the
-// name and exchange from the listing directory and shares outstanding from SEC
-// EDGAR (market cap = shares × the live price).
+// ticker, and never hold up a price: from FMP's daily bulk tables
+// (research/bulk-store.ts), else per symbol from FMP when FMP_API_KEY is set,
+// else the name and exchange from the listing directory and shares outstanding
+// from SEC EDGAR (market cap = shares × the live price).
 //
 // A ticker the sources don't answer (unknown to them, or every source failing
 // or rate-limited) is asked again after 5 minutes, doubling with each failure
@@ -204,8 +206,32 @@ const staticFields = new Map<string, { fields: StaticFields | null; next: number
 const staticInFlight = new Set<string>();
 
 /** Static fields for the given tickers, in one batch per source; tickers no source knows are left out. */
-async function fetchStaticFields(symbols: string[]): Promise<Map<string, StaticFields>> {
+async function fetchStaticFields(tickers: string[]): Promise<Map<string, StaticFields>> {
   const out = new Map<string, StaticFields>();
+  let bulk = new Map<string, bulkStore.BulkProfile>();
+  try {
+    bulk = bulkStore.profiles(tickers);
+  } catch (err) {
+    console.warn("[quotes] bulk profiles unreadable:", err instanceof Error ? err.message : err);
+  }
+  for (const [s, b] of bulk) {
+    out.set(s, {
+      name: b.name,
+      exchange: b.exchange,
+      avgVolume: b.avgVolume,
+      marketCap: b.marketCap,
+      pe: b.pe,
+      eps: b.eps,
+      dividendYield: b.dividendYield,
+      week52High: b.week52High,
+      week52Low: b.week52Low,
+      beta: b.beta,
+      sharesOutstanding: b.sharesOutstanding,
+    });
+  }
+  // Per-symbol sources only for the tickers the bulk tables don't have.
+  const symbols = tickers.filter((s) => !bulk.has(s));
+  if (symbols.length === 0) return out;
   if (fmp.isConfigured()) {
     // Profiles and TTM ratios change daily at most and are cached a day, so
     // the hourly refresh costs no FMP calls between them.

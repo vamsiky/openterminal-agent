@@ -144,6 +144,21 @@ describe("NewsWidget", () => {
     wrap(<NewsWidget widget={widget} />);
     await screen.findByText("needs Alpaca API keys");
   });
+  it("keeps the symbol feed as the default and shows press releases on the PRESS tab", async () => {
+    useTerminal.setState({ activeSymbol: "AAPL" });
+    stubApi([
+      ["/api/research/AAPL/press-releases", () => reply({ data: [{ title: "Apple HomeView", url: "https://example.com/pr", publisher: "Business Wire", publishedDate: "2026-10-13 08:56:00", text: "x" }, { title: "No link", url: null, publisher: null, publishedDate: "2026-10-12 07:00:00" }] })],
+      ["/api/news", () => reply([{ title: "Benzinga story", link: "https://example.com/b", publisher: "Benzinga", publishedAt: null }])],
+    ]);
+    const { container } = wrap(<NewsWidget widget={widget} />);
+    await screen.findByText("Benzinga story");
+    fireEvent.click(screen.getByText("PRESS"));
+    const link = (await screen.findByText("Apple HomeView")).closest("a");
+    expect(link?.getAttribute("href")).toBe("https://example.com/pr");
+    expect(container.textContent).toContain("Business Wire · 2026-10-13 08:56");
+    expect(screen.getByText("No link").closest("a")).toBeNull();
+    expect(container.textContent).not.toMatch(/Invalid Date|NaN|undefined/);
+  });
 });
 
 describe("ScreenerWidget", () => {

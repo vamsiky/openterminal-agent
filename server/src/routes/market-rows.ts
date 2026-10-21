@@ -6,16 +6,20 @@ import { allAssets } from "../providers/alpaca-assets.js";
 import type { MarketRow } from "../providers/types.js";
 import { alpacaSymbol, nasdaq100, sp500 } from "../history/universe.js";
 import * as live from "../live/feed.js";
+import * as bulk from "../research/bulk-store.js";
 
-// Rows for the heatmap, screener, sector list and recap: the S&P 500 and
+// Rows for the heatmap, screener, sector list and recap: the 1,500 biggest US
+// stocks in FMP's bulk profiles (research/bulk-store.ts) plus the S&P 500 and
 // Nasdaq-100 members, priced from Alpaca (the live feed's memory, else REST
-// snapshots), with sector and market cap from FMP when FMP_API_KEY is set,
-// else from SEC EDGAR (a coarse sector from the SIC code, shares × price).
-// Sectors are not GICS, which is licensed.
+// snapshots). Name, sector and market cap come from the bulk profiles; a
+// symbol they don't have gets them from FMP's per-symbol profile when
+// FMP_API_KEY is set, else from SEC EDGAR (a coarse sector from the SIC code,
+// shares × price). Sectors are not GICS, which is licensed.
 //
-// Reference data loads in the background a chunk at a time, so after a cold
-// start the rows carry prices at once and fill in sector and market cap as
-// the chunks arrive (SEC: about 0.4 s per new ticker, then cached a week).
+// That per-symbol reference data loads in the background a chunk at a time,
+// so after a cold start the rows carry prices at once and fill in sector and
+// market cap as the chunks arrive (SEC: about 0.4 s per new ticker, then
+// cached a week).
 
 export class AlpacaNotConfigured extends Error {
   constructor() {
@@ -25,10 +29,19 @@ export class AlpacaNotConfigured extends Error {
 }
 
 export type RowPrice = { price: number | null; changePercent: number | null; volume: number | null };
-export type RowReference = { name: string | null; sector: string | null; marketCap: number | null; sharesOutstanding: number | null };
+export type RowReference = {
+  name: string | null;
+  sector: string | null;
+  marketCap: number | null;
+  sharesOutstanding: number | null;
+  /** From the bulk profiles: its name beats the listing's, its exchange fills in for a missing listing. */
+  bulk?: { exchange: string | null };
+};
 export type RowListing = { name: string; exchange: string };
 
 const UNIVERSE_TTL = 24 * 3_600_000;
+const BULK_UNIVERSE = 1_500;
+const BULK_UNIVERSE_TTL = 10 * 60_000;
 const SNAPSHOT_TTL = 15_000;
 const SNAPSHOT_BATCH = 500;
 const REFERENCE_CHUNK = 25;
@@ -71,26 +84,72 @@ export function buildRows(
     const shares = ref?.sharesOutstanding ?? null;
     rows.push({
       symbol,
-      name: listing ? companyName(listing.name) : ref?.name ?? symbol,
+      name: ref?.bulk && ref.name ? ref.name : listing ? companyName(listing.name) : ref?.name ?? symbol,
       price: p.price,
       changePercent: p.changePercent,
       volume: p.volume,
       marketCap: ref?.marketCap ?? (shares ? shares * p.price : null),
       sector: ref?.sector ?? "Other",
-      exchange: listing?.exchange ?? "",
+      exchange: listing?.exchange ?? ref?.bulk?.exchange ?? "",
     });
   }
   return rows.sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0));
 }
 
 /** S&P 500 ∪ Nasdaq-100; either list alone is enough. */
-export function universe(): Promise<string[]> {
+function indexMembers(): Promise<string[]> {
   return cached("rows:universe", UNIVERSE_TTL, async () => {
     const lists = await Promise.allSettled([sp500(), nasdaq100()]);
     const ok = lists.filter((r) => r.status === "fulfilled").flatMap((r) => (r as PromiseFulfilledResult<string[]>).value);
     if (ok.length === 0) throw new Error("universe: S&P 500 and Nasdaq-100 lists both unavailable");
     return [...new Set(ok)];
   });
+}
+
+let bulkTop: { at: number; symbols: string[] } | null = null;
+
+function bulkUniverse(): string[] {
+  if (!bulkTop || Date.now() - bulkTop.at > BULK_UNIVERSE_TTL) {
+    let symbols: string[] = [];
+    try {
+      symbols = bulk.topByMarketCap(BULK_UNIVERSE);
+    } catch (err) {
+      console.warn("[market-rows] bulk profiles unreadable:", err instanceof Error ? err.message : err);
+    }
+    bulkTop = { at: Date.now(), symbols };
+  }
+  return bulkTop.symbols;
+}
+
+/**
+ * The top 1,500 US stocks by market cap from the bulk profiles, plus the
+ * S&P 500 ∪ Nasdaq-100 so no index member drops out. Without bulk data
+ * (no FMP key, or before the first download) it is the index members alone.
+ */
+export async function universe(): Promise<string[]> {
+  const top = bulkUniverse();
+  let members: string[] = [];
+  try {
+    members = await indexMembers();
+  } catch (err) {
+    if (top.length === 0) throw err;
+  }
+  return [...new Set([...top, ...members])];
+}
+
+/** Reference data from the bulk profiles; market cap follows the live price through shares outstanding. */
+function bulkReferences(symbols: string[]): Map<string, RowReference> {
+  const out = new Map<string, RowReference>();
+  let found = new Map<string, bulk.BulkProfile>();
+  try {
+    found = bulk.profiles(symbols);
+  } catch (err) {
+    console.warn("[market-rows] bulk profiles unreadable:", err instanceof Error ? err.message : err);
+  }
+  for (const [s, p] of found) {
+    out.set(s, { name: p.name, sector: p.sector, marketCap: p.sharesOutstanding ? null : p.marketCap, sharesOutstanding: p.sharesOutstanding, bulk: { exchange: p.exchange } });
+  }
+  return out;
 }
 
 async function prices(symbols: string[]): Promise<Map<string, RowPrice>> {
@@ -147,7 +206,7 @@ async function referenceChunk(symbols: string[]): Promise<Map<string, RowReferen
  * transient SEC/FMP error shouldn't leave the heatmap half-filled for an hour.
  */
 export function loadReferences(symbols: string[], chunkSize = REFERENCE_CHUNK): void {
-  if (refsLoading || (refsLoadedAt && Date.now() - refsLoadedAt < REFERENCE_EVERY_MS)) return;
+  if (symbols.length === 0 || refsLoading || (refsLoadedAt && Date.now() - refsLoadedAt < REFERENCE_EVERY_MS)) return;
   refsLoading = (async () => {
     let failed = 0;
     let lastError = "";
@@ -174,6 +233,7 @@ export function referencesSettled(): Promise<void> {
 /** Test hook. */
 export function resetRows(): void {
   refs.clear();
+  bulkTop = null;
   refsLoading = null;
   refsLoadedAt = 0;
 }
@@ -186,7 +246,8 @@ async function listings(): Promise<Map<string, RowListing>> {
 /** US large-cap rows, biggest first. */
 export async function usMarketRows(): Promise<MarketRow[]> {
   const symbols = await universe();
-  loadReferences(symbols);
+  const fromBulk = bulkReferences(symbols);
+  loadReferences(symbols.filter((s) => !fromBulk.has(s)));
   const [p, l] = await Promise.all([prices(symbols), listings()]);
-  return buildRows(symbols, p, refs, l);
+  return buildRows(symbols, p, new Map([...refs, ...fromBulk]), l);
 }

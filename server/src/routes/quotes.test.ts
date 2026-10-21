@@ -3,9 +3,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { Quote } from "../providers/types.js";
 
 // GET /quotes with the live feed on: prices come from the (mocked) feed, and
-// name and fundamentals from FMP (or the listings + SEC without a key) in the
-// background. Every source is mocked; nothing here reaches the network or the
-// database.
+// name and fundamentals from the bulk tables, else FMP (or the listings + SEC
+// without a key), in the background. Every source is mocked; nothing here
+// reaches the network or the database.
 
 vi.mock("../live/feed.js", () => ({
   enabled: () => true,
@@ -18,12 +18,14 @@ vi.mock("../providers/fmp.js", async (orig) => ({ ...(await orig<object>()), isC
 vi.mock("../providers/alpaca-assets.js", () => ({ allAssets: vi.fn(), search: vi.fn() }));
 vi.mock("../providers/sec-reference.js", () => ({ reference: vi.fn() }));
 vi.mock("../providers/stooq.js", async (orig) => ({ ...(await orig<object>()), quote: vi.fn() }));
+vi.mock("../research/bulk-store.js", () => ({ profiles: vi.fn(), topByMarketCap: vi.fn(() => []) }));
 
 const { marketRouter } = await import("./market.js");
 const fmp = await import("../providers/fmp.js");
 const assets = await import("../providers/alpaca-assets.js");
 const sec = await import("../providers/sec-reference.js");
 const stooq = await import("../providers/stooq.js");
+const bulk = await import("../research/bulk-store.js");
 
 const fmpQuotes = vi.mocked(fmp.quotes);
 const fmpProfiles = vi.mocked(fmp.profiles);
@@ -64,6 +66,7 @@ beforeEach(() => {
   vi.mocked(assets.allAssets).mockReset().mockResolvedValue([]);
   vi.mocked(sec.reference).mockReset().mockResolvedValue(new Map());
   vi.mocked(stooq.quote).mockReset().mockRejectedValue(new Error("stooq down"));
+  vi.mocked(bulk.profiles).mockReset().mockReturnValue(new Map());
 });
 
 describe("static fields of live quotes", () => {
@@ -155,5 +158,30 @@ describe("static fields of live quotes", () => {
     const [q] = await getQuotes(["SECCO"]);
     expect(q).toMatchObject({ name: "Sec Co.", exchange: "Nasdaq", sharesOutstanding: 1_000, marketCap: 100_000 });
     expect(fmpProfiles).not.toHaveBeenCalled();
+  });
+
+  it("takes the fields from the bulk tables and asks FMP only for the tickers they lack", async () => {
+    vi.mocked(bulk.profiles).mockImplementation((symbols) => {
+      const known = { symbol: "BULK1", name: "Bulk One Inc.", exchange: "NYSE", sector: "Energy", industry: null, price: 50, marketCap: 5_000, sharesOutstanding: 100, beta: 1.2, avgVolume: 7_000, week52Low: 40, week52High: 60, pe: 12, eps: 4.2, dividendYield: 0.03 };
+      return new Map(symbols.includes("BULK1") ? [["BULK1", known]] : []);
+    });
+    fmpProfiles.mockResolvedValue(new Map([["PERSYM", fmpProfile("PERSYM", "Per Symbol Co")]]));
+    fmpRatios.mockResolvedValue(new Map());
+    await getQuotes(["BULK1", "PERSYM"]);
+    await settle();
+    expect(fmpProfiles).toHaveBeenCalledWith(["PERSYM"]);
+    expect(fmpRatios).toHaveBeenCalledWith(["PERSYM"]);
+    const [b, p] = await getQuotes(["BULK1", "PERSYM"]);
+    // Market cap follows the live price (100) through bulk shares outstanding.
+    expect(b).toMatchObject({ name: "Bulk One Inc.", exchange: "NYSE", pe: 12, eps: 4.2, dividendYield: 0.03, beta: 1.2, avgVolume: 7_000, week52Low: 40, week52High: 60, sharesOutstanding: 100, marketCap: 10_000 });
+    expect(p).toMatchObject({ name: "Per Symbol Co" });
+  });
+
+  it("makes no per-symbol call when the bulk tables know every ticker", async () => {
+    vi.mocked(bulk.profiles).mockImplementation((symbols) => new Map(symbols.map((s) => [s, { symbol: s, name: s, sharesOutstanding: 1 } as any])));
+    await getQuotes(["ALLBULK1", "ALLBULK2"]);
+    await settle();
+    expect(fmpProfiles).not.toHaveBeenCalled();
+    expect(sec.reference).not.toHaveBeenCalled();
   });
 });

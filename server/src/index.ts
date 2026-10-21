@@ -9,6 +9,8 @@ import { barsRouter } from "./routes/bars.js";
 import { estimatesRouter } from "./routes/estimates.js";
 import { researchRouter } from "./routes/research/index.js";
 import { startEstimateCapture } from "./estimates/capture.js";
+import { startBulkJobs } from "./research/bulk-store.js";
+import { startContentJobs } from "./research/transcripts-job.js";
 import { startHistoryScheduler } from "./history/scheduler.js";
 import * as alpaca from "./providers/alpaca.js";
 import { allStats } from "./providers/registry.js";
@@ -86,4 +88,7 @@ app.listen(PORT, HOST, () => {
 
 startHistoryScheduler();
 startEstimateCapture();
+// Whole-market FMP bulk tables (daily/weekly) and earnings-call transcripts for watchlists.
+startBulkJobs();
+startContentJobs();
 live.startLiveFeed();
