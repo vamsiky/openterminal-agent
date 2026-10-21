@@ -4,15 +4,20 @@
 import { XMLParser } from "fast-xml-parser";
 import { mapWithConcurrency } from "../concurrency.js";
 
-// SEC rejects requests whose User-Agent doesn't look like "<app/company> <contact-email>" —
-// a bare product name or URL gets a flat 403, so this exact shape matters. SEC uses it to
-// reach whoever's operating a deployment if their traffic misbehaves, so self-hosters should
-// set SEC_EDGAR_CONTACT to their own email; this default is just enough to pass the check.
-const UA = `OpenTerminal ${process.env.SEC_EDGAR_CONTACT ?? "ertassellireplay@gmail.com"}`;
+// SEC rejects requests whose User-Agent doesn't look like "<app/company> <contact-email>":
+// a bare product name or URL gets a flat 403. SEC uses the address to reach
+// whoever runs the traffic if it misbehaves, so it must be the operator's own
+// (SEC_EDGAR_CONTACT); without it, EDGAR requests fail instead of borrowing someone else's.
+function userAgent(): string {
+  const contact = process.env.SEC_EDGAR_CONTACT?.trim();
+  if (!contact) throw new Error("sec edgar: set SEC_EDGAR_CONTACT to your contact email (SEC requires it in the User-Agent)");
+  return `OpenTerminal ${contact}`;
+}
 const parser = new XMLParser({ ignoreAttributes: false });
 
-async function edgarFetch(url: string): Promise<any> {
-  const res = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
+/** GET a JSON document from sec.gov with the required User-Agent. */
+export async function edgarFetch(url: string): Promise<any> {
+  const res = await fetch(url, { headers: { "User-Agent": userAgent(), Accept: "application/json" } });
   if (!res.ok) throw new Error(`sec edgar ${res.status} for ${url}`);
   return res.json();
 }
@@ -76,7 +81,7 @@ async function parseForm4(cik: string, filing: FilingRef): Promise<InsiderTransa
   // the raw data XML sits at the accession folder root under its own filename.
   const filename = filing.primaryDocument.split("/").pop();
   const url = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accessionNoDashes}/${filename}`;
-  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  const res = await fetch(url, { headers: { "User-Agent": userAgent() } });
   if (!res.ok) return [];
   const xml = await res.text();
   const doc = parser.parse(xml)?.ownershipDocument;
