@@ -30,7 +30,7 @@ export function scanIdeas(now = new Date()): number {
       const reason = needsAnalysis(idea, now);
       if (!reason) continue;
       const r = enqueue({ symbol: idea.symbol, strategy: idea.strategy === "buy" ? "buy" : idea.strategy, contract: idea.contract, ideaId: idea.id, kind, reason, rank: idea.rank }, { now });
-      if (r) added++;
+      if (r && !r.existing) added++;
     }
   }
   return added;

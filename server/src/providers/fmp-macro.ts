@@ -86,7 +86,7 @@ const TENORS = [["3M", "month3"], ["5Y", "year5"], ["10Y", "year10"], ["30Y", "y
  * `fred.yields` is per tenor (null on failure or not asked for) with the date FRED reported.
  */
 export function mergeRates(
-  fred: { yields: Array<{ tenor: string; value: number | null; date?: string }>; vix: { value: number; date?: string } | null },
+  fred: { yields: Array<{ tenor: string; value: number | null; date?: string }>; vix: { value: number; date?: string } | null; policy?: Dated | null; cpi?: Dated | null },
   fmp: { treasury: TreasuryRates | null; vix: Dated | null; policy: Dated | null; cpi: Dated | null }
 ): UsRates {
   const used = new Set<string>();
@@ -108,8 +108,8 @@ export function mergeRates(
   const sources: UsRates["sources"] = {
     yields: yields.length ? { source: [...used].join("+"), asOf } : null,
     vix: null,
-    policyRate: fmp.policy ? { source: "fmp:economic-indicators federalFunds", asOf: fmp.policy.date } : null,
-    inflation: fmp.cpi ? { source: "fmp:economic-indicators CPI, year over year %", asOf: fmp.cpi.date } : null,
+    policyRate: fmp.policy ? { source: "fmp:economic-indicators federalFunds", asOf: fmp.policy.date } : fred.policy ? { source: "fred", asOf: fred.policy.date } : null,
+    inflation: fmp.cpi ? { source: "fmp:economic-indicators CPI, year over year %", asOf: fmp.cpi.date } : fred.cpi ? { source: "fred", asOf: fred.cpi.date } : null,
   };
   let vix: number | null = null;
   if (fmp.vix) {
@@ -119,5 +119,14 @@ export function mergeRates(
     vix = fred.vix.value;
     sources.vix = { source: "fred", asOf: fred.vix.date ?? null };
   }
-  return { yields, vix, policyRate: fmp.policy?.value ?? null, inflation: fmp.cpi?.value ?? null, sources };
+  return { yields, vix, policyRate: (fmp.policy ?? fred.policy)?.value ?? null, inflation: (fmp.cpi ?? fred.cpi)?.value ?? null, sources };
+}
+
+/** CPI inflation year over year (percent, one decimal) from a monthly index series (FRED CPIAUCSL): the latest month against the same month a year earlier. */
+export function cpiYoyFromSeries(points: Array<{ date: string; value: number }>): Dated | null {
+  const latest = points[points.length - 1];
+  if (!latest) return null;
+  const prior = points.find((p) => p.date.slice(0, 7) === `${Number(latest.date.slice(0, 4)) - 1}${latest.date.slice(4, 7)}`);
+  if (!prior || prior.value === 0) return null;
+  return { value: Math.round((latest.value / prior.value - 1) * 1000) / 10, date: latest.date.slice(0, 7) };
 }
