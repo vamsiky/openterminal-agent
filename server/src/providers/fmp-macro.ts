@@ -1,7 +1,7 @@
 import { cached, get, isConfigured, num } from "./fmp-core.js";
 
-// US rates from FMP, used when FRED fails and for the series FRED is not asked
-// for here (policy rate, inflation). Every function resolves to null when FMP
+// US rates from FMP, the primary source for /api/macro (FRED is the fallback
+// when there is no FMP key or FMP lacks a series). Every function resolves to null when FMP
 // has no key or no data, so a value is filled only if it exists.
 
 export type Dated = { value: number; date: string };
@@ -82,28 +82,29 @@ export type UsRates = {
 const TENORS = [["3M", "month3"], ["5Y", "year5"], ["10Y", "year10"], ["30Y", "year30"]] as const;
 
 /**
- * FRED values first; a tenor or the VIX FRED could not give comes from FMP. Nothing is filled without data.
- * `fred.yields` is per tenor (null on failure) with the date FRED reported.
+ * FMP values first; a tenor or the VIX FMP could not give comes from FRED. Nothing is filled without data.
+ * `fred.yields` is per tenor (null on failure or not asked for) with the date FRED reported.
  */
 export function mergeRates(
   fred: { yields: Array<{ tenor: string; value: number | null; date?: string }>; vix: { value: number; date?: string } | null },
   fmp: { treasury: TreasuryRates | null; vix: Dated | null; policy: Dated | null; cpi: Dated | null }
 ): UsRates {
   const used = new Set<string>();
-  let asOf: string | null = null;
+  const dates: string[] = [];
   const yields: UsRates["yields"] = [];
   for (const [tenor, key] of TENORS) {
     const f = fred.yields.find((y) => y.tenor === tenor);
-    if (f && f.value !== null) {
-      yields.push({ tenor, value: f.value });
-      used.add("fred");
-      asOf = asOf ?? f.date ?? null;
-    } else if (fmp.treasury?.[key] != null) {
+    if (fmp.treasury?.[key] != null) {
       yields.push({ tenor, value: fmp.treasury[key]! });
       used.add("fmp:treasury-rates");
-      asOf = fmp.treasury.date;
+      dates.push(fmp.treasury.date);
+    } else if (f && f.value !== null) {
+      yields.push({ tenor, value: f.value });
+      used.add("fred");
+      if (f.date) dates.push(f.date);
     }
   }
+  const asOf = dates.sort()[0] ?? null;
   const sources: UsRates["sources"] = {
     yields: yields.length ? { source: [...used].join("+"), asOf } : null,
     vix: null,
@@ -111,12 +112,12 @@ export function mergeRates(
     inflation: fmp.cpi ? { source: "fmp:economic-indicators CPI, year over year %", asOf: fmp.cpi.date } : null,
   };
   let vix: number | null = null;
-  if (fred.vix) {
-    vix = fred.vix.value;
-    sources.vix = { source: "fred", asOf: fred.vix.date ?? null };
-  } else if (fmp.vix) {
+  if (fmp.vix) {
     vix = fmp.vix.value;
     sources.vix = { source: "fmp:quote ^VIX", asOf: fmp.vix.date || null };
+  } else if (fred.vix) {
+    vix = fred.vix.value;
+    sources.vix = { source: "fred", asOf: fred.vix.date ?? null };
   }
   return { yields, vix, policyRate: fmp.policy?.value ?? null, inflation: fmp.cpi?.value ?? null, sources };
 }

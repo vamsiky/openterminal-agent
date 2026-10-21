@@ -66,7 +66,7 @@ describe("mergeRates", () => {
   const fmp = { treasury, vix: { value: 16.64, date: "2026-10-21" }, policy: { value: 3.75, date: "2026-09" }, cpi: { value: 3.7, date: "2026-09" } };
   const allFailed = ["3M", "5Y", "10Y", "30Y"].map((tenor) => ({ tenor, value: null }));
 
-  it("uses FMP for everything when FRED is down, leaving out what FMP lacks, with sources", () => {
+  it("uses FMP for everything, leaving out what neither source has, with sources", () => {
     const r = mergeRates({ yields: allFailed, vix: null }, fmp);
     expect(r.yields).toEqual([{ tenor: "3M", value: 4.27 }, { tenor: "5Y", value: 4.94 }, { tenor: "10Y", value: 5.15 }]);
     expect(r).toMatchObject({ vix: 16.64, policyRate: 3.75, inflation: 3.7 });
@@ -75,13 +75,23 @@ describe("mergeRates", () => {
     expect(r.sources.inflation).toEqual({ source: "fmp:economic-indicators CPI, year over year %", asOf: "2026-09" });
   });
 
-  it("prefers FRED and fills only the missing tenors from FMP", () => {
-    const fred = { yields: [{ tenor: "3M", value: 4.3, date: "2026-10-20" }, { tenor: "5Y", value: null }, { tenor: "10Y", value: 5.2, date: "2026-10-20" }, { tenor: "30Y", value: null }], vix: { value: 17, date: "2026-10-20" } };
+  it("prefers FMP and fills only the missing tenors and the VIX from FRED", () => {
+    const fred = { yields: [{ tenor: "3M", value: 4.3, date: "2026-10-20" }, { tenor: "30Y", value: 5.4, date: "2026-10-20" }], vix: { value: 17, date: "2026-10-20" } };
     const r = mergeRates(fred, fmp);
-    expect(r.yields).toEqual([{ tenor: "3M", value: 4.3 }, { tenor: "5Y", value: 4.94 }, { tenor: "10Y", value: 5.2 }]);
-    expect(r.vix).toBe(17);
-    expect(r.sources.yields?.source).toBe("fred+fmp:treasury-rates");
-    expect(r.sources.vix).toEqual({ source: "fred", asOf: "2026-10-20" });
+    expect(r.yields).toEqual([{ tenor: "3M", value: 4.27 }, { tenor: "5Y", value: 4.94 }, { tenor: "10Y", value: 5.15 }, { tenor: "30Y", value: 5.4 }]);
+    expect(r.vix).toBe(16.64);
+    expect(r.sources.yields?.source).toBe("fmp:treasury-rates+fred");
+    const noVix = mergeRates(fred, { ...fmp, vix: null });
+    expect(noVix.vix).toBe(17);
+    expect(noVix.sources.vix).toEqual({ source: "fred", asOf: "2026-10-20" });
+  });
+
+  it("falls back to FRED entirely without FMP data", () => {
+    const fred = { yields: [{ tenor: "10Y", value: 5.2, date: "2026-10-20" }], vix: { value: 17, date: "2026-10-20" } };
+    const r = mergeRates(fred, { treasury: null, vix: null, policy: null, cpi: null });
+    expect(r.yields).toEqual([{ tenor: "10Y", value: 5.2 }]);
+    expect(r.sources.yields).toEqual({ source: "fred", asOf: "2026-10-20" });
+    expect(r).toMatchObject({ vix: 17, policyRate: null, inflation: null });
   });
 
   it("returns nulls and empty yields when no source has data", () => {
