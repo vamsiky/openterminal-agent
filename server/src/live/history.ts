@@ -49,19 +49,20 @@ export function aggregate(candles: Candle[], by: "week" | "month"): Candle[] {
 /** Move the last candle to the latest live price (and add today's daily candle if it's missing). */
 function withLivePrice(candles: Candle[], symbol: string, daily: boolean): Candle[] {
   const e = liveEntry(symbol);
-  if (!e || e.price === null || candles.length === 0) return candles;
+  if (!e || candles.length === 0) return candles;
   const last = candles.at(-1)!;
   if (daily) {
     // Daily candles follow the live day bar, not every after-hours print.
-    if (!e.barDay || e.open === null) return candles;
-    const close = e.dayClose ?? e.price;
+    const close = e.dayClose ?? e.regPrice;
+    if (!e.barDay || e.open === null || close === null) return candles;
     const today = { time: dayTime(e.barDay), open: e.open, high: e.high ?? close, low: e.low ?? close, close, volume: e.volume ?? 0 };
     if (today.time > last.time) candles.push(today);
     else if (today.time === last.time) candles[candles.length - 1] = today;
     return candles;
   }
+  // Intraday bars include the pre-market and after hours, so they follow every print.
   const tradeAt = e.tradeTime ? Date.parse(e.tradeTime) / 1000 : 0;
-  if (tradeAt >= last.time) {
+  if (e.price !== null && tradeAt >= last.time) {
     last.close = e.price;
     last.high = Math.max(last.high, e.price);
     last.low = Math.min(last.low, e.price);

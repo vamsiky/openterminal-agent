@@ -49,7 +49,23 @@ export type Quote = {
   time: number | null;
   source: string;
   asOf?: string; // ISO time this server fetched it (set in routes/market.ts)
+  /** Extended-hours prices since the last regular close, where the source has them. */
+  extended?: ExtendedHours;
 };
+
+export type SessionPrice = {
+  price: number;
+  /** From the last regular close. */
+  change: number | null;
+  changePercent: number | null;
+  /** Time of the latest trade in the session. */
+  time: string;
+  /** True while the session is on and the price moves with every trade. */
+  live: boolean;
+};
+
+/** After hours (16:00–20:00 New York), overnight (20:00–04:00) and pre-market (04:00–09:30). */
+export type ExtendedHours = { post: SessionPrice | null; overnight: SessionPrice | null; pre: SessionPrice | null };
 
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 
@@ -173,7 +189,23 @@ export async function quotes(symbols: string[]): Promise<Quote[]> {
     marketState: r.marketState ?? null,
     time: n(r.regularMarketTime),
     source: "yahoo",
+    extended: { post: yahooSession(r, "postMarket"), overnight: null, pre: yahooSession(r, "preMarket") },
   }));
+}
+
+function yahooSession(r: any, prefix: "preMarket" | "postMarket"): SessionPrice | null {
+  const price = n(r[`${prefix}Price`]);
+  const time = n(r[`${prefix}Time`]);
+  if (price === null || time === null) return null;
+  // Yahoo leaves the last after-hours print on the quote until the next session starts.
+  if (time <= (n(r.regularMarketTime) ?? 0)) return null;
+  return {
+    price,
+    change: n(r[`${prefix}Change`]),
+    changePercent: n(r[`${prefix}ChangePercent`]),
+    time: new Date(time * 1000).toISOString(),
+    live: false,
+  };
 }
 
 /** Quote fallback that works without crumb, using the chart endpoint's metadata. */

@@ -1,9 +1,9 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { apiGet, fmt, fmtBig, pctClass, type Quote } from "../../lib/api";
+import { apiGet, fmt, fmtBig, type Quote } from "../../lib/api";
 import { useWidgetSymbol, type WidgetInstance } from "../../store/terminal";
-import Flash from "../Flash";
+import { ExtendedPrices, RegularPrice } from "../SessionPrices";
 
 type ShortVolume = { date: string; shortVolume: number; shortExemptVolume: number; totalVolume: number; shortVolumePercent: number };
 
@@ -47,15 +47,12 @@ export default function QuoteWidget({ widget }: { widget: WidgetInstance }) {
   return (
     <div className="p-2">
       <div className="flex items-baseline gap-3 mb-1">
-        <Flash value={data.price} className="text-xl font-bold">{fmt(data.price)}</Flash>
-        <Flash value={data.changePercent} className={`${pctClass(data.changePercent)} text-sm`}>
-          {data.change !== null && data.change >= 0 ? "+" : ""}
-          {fmt(data.change)} ({fmt(data.changePercent)}%)
-        </Flash>
+        <RegularPrice quote={data} />
         <span className="dim text-[10px] ml-auto">
           {data.exchange ?? ""} · {data.currency ?? ""} · <Freshness quote={data} />
         </span>
       </div>
+      <ExtendedPrices quote={data} className="mb-1" />
       <div className="dim text-[11px] mb-2 truncate">{data.name}</div>
       <div className="grid grid-cols-2 gap-x-4">
         {rows.map(([label, value]) => (
@@ -70,9 +67,9 @@ export default function QuoteWidget({ widget }: { widget: WidgetInstance }) {
 }
 
 /** Where the price came from: live from Alpaca, Alpaca's last trade time, or a web source. */
-function Freshness({ quote }: { quote: Quote }) {
+export function Freshness({ quote }: { quote: Quote }) {
   if (quote.source !== "alpaca") return <span title="free web source, cached briefly">web · {quote.source}</span>;
   if (quote.live) return <span className="up" title="every trade from Alpaca's live stream">● Live</span>;
-  const at = quote.asOf ? new Date(quote.asOf).toLocaleTimeString() : "—";
-  return <span style={{ color: "var(--amber)" }} title="last trade Alpaca reported for this ticker">● As of {at}</span>;
+  const at = quote.asOf ? new Date(quote.asOf).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }) : "—";
+  return <span style={{ color: "var(--amber)" }} title="regular-session price as of this time; extended hours are listed separately">● As of {at}</span>;
 }

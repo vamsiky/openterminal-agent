@@ -48,15 +48,60 @@ describe("live feed", () => {
     vi.useRealTimers();
   });
 
-  it("uses yesterday's close as the previous close before the open", () => {
+  it("keeps the pre-market apart from yesterday's regular close", () => {
     vi.useFakeTimers({ now: new Date("2026-10-16T12:00:00Z") }); // 08:00 New York
     feed.applySnapshot("AMD", {
       latestTrade: { t: "2026-10-16T11:59:00Z", p: 101, s: 10 },
       dailyBar: bar("2026-10-15T04:00:00Z", 95, 100, 94, 99),
       prevDailyBar: bar("2026-10-14T04:00:00Z", 90, 96, 89, 95),
     });
-    expect(feed.liveQuote("AMD")).toMatchObject({ price: 101, previousClose: 99, change: 2 });
+    const q = feed.liveQuote("AMD")!;
+    expect(q).toMatchObject({ price: 99, previousClose: 95, change: 4, marketState: "PRE", live: false });
+    expect(q.extended.pre).toMatchObject({ price: 101, change: 2 });
+    expect(q.extended.pre!.changePercent).toBeCloseTo(2.0202, 3);
+    expect(q.extended.post).toBeNull();
     vi.useRealTimers();
+  });
+
+  it("splits after hours, overnight and pre-market, each against the last regular close", () => {
+    // Regular session on Thursday 2026-10-15 closes at 200.
+    feed.applyMessage({ T: "d", S: "NVDA", ...bar("2026-10-14T04:00:00Z", 190, 192, 189, 190) });
+    feed.applyMessage({ T: "d", S: "NVDA", ...bar("2026-10-15T04:00:00Z", 191, 201, 190, 200) });
+    feed.applyMessage({ T: "t", S: "NVDA", p: 204, s: 100, t: "2026-10-15T21:30:00Z", c: ["@", "T"] }); // 17:30 after hours
+    feed.applyOvernightMessage({ T: "t", S: "NVDA", p: 206, s: 5, t: "2026-10-16T02:00:00Z", c: ["@", "I"] }); // 22:00 overnight
+    feed.applyMessage({ T: "t", S: "NVDA", p: 198, s: 100, t: "2026-10-16T11:00:00Z", c: ["@", "T"] }); // 07:00 pre-market
+
+    const night = feed.liveQuote("NVDA", "NVDA", new Date("2026-10-16T03:00:00Z"))!; // 23:00 Thursday
+    expect(night).toMatchObject({ price: 200, previousClose: 190, change: 10, marketState: "OVERNIGHT" });
+    expect(night.extended.post).toMatchObject({ price: 204, change: 4 });
+    expect(night.extended.overnight).toMatchObject({ price: 206, change: 6 });
+
+    const morning = feed.liveQuote("NVDA", "NVDA", new Date("2026-10-16T11:30:00Z"))!; // 07:30 Friday
+    expect(morning).toMatchObject({ price: 200, change: 10 });
+    expect(morning.extended.pre).toMatchObject({ price: 198, change: -2 });
+    expect(morning.extended.post).toMatchObject({ price: 204 });
+
+    // Friday's regular session: the price moves, the extended sessions still count from Thursday's close.
+    feed.applyMessage({ T: "t", S: "NVDA", p: 203, s: 100, t: "2026-10-16T14:00:00Z", c: ["@"] }); // 10:00
+    const open = feed.liveQuote("NVDA", "NVDA", new Date("2026-10-16T14:00:05Z"))!;
+    expect(open).toMatchObject({ price: 203, previousClose: 200, change: 3, open: 203, marketState: "REGULAR" });
+    expect(open.extended.pre).toMatchObject({ price: 198, change: -2 });
+    expect(open.extended.overnight).toMatchObject({ price: 206, change: 6 });
+
+    // After Friday's close the old sessions are gone until new ones trade.
+    feed.applyMessage({ T: "d", S: "NVDA", ...bar("2026-10-16T04:00:00Z", 203, 205, 199, 202) });
+    const closed = feed.liveQuote("NVDA", "NVDA", new Date("2026-10-16T20:05:00Z"))!; // 16:05
+    expect(closed).toMatchObject({ price: 202, previousClose: 200, change: 2, marketState: "POST" });
+    expect(closed.extended).toEqual({ post: null, overnight: null, pre: null });
+  });
+
+  it("takes overnight prices from Blue Ocean snapshots and minute bars", () => {
+    feed.applyMessage({ T: "d", S: "TSLA", ...bar("2026-10-15T04:00:00Z", 250, 260, 249, 250) });
+    feed.applyOvernightSnapshot("TSLA", { latestTrade: { t: "2026-10-16T01:00:00Z", p: 255, s: 10 } });
+    feed.applyOvernightMessage({ T: "b", S: "TSLA", t: "2026-10-16T01:30:00Z", o: 255, h: 257, l: 255, c: 257, v: 300 });
+    const q = feed.liveQuote("TSLA", "TSLA", new Date("2026-10-16T01:35:00Z"))!;
+    expect(q.extended.overnight).toMatchObject({ price: 257, change: 7, time: "2026-10-16T01:31:00.000Z" });
+    expect(q.extended.overnight!.changePercent).toBeCloseTo(2.8, 5);
   });
 
   it("rolls the previous close over when a new session's day bar arrives", () => {
@@ -120,6 +165,7 @@ describe("live stream", () => {
     feed.startLiveFeed();
     const ws = sockets[0];
     expect(ws.url).toBe("wss://stream.data.alpaca.markets/v2/sip");
+    expect(sockets[1].url).toBe("wss://stream.data.alpaca.markets/v1beta1/boats");
     ws.receive([{ T: "success", msg: "connected" }]);
     expect(ws.sent[0]).toEqual({ action: "auth", key: "kid", secret: "secret" });
     ws.receive([{ T: "success", msg: "authenticated" }]);

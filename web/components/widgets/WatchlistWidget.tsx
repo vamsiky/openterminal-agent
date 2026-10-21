@@ -2,11 +2,12 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { apiGet, apiPost, fmt, fmtBig, pctClass, type Quote } from "../../lib/api";
+import { apiGet, apiPost, EXTENDED_SESSIONS, fmt, fmtBig, fmtPct, pctClass, type Quote } from "../../lib/api";
 import { normalizeSymbol, symbolsParam } from "../../lib/symbol";
 import { normalizeListName, WATCHLISTS_CHANGED } from "../../lib/watchlist";
 import { useTerminal } from "../../store/terminal";
 import Flash from "../Flash";
+import { SessionCell } from "../SessionPrices";
 
 export default function WatchlistWidget() {
   const watchlist = useTerminal((s) => s.watchlist);
@@ -124,9 +125,14 @@ export default function WatchlistWidget() {
         />
         <button className="term-btn" type="submit">+</button>
       </form>
+      <div className="overflow-x-auto">
       <table className="data-table">
         <thead>
-          <tr><th>Sym</th><th>Last</th><th>Chg%</th><th>Vol</th><th></th></tr>
+          <tr>
+            <th>Sym</th><th>Last</th><th>Chg</th><th>Chg%</th>
+            {EXTENDED_SESSIONS.map((s) => <th key={s.key} title={`${s.label}: price and change from the last regular close`}>{s.short}</th>)}
+            <th>Vol</th><th></th>
+          </tr>
         </thead>
         <tbody>
           {watchlist.map((sym) => {
@@ -135,9 +141,13 @@ export default function WatchlistWidget() {
               <tr key={sym} onClick={() => setActiveSymbol(sym)}>
                 <td className="font-bold">{sym}</td>
                 <td><Flash value={q?.price}>{fmt(q?.price)}</Flash></td>
-                <td className={pctClass(q?.changePercent)}>
-                  <Flash value={q?.changePercent}>{fmt(q?.changePercent)}%</Flash>
+                <td className={pctClass(q?.change)}>
+                  <Flash value={q?.change}>{q?.change != null && q.change > 0 ? "+" : ""}{fmt(q?.change)}</Flash>
                 </td>
+                <td className={pctClass(q?.changePercent)}>
+                  <Flash value={q?.changePercent}>{fmtPct(q?.changePercent)}</Flash>
+                </td>
+                {EXTENDED_SESSIONS.map((s) => <SessionCell key={s.key} quote={q} session={s.key} label={s.label} />)}
                 <td>{fmtBig(q?.volume)}</td>
                 <td>
                   <button
@@ -155,6 +165,7 @@ export default function WatchlistWidget() {
           })}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

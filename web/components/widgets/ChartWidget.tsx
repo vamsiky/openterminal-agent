@@ -12,9 +12,11 @@ import {
   type IChartApi,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { apiGet, fmt, fmtBig, type Candle } from "../../lib/api";
+import { apiGet, fmt, fmtBig, type Candle, type Quote } from "../../lib/api";
 import { sma, ema, vwap, rsi, macd, bollinger, type Point } from "../../lib/indicators";
 import { useWidgetSymbol, type WidgetInstance } from "../../store/terminal";
+import { ExtendedPrices, RegularPrice } from "../SessionPrices";
+import { Freshness } from "./QuoteWidget";
 
 const RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"] as const;
 const CHART_TYPES = ["candles", "bars", "line", "area"] as const;
@@ -45,6 +47,13 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
     queryKey: ["history", symbol, range],
     queryFn: () => apiGet<Candle[]>(`/api/history/${encodeURIComponent(symbol)}?range=${range}`),
     refetchInterval: range === "1D" ? 8_000 : 60_000,
+  });
+
+  // Same query as the quote widget, so the two share one request.
+  const { data: quote } = useQuery({
+    queryKey: ["quote", symbol],
+    queryFn: async () => (await apiGet<Quote[]>(`/api/quotes?symbols=${encodeURIComponent(symbol)}`))[0],
+    refetchInterval: 1_000,
   });
 
   // Fast time -> candle lookup for the crosshair legend, independent of chart type.
@@ -234,6 +243,16 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
 
   return (
     <div className="flex flex-col h-full">
+      {quote && (
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 px-2 pt-1 shrink-0">
+          <span className="flex items-baseline gap-2">
+            <span className="amber font-bold">{symbol}</span>
+            <RegularPrice quote={quote} size="text-base" />
+            <span className="dim text-[10px]"><Freshness quote={quote} /></span>
+          </span>
+          <ExtendedPrices quote={quote} />
+        </div>
+      )}
       <div className="flex gap-1 p-1 flex-wrap shrink-0">
         {RANGES.map((r) => (
           <button key={r} className={`term-btn ${range === r ? "active" : ""}`} onClick={() => setRange(r)}>

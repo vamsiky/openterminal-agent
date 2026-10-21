@@ -52,11 +52,41 @@ export type Quote = {
   marketState: string | null;
   source: string;
   asOf?: string;
-  /** Alpaca quotes only: true while this ticker gets every trade from the live stream. */
+  /** Alpaca quotes only: true while the regular price moves with every trade. */
   live?: boolean;
+  /** Extended-hours prices since the last regular close, where the source has them. */
+  extended?: ExtendedHours;
   sector?: string;
   label?: string;
 };
+
+export type SessionPrice = {
+  price: number;
+  /** From the last regular close. */
+  change: number | null;
+  changePercent: number | null;
+  time: string;
+  live: boolean;
+};
+
+export type ExtendedHours = { post: SessionPrice | null; overnight: SessionPrice | null; pre: SessionPrice | null };
+
+/** Extended sessions in the order they trade after a regular close. */
+export const EXTENDED_SESSIONS = [
+  { key: "post", label: "After hours", short: "After hrs" },
+  { key: "overnight", label: "Overnight", short: "Overnight" },
+  { key: "pre", label: "Pre-market", short: "Pre-mkt" },
+] as const;
+
+/** "+4.53 (+2.09%)" */
+export function fmtChange(change: number | null | undefined, pct: number | null | undefined): string {
+  const sign = (n: number | null | undefined) => (n !== null && n !== undefined && n > 0 ? "+" : "");
+  return `${sign(change)}${fmt(change)} (${sign(pct)}${fmt(pct)}%)`;
+}
+
+export function fmtPct(pct: number | null | undefined): string {
+  return `${pct !== null && pct !== undefined && pct > 0 ? "+" : ""}${fmt(pct)}%`;
+}
 
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 

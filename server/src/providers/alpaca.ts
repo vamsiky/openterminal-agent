@@ -129,21 +129,25 @@ export type Snapshot = {
   prevDailyBar?: Bar | null;
 };
 
-/** Latest trade, quote and today's/yesterday's bars for up to a few hundred symbols in one call. */
-export async function snapshots(symbols: string[]): Promise<Record<string, Snapshot | null>> {
+/**
+ * Latest trade, quote and today's/yesterday's bars for up to a few hundred
+ * symbols in one call. `source` "boats" is Blue Ocean ATS, the overnight session.
+ */
+export async function snapshots(symbols: string[], source = feed()): Promise<Record<string, Snapshot | null>> {
   if (symbols.length === 0) return {};
-  const data = await dataFetch("/v2/stocks/snapshots", { symbols: symbols.join(","), feed: feed() });
+  const data = await dataFetch("/v2/stocks/snapshots", { symbols: symbols.join(","), feed: source });
   return data ?? {};
 }
 
 /**
- * Open the real-time stream and authenticate once Alpaca says it's connected.
- * The caller subscribes after the "authenticated" message. Uses the global
+ * Open a real-time stream ("v2/sip" by default; "v1beta1/boats" for the
+ * overnight session) and authenticate once Alpaca says it's connected. The
+ * caller subscribes after the "authenticated" message. Uses the global
  * WebSocket (Node 22+).
  */
-export function openStream(): WebSocket {
+export function openStream(path = `v2/${feed()}`): WebSocket {
   if (!isConfigured()) throw new Error("alpaca: ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY not set");
-  const ws = new WebSocket(`${STREAM_BASE}/v2/${feed()}`);
+  const ws = new WebSocket(`${STREAM_BASE}/${path}`);
   ws.addEventListener("message", (ev) => {
     const msgs = parseStream(ev.data);
     if (msgs.some((m) => m.T === "success" && m.msg === "connected")) {

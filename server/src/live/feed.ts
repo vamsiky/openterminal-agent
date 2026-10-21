@@ -1,9 +1,9 @@
 import * as alpaca from "../providers/alpaca.js";
-import type { Quote } from "../providers/yahoo.js";
+import type { ExtendedHours, Quote, SessionPrice } from "../providers/yahoo.js";
 import { upsertMinuteBars, type MinuteBar } from "../history/store.js";
 import { dailyUniverse, minuteUniverse } from "../history/sync.js";
 import { tradingDay } from "../history/time.js";
-import { nyClock } from "../history/scheduler.js";
+import { regularCloseAt, nyInstant, sessionAt, type Session } from "./session.js";
 
 // Real-time prices for US stocks and ETFs from Alpaca's stream, kept in
 // memory so a click on a ticker is answered without a web request.
@@ -19,6 +19,13 @@ import { nyClock } from "../history/scheduler.js";
 //
 // Opt out with LIVE_STREAM=0. LIVE_ALL_TRADES=1 subscribes to every trade in
 // the market instead of the tiers above: a much heavier feed at the open.
+//
+// Quotes keep the regular session (09:30–16:00 New York) apart from the
+// extended ones: the price and change are the regular session's, and the
+// after-hours, overnight and pre-market prices since the last regular close
+// come alongside, each with its change from that close. Overnight prices
+// (20:00–04:00) come from a second stream on Alpaca's Blue Ocean ATS feed
+// ("boats"); opt out with LIVE_OVERNIGHT=0.
 
 const FOCUS_TTL_MS = 10 * 60_000;
 const SNAPSHOT_EVERY_MS = 5 * 60_000;
@@ -28,10 +35,16 @@ const MINUTE_FLUSH_MS = 5_000;
 // Odd-lot trades don't set the last sale price on the consolidated tape.
 const NON_PRICE_CONDITIONS = new Set(["I"]);
 
+export type SessionTrade = { price: number; time: string };
+
 export type LiveEntry = {
   symbol: string;
+  /** Latest consolidated-tape price from any session (intraday charts follow it). */
   price: number | null;
   tradeTime: string | null;
+  /** Latest regular-session price of barDay. */
+  regPrice: number | null;
+  regTime: string | null;
   bid: number | null;
   ask: number | null;
   bidSize: number | null;
@@ -42,34 +55,60 @@ export type LiveEntry = {
   volume: number | null;
   /** Close of barDay's day bar (as last reported), the next session's previous close. */
   dayClose: number | null;
-  /** New York date of the day bar that open/high/low/volume belong to. */
+  /** New York date of the regular session that open/high/low/volume belong to. */
   barDay: string | null;
-  /** Close of the session before barDay. */
+  /** Close of the session before barDay, and its date. */
   prevClose: number | null;
+  prevDay: string | null;
+  /** Latest trade in each extended session. */
+  pre: SessionTrade | null;
+  post: SessionTrade | null;
+  overnight: SessionTrade | null;
   updatedAt: number;
 };
 
 const entries = new Map<string, LiveEntry>();
 const focus = new Map<string, number>(); // symbol → last requested (ms)
 const unknownToAlpaca = new Map<string, number>(); // symbol → when a snapshot came back empty (ms)
-let tradeSet = new Set<string>(); // symbols currently subscribed to trades + quotes
 let minuteSet = new Set<string>(); // symbols whose minute bars are stored
 const minuteBuffer: MinuteBar[] = [];
 
-let ws: WebSocket | null = null;
-let connected = false; // authenticated and subscribed
+/** One Alpaca stream connection: the consolidated tape, or the overnight feed. */
+type Stream = {
+  name: string;
+  /** Stream path after the host, e.g. "v2/sip". */
+  path: () => string;
+  apply: (m: alpaca.StreamMessage) => void;
+  ws: WebSocket | null;
+  connected: boolean; // authenticated and subscribed
+  tradeSet: Set<string>; // symbols currently subscribed to trades + quotes
+  reconnectDelay: number;
+  lastMessageAt: number;
+  lastError: string | null;
+  /** Set when Alpaca refuses the feed for this account, so it stops retrying. */
+  refused: boolean;
+};
+
+const stream = (name: string, path: () => string, apply: (m: alpaca.StreamMessage) => void): Stream => ({
+  name, path, apply, ws: null, connected: false, tradeSet: new Set(), reconnectDelay: 1_000, lastMessageAt: 0, lastError: null, refused: false,
+});
+
+const sip = stream("live", () => `v2/${alpaca.feed()}`, applyMessage);
+const boats = stream("overnight", () => "v1beta1/boats", applyOvernightMessage);
+let overnightEnabled = false;
+
 let allTrades = false;
 let started = false;
-let lastMessageAt = 0;
 let lastError: string | null = null;
-let reconnectDelay = 1_000;
 
 function entry(symbol: string): LiveEntry {
   let e = entries.get(symbol);
   if (!e) {
     e = {
-      symbol, price: null, tradeTime: null, bid: null, ask: null, bidSize: null, askSize: null,
-      open: null, high: null, low: null, volume: null, dayClose: null, barDay: null, prevClose: null, updatedAt: 0,
+      symbol, price: null, tradeTime: null, regPrice: null, regTime: null,
+      bid: null, ask: null, bidSize: null, askSize: null,
+      open: null, high: null, low: null, volume: null, dayClose: null, barDay: null, prevClose: null, prevDay: null,
+      pre: null, post: null, overnight: null, updatedAt: 0,
     };
     entries.set(symbol, e);
   }
@@ -78,12 +117,25 @@ function entry(symbol: string): LiveEntry {
 
 // ---- applying data ----
 
-/** A newer day bar starts a new session: yesterday's close becomes the previous close. */
+/** A newer regular session starts: the last one's close becomes the previous close. */
+function startSession(e: LiveEntry, day: string): void {
+  if (e.barDay && day > e.barDay) {
+    e.prevClose = e.dayClose ?? e.regPrice ?? e.prevClose;
+    e.prevDay = e.barDay;
+    e.open = e.high = e.low = null;
+    e.volume = null;
+    e.dayClose = null;
+    e.regPrice = null;
+    e.regTime = null;
+  }
+  e.barDay = day;
+}
+
+/** Day bars cover the regular session only (extended-hours trades don't set them). */
 function applyDayBar(e: LiveEntry, bar: { t: string; o: number; h: number; l: number; c: number; v: number }): void {
   const day = tradingDay(bar.t);
   if (e.barDay && day < e.barDay) return;
-  if (e.barDay && day > e.barDay) e.prevClose = e.dayClose ?? e.price ?? e.prevClose;
-  e.barDay = day;
+  startSession(e, day);
   e.open = bar.o;
   e.high = bar.h;
   e.low = bar.l;
@@ -91,13 +143,49 @@ function applyDayBar(e: LiveEntry, bar: { t: string; o: number; h: number; l: nu
   e.dayClose = bar.c;
 }
 
+/** Record a trade (or a minute bar's close) at `time` against the session it falls in. */
+function applyPrice(e: LiveEntry, price: number, time: string, session: Session | null): void {
+  if (session === "regular") {
+    startSession(e, tradingDay(time));
+    if (e.regTime && time < e.regTime) return;
+    e.regPrice = price;
+    e.regTime = time;
+    if (e.open === null) e.open = price;
+    if (e.high === null || price > e.high) e.high = price;
+    if (e.low === null || price < e.low) e.low = price;
+  } else if (session) {
+    const last = e[session];
+    if (last && time < last.time) return;
+    e[session] = { price, time };
+  }
+}
+
+/** A snapshot from the consolidated tape (SIP or IEX). */
 export function applySnapshot(symbol: string, snap: alpaca.Snapshot | null): void {
   if (!snap) return;
   const e = entry(symbol);
+  const prev = snap.prevDailyBar;
+  const daily = snap.dailyBar;
+  if (daily) {
+    applyDayBar(e, daily);
+    if (prev && tradingDay(prev.t) < tradingDay(daily.t)) {
+      e.prevClose = prev.c;
+      e.prevDay = tradingDay(prev.t);
+    }
+    if (!e.regTime) {
+      e.regPrice = daily.c;
+      e.regTime = new Date(Math.min(regularCloseAt(tradingDay(daily.t)), Date.now())).toISOString();
+    }
+  }
   const trade = snap.latestTrade;
-  if (trade && (!e.tradeTime || trade.t > e.tradeTime)) {
-    e.price = trade.p;
-    e.tradeTime = trade.t;
+  if (trade) {
+    if (!e.tradeTime || trade.t > e.tradeTime) {
+      e.price = trade.p;
+      e.tradeTime = trade.t;
+    }
+    const session = sessionAt(trade.t);
+    // A regular-session trade only counts for the day bar's own session.
+    if (session !== "regular" || (daily && tradingDay(trade.t) === tradingDay(daily.t))) applyPrice(e, trade.p, trade.t, session);
   }
   const quote = snap.latestQuote;
   if (quote) {
@@ -106,28 +194,15 @@ export function applySnapshot(symbol: string, snap: alpaca.Snapshot | null): voi
     e.bidSize = quote.bs ?? null;
     e.askSize = quote.as ?? null;
   }
-  const daily = snap.dailyBar;
-  const prev = snap.prevDailyBar;
-  if (daily) {
-    const today = tradingDay(Date.now() / 1000);
-    if (tradingDay(daily.t) === today || !trade || tradingDay(trade.t) === tradingDay(daily.t)) {
-      // Today's session (or the last one, outside trading days) is the day bar.
-      e.barDay = tradingDay(daily.t);
-      e.open = daily.o;
-      e.high = daily.h;
-      e.low = daily.l;
-      e.volume = daily.v;
-      e.dayClose = daily.c;
-      e.prevClose = prev?.c ?? e.prevClose;
-    } else {
-      // Pre-market: the latest day bar is yesterday's, so its close is the previous close.
-      e.barDay = tradingDay(trade.t);
-      e.open = e.high = e.low = null;
-      e.volume = null;
-      e.dayClose = null;
-      e.prevClose = daily.c;
-    }
-  }
+  e.updatedAt = Date.now();
+}
+
+/** A snapshot from Blue Ocean's overnight feed: only its latest trade is used. */
+export function applyOvernightSnapshot(symbol: string, snap: alpaca.Snapshot | null): void {
+  const trade = snap?.latestTrade;
+  if (!trade) return;
+  const e = entry(symbol);
+  applyPrice(e, trade.p, trade.t, "overnight");
   e.updatedAt = Date.now();
 }
 
@@ -142,14 +217,11 @@ export function applyMessage(m: alpaca.StreamMessage): void {
       const t = m.t as string;
       if (e.tradeTime && t < e.tradeTime) return;
       const p = m.p as number;
-      if (e.barDay && tradingDay(t) > e.barDay) {
-        applyDayBar(e, { t, o: p, h: p, l: p, c: p, v: 0 });
-        e.dayClose = null;
-      }
       e.price = p;
       e.tradeTime = t;
-      if (e.high !== null && p > e.high) e.high = p;
-      if (e.low !== null && p < e.low) e.low = p;
+      // The tape has nothing overnight but the odd late report.
+      const session = sessionAt(t);
+      if (session !== "overnight") applyPrice(e, p, t, session);
       e.updatedAt = Date.now();
       return;
     }
@@ -165,10 +237,10 @@ export function applyMessage(m: alpaca.StreamMessage): void {
     case "d": {
       const e = entry(symbol);
       applyDayBar(e, m as unknown as alpaca.Bar);
-      if (!tradeSet.has(symbol) && !allTrades) {
-        // Without the trade feed, the day bar's close is the latest price.
-        e.price = m.c as number;
-        e.tradeTime = new Date().toISOString();
+      if (!isRealtime(symbol)) {
+        // Without the trade feed, the day bar's close is the latest regular price.
+        e.regPrice = m.c as number;
+        e.regTime = new Date().toISOString();
       }
       e.updatedAt = Date.now();
       return;
@@ -182,41 +254,98 @@ export function applyMessage(m: alpaca.StreamMessage): void {
           volume: m.v as number, vwap: (m.vw as number) ?? null, trades: (m.n as number) ?? null,
         });
       }
+      // Tickers without the trade feed follow the extended sessions by the minute.
+      const session = sessionAt(m.t as string);
+      if (session === "pre" || session === "post") {
+        if (isRealtime(symbol)) return;
+        const e = entry(symbol);
+        const end = new Date(Date.parse(m.t as string) + 60_000).toISOString();
+        applyPrice(e, m.c as number, end, session);
+        if (!e.tradeTime || end > e.tradeTime) {
+          e.price = m.c as number;
+          e.tradeTime = end;
+        }
+        e.updatedAt = Date.now();
+      }
       return;
     }
+  }
+}
+
+/** A message from the overnight (Blue Ocean) stream. */
+export function applyOvernightMessage(m: alpaca.StreamMessage): void {
+  const symbol = m.S;
+  if (!symbol) return;
+  // Most overnight trades are odd lots, so they count here.
+  if (m.T === "t") {
+    const e = entry(symbol);
+    applyPrice(e, m.p as number, m.t as string, "overnight");
+    e.updatedAt = Date.now();
+  } else if ((m.T === "b" || m.T === "u") && !overnightRealtime(symbol)) {
+    const e = entry(symbol);
+    applyPrice(e, m.c as number, new Date(Date.parse(m.t as string) + 60_000).toISOString(), "overnight");
+    e.updatedAt = Date.now();
   }
 }
 
 // ---- reading ----
 
 function marketState(now: Date): string {
-  const ny = nyClock(now);
-  if (ny.weekday === "Sat" || ny.weekday === "Sun") return "CLOSED";
-  const minutes = ny.hour * 60 + Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", minute: "2-digit" }).format(now));
-  if (minutes < 4 * 60) return "CLOSED";
-  if (minutes < 9 * 60 + 30) return "PRE";
-  if (minutes < 16 * 60) return "REGULAR";
-  if (minutes < 20 * 60) return "POST";
-  return "CLOSED";
+  const s = sessionAt(now);
+  return s === "pre" ? "PRE" : s === "regular" ? "REGULAR" : s === "post" ? "POST" : s === "overnight" ? "OVERNIGHT" : "CLOSED";
 }
 
 /** Whether `symbol` is getting every trade right now. */
 export function isRealtime(symbol: string): boolean {
-  return connected && (allTrades || tradeSet.has(symbol));
+  return sip.connected && (allTrades || sip.tradeSet.has(symbol));
 }
 
-export type LiveQuote = Quote & { live: boolean };
+/** Whether `symbol` is getting every overnight trade right now. */
+export function overnightRealtime(symbol: string): boolean {
+  return boats.connected && boats.tradeSet.has(symbol);
+}
 
-/** A quote from memory, or null when nothing is known yet. `asOf` is the last trade's time. */
+export type LiveQuote = Quote & { live: boolean; extended: ExtendedHours };
+
+/**
+ * A quote from memory, or null when nothing is known yet. Price and change are
+ * the regular session's (the close once it's over); `extended` has what traded
+ * since the last close. `asOf` is the regular price's time.
+ */
 export function liveQuote(symbol: string, requestedAs = symbol, now = new Date()): LiveQuote | null {
   const e = entries.get(symbol);
-  const state = marketState(now);
-  if (!e || e.price === null) return null;
-  const change = e.prevClose !== null ? e.price - e.prevClose : null;
+  if (!e || !e.barDay) return null;
+  const session = sessionAt(now);
+  const finished = now.getTime() >= regularCloseAt(e.barDay);
+  const price = finished ? e.dayClose ?? e.regPrice : e.regPrice ?? e.dayClose;
+  if (price === null) return null;
+  const change = e.prevClose !== null ? price - e.prevClose : null;
+
+  // Extended sessions count from the last regular close: the previous session's
+  // while today's is on, this one's once it has closed.
+  const anchor = finished ? price : e.prevClose;
+  const anchorAt = finished
+    ? regularCloseAt(e.barDay)
+    : e.prevDay
+      ? regularCloseAt(e.prevDay)
+      : nyInstant(e.barDay, 4) - 8 * 3_600_000;
+  const extended = (name: Exclude<Session, "regular">): SessionPrice | null => {
+    const t = e[name];
+    if (!t || Date.parse(t.time) <= anchorAt) return null;
+    const diff = anchor !== null ? t.price - anchor : null;
+    return {
+      price: t.price,
+      change: diff,
+      changePercent: diff !== null && anchor ? (diff / anchor) * 100 : null,
+      time: t.time,
+      live: session === name && (name === "overnight" ? overnightRealtime(symbol) : isRealtime(symbol)),
+    };
+  };
+
   return {
     symbol: requestedAs,
     name: null,
-    price: e.price,
+    price,
     change,
     changePercent: change !== null && e.prevClose ? (change / e.prevClose) * 100 : null,
     open: e.open,
@@ -237,13 +366,14 @@ export function liveQuote(symbol: string, requestedAs = symbol, now = new Date()
     sharesOutstanding: null,
     currency: "USD",
     exchange: null,
-    marketState: state,
-    time: e.tradeTime ? Math.floor(Date.parse(e.tradeTime) / 1000) : null,
+    marketState: marketState(now),
+    time: e.regTime ? Math.floor(Date.parse(e.regTime) / 1000) : null,
     source: "alpaca",
-    asOf: e.tradeTime ?? undefined,
-    // Overnight and on weekends nothing trades, so the price is "as of" the last trade.
-    live: state !== "CLOSED" && isRealtime(symbol),
-  } as LiveQuote;
+    asOf: e.regTime ?? undefined,
+    // Live means the regular price itself is moving with every trade.
+    live: session === "regular" && !finished && isRealtime(symbol),
+    extended: { post: extended("post"), overnight: extended("overnight"), pre: extended("pre") },
+  };
 }
 
 export function liveEntry(symbol: string): LiveEntry | undefined {
@@ -264,7 +394,7 @@ export async function focusOn(symbols: string[]): Promise<void> {
   const now = Date.now();
   let added = false;
   for (const s of symbols) {
-    if (!focus.has(s) && !tradeSet.has(s)) added = true;
+    if (!focus.has(s) && !sip.tradeSet.has(s)) added = true;
     focus.set(s, now);
   }
   if (added) scheduleResubscribe();
@@ -272,8 +402,12 @@ export async function focusOn(symbols: string[]): Promise<void> {
   const unknown = symbols.filter((s) => entries.get(s)?.price == null && now - (unknownToAlpaca.get(s) ?? 0) > FOCUS_TTL_MS);
   if (unknown.length > 0) {
     try {
-      const snaps = await alpaca.snapshots(unknown);
+      const [snaps, night] = await Promise.all([
+        alpaca.snapshots(unknown),
+        overnightEnabled ? alpaca.snapshots(unknown, "boats").catch(() => ({})) : Promise.resolve({}),
+      ]);
       for (const [s, snap] of Object.entries(snaps)) applySnapshot(s, snap);
+      for (const [s, snap] of Object.entries(night)) applyOvernightSnapshot(s, snap);
       for (const s of unknown) if (entries.get(s)?.price == null) unknownToAlpaca.set(s, now);
     } catch (err) {
       // Don't retry on every poll while Alpaca is failing; the web sources answer meanwhile.
@@ -286,13 +420,20 @@ export async function focusOn(symbols: string[]): Promise<void> {
 export function status() {
   return {
     enabled: started,
-    connected,
+    connected: sip.connected,
     allTrades,
-    realtimeSymbols: allTrades ? "all" : tradeSet.size,
+    realtimeSymbols: allTrades ? "all" : sip.tradeSet.size,
     focused: focus.size,
     knownSymbols: entries.size,
-    lastMessageAt: lastMessageAt ? new Date(lastMessageAt).toISOString() : null,
-    lastError,
+    lastMessageAt: sip.lastMessageAt ? new Date(sip.lastMessageAt).toISOString() : null,
+    lastError: sip.lastError ?? lastError,
+    overnight: {
+      enabled: overnightEnabled,
+      connected: boats.connected,
+      realtimeSymbols: boats.tradeSet.size,
+      lastMessageAt: boats.lastMessageAt ? new Date(boats.lastMessageAt).toISOString() : null,
+      lastError: boats.lastError,
+    },
   };
 }
 
@@ -312,55 +453,68 @@ function resubscribe(): void {
   const now = Date.now();
   for (const [s, at] of focus) if (now - at > FOCUS_TTL_MS) focus.delete(s);
   minuteSet = new Set(minuteUniverse());
-  if (!ws || !connected || allTrades) return;
   const want = new Set([...minuteSet, ...focus.keys()]);
-  const add = [...want].filter((s) => !tradeSet.has(s));
-  const drop = [...tradeSet].filter((s) => !want.has(s));
-  if (add.length > 0) ws.send(JSON.stringify({ action: "subscribe", trades: add, quotes: add }));
-  if (drop.length > 0) ws.send(JSON.stringify({ action: "unsubscribe", trades: drop, quotes: drop }));
-  tradeSet = want;
+  for (const st of [sip, boats]) {
+    if (!st.ws || !st.connected || (st === sip && allTrades)) continue;
+    const add = [...want].filter((s) => !st.tradeSet.has(s));
+    const drop = [...st.tradeSet].filter((s) => !want.has(s));
+    if (add.length > 0) st.ws.send(JSON.stringify({ action: "subscribe", trades: add, quotes: st === sip ? add : [] }));
+    if (drop.length > 0) st.ws.send(JSON.stringify({ action: "unsubscribe", trades: drop, quotes: st === sip ? drop : [] }));
+    st.tradeSet = new Set(want);
+  }
 }
 
-function connect(): void {
-  connected = false;
+function connect(st: Stream): void {
+  st.connected = false;
   let socket: WebSocket;
   try {
-    socket = alpaca.openStream();
+    socket = alpaca.openStream(st.path());
   } catch (err) {
-    lastError = err instanceof Error ? err.message : String(err);
+    st.lastError = err instanceof Error ? err.message : String(err);
     return;
   }
-  ws = socket;
+  st.ws = socket;
   socket.addEventListener("message", (ev) => {
-    lastMessageAt = Date.now();
+    st.lastMessageAt = Date.now();
     for (const m of alpaca.parseStream(ev.data)) {
       if (m.T === "success" && m.msg === "authenticated") {
-        reconnectDelay = 1_000;
-        connected = true;
-        tradeSet = new Set();
-        const base = { bars: ["*"], updatedBars: ["*"], dailyBars: ["*"] };
-        socket.send(JSON.stringify(allTrades ? { action: "subscribe", ...base, trades: ["*"] } : { action: "subscribe", ...base }));
+        st.reconnectDelay = 1_000;
+        st.connected = true;
+        st.lastError = null;
+        st.tradeSet = new Set();
+        if (st === sip) {
+          const base = { bars: ["*"], updatedBars: ["*"], dailyBars: ["*"] };
+          socket.send(JSON.stringify(allTrades ? { action: "subscribe", ...base, trades: ["*"] } : { action: "subscribe", ...base }));
+        } else {
+          socket.send(JSON.stringify({ action: "subscribe", bars: ["*"], updatedBars: ["*"] }));
+        }
         resubscribe();
-        console.log(`[live] connected to Alpaca stream${allTrades ? " (all trades)" : ""}`);
+        console.log(`[${st.name}] connected to Alpaca stream ${st.path()}${st === sip && allTrades ? " (all trades)" : ""}`);
       } else if (m.T === "error") {
         // e.g. 406 connection limit exceeded: another app is using this account's stream.
-        lastError = `stream error ${m.code}: ${m.msg}`;
-        console.error(`[live] ${lastError}`);
+        st.lastError = `stream error ${m.code}: ${m.msg}`;
+        console.error(`[${st.name}] ${st.lastError}`);
+        // 402 not authorized / 409 insufficient subscription: retrying won't help.
+        if (m.code === 402 || m.code === 409) st.refused = true;
       } else {
-        applyMessage(m);
+        st.apply(m);
       }
     }
   });
   socket.addEventListener("close", () => {
-    connected = false;
-    if (ws !== socket) return;
-    ws = null;
-    console.warn(`[live] stream closed; reconnecting in ${reconnectDelay / 1000}s`);
-    setTimeout(connect, reconnectDelay).unref();
-    reconnectDelay = Math.min(reconnectDelay * 2, 60_000);
+    st.connected = false;
+    if (st.ws !== socket) return;
+    st.ws = null;
+    if (st.refused) {
+      console.warn(`[${st.name}] Alpaca refused ${st.path()} for this account; not reconnecting`);
+      return;
+    }
+    console.warn(`[${st.name}] stream closed; reconnecting in ${st.reconnectDelay / 1000}s`);
+    setTimeout(() => connect(st), st.reconnectDelay).unref();
+    st.reconnectDelay = Math.min(st.reconnectDelay * 2, 60_000);
   });
   socket.addEventListener("error", () => {
-    lastError = "stream connection error";
+    st.lastError = "stream connection error";
   });
 }
 
@@ -374,7 +528,21 @@ async function refreshSnapshots(): Promise<void> {
       lastError = `snapshot: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
+  // Overnight snapshots for the watched tickers, at start and while the
+  // overnight session is on; the stream's minute bars cover everything else.
+  if (!overnightEnabled || (overnightSeeded && sessionAt(new Date()) !== "overnight")) return;
+  const watched = [...new Set([...minuteSet, ...focus.keys()])];
+  for (let i = 0; i < watched.length; i += SNAPSHOT_BATCH) {
+    try {
+      const snaps = await alpaca.snapshots(watched.slice(i, i + SNAPSHOT_BATCH), "boats");
+      for (const [s, snap] of Object.entries(snaps)) applyOvernightSnapshot(s, snap);
+    } catch (err) {
+      boats.lastError = `snapshot: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+  overnightSeeded = true;
 }
+let overnightSeeded = false;
 
 function flushMinuteBars(): void {
   if (minuteBuffer.length === 0) return;
@@ -393,8 +561,10 @@ export function startLiveFeed(): void {
   }
   started = true;
   allTrades = process.env.LIVE_ALL_TRADES === "1";
+  overnightEnabled = process.env.LIVE_OVERNIGHT !== "0";
   minuteSet = new Set(minuteUniverse());
-  connect();
+  connect(sip);
+  if (overnightEnabled) connect(boats);
   const snap = () => void refreshSnapshots();
   snap();
   setInterval(snap, SNAPSHOT_EVERY_MS).unref();
@@ -407,8 +577,10 @@ export function resetLiveFeed(): void {
   entries.clear();
   focus.clear();
   unknownToAlpaca.clear();
-  tradeSet = new Set();
   minuteSet = new Set();
   minuteBuffer.length = 0;
-  connected = false;
+  for (const st of [sip, boats]) {
+    st.tradeSet = new Set();
+    st.connected = false;
+  }
 }
