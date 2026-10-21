@@ -68,7 +68,7 @@ describe("startOptionsJobs", () => {
         openInterest: async () => new Map<string, number>(),
       }
     );
-    expect(h.status()).toMatchObject({ connected: false, subscribed: 0, lastError: null, lastSweep: null });
+    expect(h.status()).toMatchObject({ connected: false, subscribed: 0, lastError: null, lastSweep: null, rejectedSymbols: [] });
     const result = await h.sweepNow();
     expect(result?.underlyings).toBe(1);
     expect(h.status().lastSweep).toMatchObject({ underlyings: 1, errors: 0 });
@@ -77,5 +77,16 @@ describe("startOptionsJobs", () => {
     const [a, b] = await Promise.all([h.sweepNow(), h.sweepNow()]);
     expect([a, b].filter(Boolean)).toHaveLength(1);
     expect(jobs.startOptionsJobs({ underlyings: () => [], optionHoldings: () => [], stockHoldings: () => [] })).toBe(h);
+  });
+
+  it("runs one backfill at a time", async () => {
+    const h = jobs.optionsHandle()!;
+    // No daily_bars for BFX, so the backfill finishes without a request.
+    expect(h.startBackfill(["BFX"])).toBe(true);
+    expect(h.startBackfill(["BFX"])).toBe(false); // claimed until the first one ends
+    await new Promise((r) => setTimeout(r, 50));
+    expect(h.status().backfill).toMatchObject({ running: false, total: 1, done: 1, rows: 0 });
+    expect(h.startBackfill(["BFX"])).toBe(true);
+    await new Promise((r) => setTimeout(r, 50));
   });
 });

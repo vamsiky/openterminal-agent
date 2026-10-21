@@ -3,8 +3,10 @@ import { tradingDay } from "../history/time.js";
 import { ensureCalendar, isTradingDay, sessionClose, sessionOpen } from "../providers/alpaca-calendar.js";
 import * as alpaca from "../providers/alpaca.js";
 import type { OptionMetrics, OptionsDeps } from "../scan/contracts.js";
+import { backfillMany, newBackfillStatus, type BackfillDeps } from "./backfill.js";
+import { rejectedFor } from "./open-interest.js";
 import { createOpraStream, type OpraStream } from "./opra-stream.js";
-import { latestOptionMetrics, pruneOptionBars } from "./store.js";
+import { ivHistoryCount, latestOptionMetrics, pruneOptionBars } from "./store.js";
 import { runSweep, type SweepDeps, type SweepResult } from "./sweep.js";
 import type { Pair } from "./selection.js";
 
@@ -13,6 +15,7 @@ import type { Pair } from "./selection.js";
 // sweep the stream is pointed at the new contract selection. Option bars are
 // pruned once a day. OPTIONS_SWEEP=0 turns the sweep off, OPTIONS_STREAM=0 the stream.
 
+const BACKFILL_MIN_ROWS = 200;
 const SWEEP_EVERY_MS = 5 * 60_000;
 const CHECK_EVERY_MS = 15_000;
 const PRUNE_EVERY_MS = 6 * 3_600_000;
@@ -39,6 +42,8 @@ export type OptionsHandle = {
   stream: OpraStream;
   /** Run a sweep now (also used by tests); skipped when one is already running. */
   sweepNow: () => Promise<SweepResult | null>;
+  /** Backfill iv_history for `symbols` (default: universe underlyings with under 200 rows). False when one is already running. */
+  startBackfill: (symbols?: string[]) => boolean;
   stop: () => void;
 };
 
@@ -46,19 +51,22 @@ let current: OptionsHandle | null = null;
 /** The running handle, for the route; null before startOptionsJobs. */
 export const optionsHandle = (): OptionsHandle | null => current;
 
-function statusOf(stream: OpraStream, enabled: boolean, lastSweep: SweepSummary | null, sweeping: boolean) {
+function statusOf(stream: OpraStream, enabled: boolean, lastSweep: SweepSummary | null, sweeping: boolean, backfill: ReturnType<typeof newBackfillStatus>) {
   const s = stream.status();
   return {
     ...s,
     // The sweep's error shows when the stream has none, so one field tells the widget something is wrong.
     lastError: s.lastError ?? lastSweep?.lastError ?? null,
     sweepEnabled: enabled,
+    backfill: { ...backfill, errors: backfill.errors.length },
+    /** Underlyings Alpaca rejected today; skipped by the sweep and the open-interest fetch. */
+    rejectedSymbols: [...rejectedFor(tradingDay(Date.now() / 1000))],
     sweeping,
     lastSweep,
   };
 }
 
-export function startOptionsJobs(deps: OptionsDeps, overrides: Partial<SweepDeps> = {}): OptionsHandle {
+export function startOptionsJobs(deps: OptionsDeps, overrides: Partial<SweepDeps> = {}, backfillOverrides: BackfillDeps = {}): OptionsHandle {
   if (current) return current;
   const lastPrices = new Map<string, number>();
   let previous = new Map<string, Pair>();
@@ -67,6 +75,24 @@ export function startOptionsJobs(deps: OptionsDeps, overrides: Partial<SweepDeps
   let lastStart = 0;
   let lastPrune = 0;
   let warnedHeld = false;
+  const backfill = newBackfillStatus();
+  let stopped = false;
+
+  // The backfill steps aside while a sweep runs, so it never queues ahead of one on the shared limiter.
+  const backfillDeps: BackfillDeps = {
+    pause: async () => {
+      while (sweeping && !stopped) await new Promise((r) => setTimeout(r, 1_000));
+    },
+    aborted: () => stopped,
+    ...backfillOverrides,
+  };
+  const needsBackfill = () => deps.underlyings().filter((s) => ivHistoryCount(s) < BACKFILL_MIN_ROWS);
+  function startBackfill(symbols?: string[]): boolean {
+    if (backfill.running) return false;
+    backfill.running = true; // claimed before the async start so a second call sees it
+    void backfillMany(symbols ?? needsBackfill(), backfillDeps, backfill).catch((err) => console.error("[options] iv backfill failed:", err));
+    return true;
+  }
   const sweepEnabled = process.env.OPTIONS_SWEEP !== "0" && alpaca.isConfigured();
 
   const stream = createOpraStream({
@@ -136,15 +162,21 @@ export function startOptionsJobs(deps: OptionsDeps, overrides: Partial<SweepDeps
   stream.start();
   // Load the market calendar (this year, and next in December) before the first sweep decision.
   const year = new Date().getFullYear();
-  void Promise.all([ensureCalendar(year), new Date().getMonth() === 11 ? ensureCalendar(year + 1) : true]).finally(tick);
+  void Promise.all([ensureCalendar(year), new Date().getMonth() === 11 ? ensureCalendar(year + 1) : true]).finally(() => {
+    tick();
+    // Universe underlyings with a short IV history get backfilled once, in the background.
+    if (alpaca.isConfigured() && process.env.OPTIONS_BACKFILL !== "0") startBackfill();
+  });
   if (sweepEnabled) console.log("[options] sweep enabled (every 5 minutes, 09:30 to the close, trading days)");
 
   current = {
-    status: () => statusOf(stream, sweepEnabled, lastSweep, sweeping),
+    status: () => statusOf(stream, sweepEnabled, lastSweep, sweeping, backfill),
     latestOptionMetrics,
     stream,
     sweepNow,
+    startBackfill,
     stop: () => {
+      stopped = true;
       clearInterval(timer);
       stream.stop();
       current = null;

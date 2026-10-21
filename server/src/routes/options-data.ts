@@ -53,3 +53,15 @@ optionsDataRouter.get("/bars/:occ", (req, res) => {
   if (!from.success || !to.success) return res.status(400).json({ error: "from and to must be unix seconds or ISO times" });
   res.json({ occ, bars: optionBars(occ, from.data, to.data) });
 });
+
+// Fill iv_history from Alpaca's historical option bars. Starts in the background; 409 while one runs.
+const backfillBody = z.object({ symbols: z.array(symbolSchema).min(1).max(1000).optional() }).default({});
+optionsDataRouter.post("/backfill-iv", (req, res) => {
+  const h = optionsHandle();
+  if (!h) return res.status(503).json({ error: "options jobs are not running" });
+  const body = backfillBody.safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ error: "symbols must be a list of ticker symbols" });
+  const symbols = body.data.symbols?.map((s) => s.toUpperCase());
+  if (!h.startBackfill(symbols)) return res.status(409).json({ error: "a backfill is already running", backfill: h.status().backfill });
+  res.status(202).json({ started: true, backfill: h.status().backfill });
+});

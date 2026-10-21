@@ -8,7 +8,7 @@ import * as alpaca from "../providers/alpaca.js";
 import type { OptionMetrics, OptionPosition } from "../scan/contracts.js";
 import { greeks, impliedVol, midPrice, riskFreeRate, yearsToExpiry } from "./black-scholes.js";
 import { daysBetween, selectContracts, type ExpiryStrikes, type Pair, type Selection } from "./selection.js";
-import { ensureOpenInterest } from "./open-interest.js";
+import { ensureOpenInterest, rejectedFor } from "./open-interest.js";
 import { ivHistory, ivRank, saveOptionMetrics, upsertIvDay } from "./store.js";
 
 // The 5-minute snapshot sweep: one chain snapshot per underlying (expiries up
@@ -255,6 +255,8 @@ export type SweepResult = {
   errors: Array<{ symbol: string; message: string }>;
   /** HTTP requests made (stock price snapshots plus option snapshot pages). */
   requests: number;
+  /** Underlyings skipped today because Alpaca rejected them. */
+  rejected: string[];
   prices: Map<string, number>;
 };
 
@@ -299,8 +301,10 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
     errors.push({ symbol: "open-interest", message: err instanceof Error ? err.message : String(err) });
   }
 
+  // Underlyings Alpaca called invalid (found by the open-interest fetch) are skipped for the day.
+  const rejected = rejectedFor(day);
   const parsed = new Map<string, ParsedContract[]>();
-  await mapWithConcurrency(underlyings.filter((u) => prices.has(u)), cfg.concurrency, async (u) => {
+  await mapWithConcurrency(underlyings.filter((u) => prices.has(u) && !rejected.has(u)), cfg.concurrency, async (u) => {
     const price = prices.get(u)!;
     try {
       const snaps = await fetchSnaps(u, {
@@ -332,5 +336,5 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
     if (recordsIvDay(started) && (m.iv30 !== null || m.atmIv !== null)) upsertIvDay({ symbol: u, day, iv30: m.iv30, atmIv: m.atmIv, hv20: m.hv20 });
     metrics.push(m);
   }
-  return { startedAt: new Date(started).toISOString(), durationMs: now() - started, underlyings: underlyings.length, metrics, selection, errors, requests: stats.requests, prices };
+  return { startedAt: new Date(started).toISOString(), durationMs: now() - started, underlyings: underlyings.length, metrics, selection, errors, requests: stats.requests, rejected: [...rejected], prices };
 }

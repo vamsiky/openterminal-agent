@@ -169,3 +169,31 @@ export async function chain(underlying: string, filter: Omit<ChainFilter, "type"
   }
   return { symbol, underlyingPrice: price, expirationDates, selectedDate, calls, puts };
 }
+
+export type OptionDayBar = { t: string; o: number; h: number; l: number; c: number; v: number };
+
+/**
+ * Daily bars for many option contracts (expired ones too, back to early 2024)
+ * between two dates, all pages. Contracts with no bars are absent from the
+ * result. `stats.requests` counts the page requests.
+ */
+export async function optionDailyBars(symbols: string[], start: string, end: string, stats?: { requests: number }, maxPages = 50): Promise<Record<string, OptionDayBar[]>> {
+  const out: Record<string, OptionDayBar[]> = {};
+  let pageToken: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    if (stats) stats.requests++;
+    const data = await dataFetch("/v1beta1/options/bars", {
+      symbols: symbols.join(","),
+      timeframe: "1Day",
+      start,
+      end,
+      limit: "10000",
+      sort: "asc",
+      page_token: pageToken,
+    });
+    for (const [occ, bars] of Object.entries<OptionDayBar[]>(data?.bars ?? {})) (out[occ] ??= []).push(...bars);
+    pageToken = data?.next_page_token ?? undefined;
+    if (!pageToken) break;
+  }
+  return out;
+}
