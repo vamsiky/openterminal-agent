@@ -9,7 +9,7 @@ export type SeriesPoint = { date: string; value: number };
 const HEADERS = { "User-Agent": "openterminal/0.1" };
 
 export async function series(seriesId: string, lastN = 260): Promise<SeriesPoint[]> {
-  const res = await fetch(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${seriesId}`, { headers: HEADERS });
+  const res = await fetch(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${seriesId}`, { headers: HEADERS, signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`fred ${res.status} for ${seriesId}`);
   const text = await res.text();
   const lines = text.trim().split("\n");
