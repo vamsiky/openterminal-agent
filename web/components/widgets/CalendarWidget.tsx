@@ -2,7 +2,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Fragment, useMemo, useState } from "react";
-import { apiGet, fmt, pctClass } from "../../lib/api";
+import { apiGet, fmt, fmtBig, pctClass } from "../../lib/api";
+import ErrorNote from "../ErrorNote";
 import { symbolsParam } from "../../lib/symbol";
 import { useTerminal } from "../../store/terminal";
 
@@ -41,6 +42,19 @@ const TIMEZONES: Array<{ label: string; zone: string | undefined }> = [
   { label: "Sydney", zone: "Australia/Sydney" },
 ];
 
+function fmtEventTime(date: string, zone: string | undefined): string {
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    timeZone: zone,
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+}
+
 function EconomicTab() {
   const [minImpact, setMinImpact] = useState<"all" | "medium">("medium");
   const [tz, setTz] = useState<string>("Local");
@@ -56,7 +70,7 @@ function EconomicTab() {
     [data, minImpact]
   );
 
-  if (error) return <div className="p-2 down">Error: {(error as Error).message}</div>;
+  if (error) return <ErrorNote error={error} />;
   if (isLoading) return <div className="p-2 dim">Loading calendar…</div>;
 
   const zone = TIMEZONES.find((t) => t.label === tz)?.zone;
@@ -98,17 +112,10 @@ function EconomicTab() {
           {events.map((e, i) => (
             <tr key={`${e.title}-${e.date}-${i}`}>
               <td className="!text-left dim whitespace-nowrap">
-                {new Date(e.date).toLocaleString(undefined, {
-                  timeZone: zone,
-                  month: "short",
-                  day: "2-digit",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  timeZoneName: "short",
-                })}
+                {fmtEventTime(e.date, zone)}
               </td>
               <td>{e.country}</td>
-              <td className={`!text-left ${IMPACT_CLASS[e.impact]}`}>{e.title}</td>
+              <td className={`!text-left ${IMPACT_CLASS[e.impact] ?? "dim"}`}>{e.title}</td>
               <td>{e.forecast ?? "—"}</td>
               <td className="dim">{e.previous ?? "—"}</td>
               <td className={e.actual ? "text-[var(--text)]" : "dim"}>{e.actual ?? "—"}</td>
@@ -116,7 +123,7 @@ function EconomicTab() {
           ))}
         </tbody>
       </table>
-      {events.length === 0 && <div className="p-3 dim">No events in this window.</div>}
+      {events.length === 0 && <div className="p-3 dim">No events in the next two weeks.</div>}
     </div>
   );
 }
@@ -130,6 +137,8 @@ type EarningsHistoryRow = {
   consensusForecast: number | null;
   surprisePercent: number | null;
   dayAfterChangePercent: number | null;
+  revenue?: number | null;
+  revenueEstimate?: number | null;
 };
 
 /** Actual vs forecast: beat = green, miss = red, in-line = white. */
@@ -147,7 +156,7 @@ function EarningsHistoryRows({ symbol }: { symbol: string }) {
     staleTime: 3_600_000,
   });
 
-  if (error) return <div className="p-2 down">Error: {(error as Error).message}</div>;
+  if (error) return <ErrorNote error={error} />;
   if (isLoading) return <div className="p-2 dim">Loading history for {symbol}…</div>;
   if (data.length === 0) return <div className="p-2 dim">No earnings history for {symbol}.</div>;
 
@@ -160,17 +169,19 @@ function EarningsHistoryRows({ symbol }: { symbol: string }) {
           <th>Forecast</th>
           <th>Actual</th>
           <th>Surprise</th>
+          <th>Revenue</th>
           <th>Day After</th>
         </tr>
       </thead>
       <tbody>
         {data.map((row) => (
           <tr key={row.dateReported}>
-            <td className="!text-left dim">{row.fiscalQtrEnd}</td>
+            <td className="!text-left dim">{row.fiscalQtrEnd || "—"}</td>
             <td className="!text-left dim">{fmtDate(row.dateReported)}</td>
             <td className="dim">{row.consensusForecast != null ? `$${row.consensusForecast.toFixed(2)}` : "—"}</td>
             <td className={surpriseClass(row)}>{row.eps != null ? `$${row.eps.toFixed(2)}` : "—"}</td>
             <td className={surpriseClass(row)}>{row.surprisePercent != null ? `${fmt(row.surprisePercent, 1)}%` : "—"}</td>
+            <td className="dim" title={`Estimate ${fmtBig(row.revenueEstimate)}`}>{fmtBig(row.revenue)}</td>
             <td className={pctClass(row.dayAfterChangePercent)}>
               {row.dayAfterChangePercent != null ? `${fmt(row.dayAfterChangePercent, 1)}%` : "—"}
             </td>
@@ -203,7 +214,7 @@ function EarningsTab() {
     [data]
   );
 
-  if (error) return <div className="p-2 down">Error: {(error as Error).message}</div>;
+  if (error) return <ErrorNote error={error} />;
   if (isLoading) return <div className="p-2 dim">Loading earnings…</div>;
 
   return (

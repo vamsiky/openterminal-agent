@@ -5,6 +5,7 @@ import { useState } from "react";
 import { apiGet, fmt, pctClass } from "../../lib/api";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from "recharts";
 import { useTerminal } from "../../store/terminal";
+import ErrorNote from "../ErrorNote";
 import Flash from "../Flash";
 
 type MacroData = {
@@ -34,7 +35,7 @@ export default function MacroWidget() {
         ))}
       </div>
       {error ? (
-        <div className="p-2 down">Error: {(error as Error).message}</div>
+        <ErrorNote error={error} />
       ) : !data ? (
         <div className="p-2 dim">Loading macro data…</div>
       ) : (
@@ -93,7 +94,7 @@ function MacroBody({
           <tr><th>Index / Commodity</th><th>Last</th><th>Chg%</th></tr>
         </thead>
         <tbody>
-          {data.indexes.map((q) => (
+          {(data.indexes ?? []).map((q) => (
             <tr key={q.symbol} onClick={() => setActiveSymbol(q.symbol)}>
               <td>{q.label}</td>
               <td><Flash value={q.price}>{fmt(q.price)}</Flash></td>

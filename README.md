@@ -2,13 +2,13 @@
 
 # OpenTerminal
 
-**A Terminal‑style workspace for the rest of us — built entirely on free, public market data.**
+**A Terminal‑style workspace for the rest of us — built on market data you're allowed to use.**
 
-Dark. Dense. Keyboard‑driven. Zero paid API keys, zero subscriptions.
+Dark. Dense. Keyboard‑driven. Runs on your machine with your own Alpaca market‑data keys.
 
 [![Stack](https://img.shields.io/badge/stack-Next.js%20%2B%20Express%20%2B%20TypeScript-orange)](#tech-stack)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
-[![No API Key Required](https://img.shields.io/badge/data-no%20API%20key%20required-brightgreen)](#data-sources)
+[![Data: Alpaca + official sources](https://img.shields.io/badge/data-Alpaca%20%2B%20official%20sources-brightgreen)](#data-sources)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](#contributing)
 
 <a href="https://trendshift.io/repositories/215916?utm_source=trendshift-badge&utm_medium=badge&utm_campaign=badge-trendshift-215916" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/215916/daily?language=TypeScript" alt="ErTasselli%2FOpenTerminal | Trendshift" width="250" height="55"/></a>
@@ -27,9 +27,7 @@ Dark. Dense. Keyboard‑driven. Zero paid API keys, zero subscriptions.
 
 Real trading terminals cost **$2,000+ a month**. Most retail dashboards either lock the good stuff behind a paywall or run on a single flaky data source that breaks the moment you actually need it.
 
-OpenTerminal takes a different approach: it stitches together several **free, publicly documented (or reverse‑engineered but widely used) market data endpoints** — the same ones that power major finance sites' own front ends — into one fast, keyboard‑first, widget‑based dashboard that runs entirely on your machine. Every data endpoint has an automatic fallback chain, so a single provider hiccup never takes the whole app down.
-
-No signup. No credit card. No rate‑limited demo tier. Clone it, `npm install`, and you have a live terminal in under a minute.
+OpenTerminal takes a different approach: it combines **Alpaca's market‑data API** (real‑time US stocks, options, crypto and news) with **official public sources** (SEC EDGAR, FRED, the ECB, FINRA, BLS, BEA, the Fed) and, optionally, **Financial Modeling Prep** for fundamentals and earnings, into one fast, keyboard‑first, widget‑based dashboard that runs entirely on your machine. Only sources whose terms allow this kind of automated use are called.
 
 <br/>
 
@@ -39,14 +37,14 @@ No signup. No credit card. No rate‑limited demo tier. Clone it, `npm install`,
 - ⌘K **global command palette** — instantly search stocks, ETFs, and crypto and jump straight to them
 - 📈 **Professional charting** (via [`lightweight-charts`](https://github.com/tradingview/lightweight-charts)) — candlesticks, bars, line, area, volume, 8 timeframes (1D → MAX), and SMA / EMA / VWAP / Bollinger Bands / RSI / MACD indicators, each with a live hover legend showing OHLC, volume, and every active indicator's value under your cursor
 - 💹 **Quote panel** — last / bid / ask / OHLC, volume, market cap, P/E, EPS, dividend yield, 52‑week range, beta, shares outstanding
-- 📰 **News feed** — aggregated and de‑duplicated from multiple RSS sources, per‑symbol or global
-- 🔎 **Full‑market screener** — filter by sector, market cap, % change, and volume across the entire US equity market, sortable on every column
+- 📰 **News feed** — Benzinga headlines through Alpaca News, per‑symbol or global
+- 🔎 **Large‑cap screener** — filter the S&P 500 and Nasdaq‑100 by sector, market cap, % change, and volume, sortable on every column
 - 🗺️ **Live sector heatmap** — treemap sized by market cap, colored by daily % change, refreshing every few seconds
-- ⛓️ **Options chain** — calls and puts side‑by‑side with strike, bid/ask, volume, open interest, and ITM highlighting
+- ⛓️ **Options chain** — calls and puts side‑by‑side with strike, bid/ask, volume, implied volatility, greeks, and ITM highlighting
 - 🪙 **Crypto board** — top assets with 7‑day sparklines, BTC/ETH dominance, and full OHLCV charting for any listed coin
 - 🏦 **Macro dashboard** — live US Treasury yield curve, VIX, and major index/commodity proxies
 - 💼 **Portfolio tracker** — log buy/sell transactions, track average cost, realized & unrealized P&L (persisted in SQLite)
-- 📅 **Calendar** — economic events (Fed, ECB, CPI, NFP and more) with consensus forecast, previous reading and, for the major US/EU releases, the actual outcome; plus a per‑watchlist earnings calendar with click‑through history showing forecast vs. actual EPS for the last several quarters and the stock's next‑day price move
+- 📅 **Calendar** — the next two weeks of official US releases (FOMC, CPI, jobs, GDP and more) from the agencies' own schedules, with forecast, previous and actual from FMP when keyed; plus a per‑watchlist earnings calendar (FMP) with click‑through history showing forecast vs. actual EPS for the last several quarters and the stock's next‑day price move
 - 🤖 **AI assistant** (optional) — ask questions about the symbol you're looking at, powered by Claude, fully context‑aware of the terminal's current data
 - ⚡ **Near real‑time updates** — quotes and indexes refresh every second with a subtle flash on change, so you always know what just moved
 - ⌨️ **Keyboard shortcuts** everywhere — `⌘K` to search, `⌥1`–`⌥9` to add any widget
@@ -65,7 +63,7 @@ Candlesticks, bars, line, or area — 8 timeframes, six technical indicators, an
 
 ### Live sector heatmap
 
-The whole US equity market as a treemap — sized by market cap, colored by daily % change, refreshing every few seconds so nothing you're watching ever goes stale.
+The US large caps (S&P 500 and Nasdaq‑100) as a treemap — sized by market cap, colored by daily % change, refreshing every few seconds so nothing you're watching ever goes stale.
 
 <img src="docs/screenshots/heatmap.png" alt="Live sector heatmap of the US equity market" width="100%" />
 
@@ -89,26 +87,40 @@ Headlines aggregated and de‑duplicated across multiple sources, filterable per
 
 ## 🗂️ Data sources
 
-No paid API, no keys, and no single point of failure — every endpoint has a fallback chain, and results are cached with a stale‑while‑revalidate strategy so a temporary outage never blanks out the UI.
+Every source below allows automated use under its terms. Results are cached with a stale‑while‑revalidate strategy, so a temporary outage doesn't blank out the UI.
 
-| Data | Primary source | Fallback |
+| Data | Source | Fallback / notes |
 |---|---|---|
-| Quotes (stocks/ETFs) | Nasdaq public quote API | Yahoo Finance → Stooq |
-| Fundamentals (P/E, EPS, beta, div yield) | TradingView scanner API | — |
-| Historical candles | Nasdaq chart API | Yahoo Finance → Stooq |
-| Symbol search | TradingView symbol search | Yahoo Finance |
-| Full‑market screener / heatmap | TradingView scanner API (live, whole US market) | — |
-| Options chain | Nasdaq option‑chain API | Yahoo Finance |
-| News | Yahoo Finance RSS | Google News RSS |
-| Crypto quotes & board | CoinGecko | Binance public API |
-| Crypto candles | Binance public API (klines) | — |
-| Macro (Treasury yields, VIX) | FRED (Federal Reserve) | — |
-| Economic calendar (schedule, forecast, previous) | Forex Factory public feed | — |
-| Economic calendar (actual — Fed / ECB / CPI / NFP only) | FRED (Federal Reserve) | — |
-| Earnings calendar (next/last date, EPS estimate) | TradingView scanner API | — |
-| Earnings history (forecast vs. actual, surprise %) | Nasdaq earnings‑surprise API | — |
+| Quotes (US stocks/ETFs) | Alpaca live stream + snapshots | FMP (if keyed) → Stooq |
+| Quote fields (name, market cap, P/E, EPS, beta, 52w, div yield) | FMP (if keyed) | Without FMP: name/exchange from the Nasdaq Trader symbol directory, shares outstanding from SEC EDGAR (market cap = shares × price); P/E, EPS, beta, 52w and dividend yield are empty |
+| Crypto quotes, candles, order book | Alpaca crypto (`BTC`, `ETH`, or any `XXX-USD` pair) | — |
+| Crypto board | CoinGecko | — |
+| VIX | FRED | — |
+| FX (`EURUSD=X` …) | ECB reference rates (daily) | — |
+| Foreign listings, other indices | FMP (if keyed) | Stooq |
+| Historical candles | Alpaca bars (US stocks, crypto) | FMP (if keyed) → Stooq |
+| Symbol search | Nasdaq Trader symbol directories + Alpaca crypto pairs | — |
+| Screener / heatmap / sectors | S&P 500 + Nasdaq‑100 (Wikipedia) × Alpaca prices; sector and market cap from FMP (if keyed), else SEC EDGAR (SIC‑derived sector, not GICS) | Europe is not available |
+| Options chain | Alpaca options snapshots (OPRA) | Open interest is empty |
+| News | Alpaca News (Benzinga) | — |
+| Macro (Treasury yields, VIX; euro‑area yields, ECB rate, HICP) | FRED, ECB | — |
+| Economic calendar (dates, times) | BLS, BEA, Federal Reserve, EIA; FRED release dates with `FRED_API_KEY` | — |
+| Economic calendar (forecast, previous, actual) | FMP (if keyed) | Empty without FMP |
+| Earnings calendar and history | FMP (requires `FMP_API_KEY`) | The widget says the key is missing |
+| Short volume, insider trades | FINRA, SEC EDGAR | — |
 
-> ⚠️ These are public endpoints, not officially licensed data feeds — treat prices as delayed/indicative, not execution‑grade. See [`server/src/providers/`](server/src/providers) — each provider is a small, isolated module, so swapping or adding a data source is a 30‑minute job.
+**Removed sources.** Yahoo Finance, TradingView (scanner and search), Nasdaq's public API (`api.nasdaq.com`), Google News and Yahoo RSS, Forex Factory and Binance are no longer used: their terms or robots rules forbid automated access (and Binance blocks US users). Stooq's terms are unclear, so it is only the last price fallback.
+
+> ⚠️ Treat prices as indicative, not execution‑grade. See [`server/src/providers/`](server/src/providers) — each provider is a small, isolated module.
+
+### Keys
+
+| Variable | Unlocks |
+|---|---|
+| `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY` | US stock and ETF prices and charts, crypto, options, news, the heatmap, screener and recap. Without them only Stooq prices, FRED/ECB macro, CoinGecko and the official calendars work. |
+| `FMP_API_KEY` (optional) | [Financial Modeling Prep](https://site.financialmodelingprep.com/developer/docs): quote fundamentals, foreign listings and indices, FMP sectors and market caps, earnings calendar and history, and forecast/actual values on the economic calendar. FMP's Starter plan covers US listings with annual fundamentals; non‑US exchanges and quarterly data need Premium or above. |
+| `FRED_API_KEY` (optional) | Adds FRED's release dates to the economic calendar. |
+| `SEC_EDGAR_CONTACT` | Your email, sent in the User‑Agent that SEC EDGAR and BLS require. Without it insider trades, SEC shares/sectors and the BLS schedule are skipped. |
 
 <br/>
 
@@ -124,7 +136,7 @@ npm run dev
 - Web UI → **http://localhost:3000**
 - API health → **http://localhost:4000/api/status**
 
-That's it — no `.env` file required to get a fully working terminal.
+Without a `.env` the terminal opens with macro, crypto and the official calendars only. Copy `.env.example` to `.env` and add your Alpaca keys (see [Keys](#keys)) for everything else.
 
 ### Optional: Alpaca market data and price history
 
@@ -152,11 +164,11 @@ The stored bars are served read-only at `/api/bars/daily/:symbol?from=YYYY-MM-DD
 - Every trade and quote for the watchlist, S&P 500, Nasdaq-100, sector ETFs and any ticker open on screen (subscribed on the first request, dropped 10 minutes after the last).
 - Minute and daily bars for every other US ticker, so they are at most a minute old, plus snapshots every 5 minutes.
 - Charts for US tickers come from the stored history plus today's live bar (daily ranges) or Alpaca's intraday bars (1D, 5D, 1M).
-- Prices are split by session. The main price, change and change % are the regular session's (09:30–16:00 New York; the close once it's over). Beside them, in the chart header, the quote panel and the watchlist, come **After hours** (16:00–20:00), **Overnight** (20:00–04:00, Sunday to Thursday nights) and **Pre-market** (04:00–09:30): the latest price in each session since the last regular close, with its change from that close. Overnight prices come from Alpaca's Blue Ocean ATS feed (`boats`) on a second stream connection; set `LIVE_OVERNIGHT=0` to leave it off. Tickers on Yahoo's feed get its pre- and post-market prices where it has them.
-- The quote panel shows **● Live** while the regular price moves with every trade, **● As of** a time when it doesn't (stream down, market closed), or the web source's name. A green dot next to an extended session means that session is on and live.
-- Crypto, indices, FX, futures, foreign listings, news and options keep their web sources. `/api/status` shows the stream's state. Set `LIVE_STREAM=0` to turn it off. Alpaca allows one stream connection per account, so another app using the same keys' stream makes this one fail with error 406.
+- Prices are split by session. The main price, change and change % are the regular session's (09:30–16:00 New York; the close once it's over). Beside them, in the chart header, the quote panel and the watchlist, come **After hours** (16:00–20:00), **Overnight** (20:00–04:00, Sunday to Thursday nights) and **Pre-market** (04:00–09:30): the latest price in each session since the last regular close, with its change from that close. Overnight prices come from Alpaca's Blue Ocean ATS feed (`boats`) on a second stream connection; set `LIVE_OVERNIGHT=0` to leave it off.
+- The quote panel shows **● Live** while the regular price moves with every trade, **● As of** a time when it doesn't (stream down, market closed), or the source's name. A green dot next to an extended session means that session is on and live.
+- Crypto, VIX, FX, foreign listings, news and options come from the sources in [Data sources](#data-sources). `/api/status` shows the stream's state. Set `LIVE_STREAM=0` to turn it off. Alpaca allows one stream connection per account, so another app using the same keys' stream makes this one fail with error 406.
 
-S&P 500 membership comes from Wikipedia and Nasdaq-100 from Nasdaq's index list. If either source changes format, put one symbol per line in `data/universe/sp500.txt` or `data/universe/nasdaq100.txt` to override it.
+S&P 500 and Nasdaq-100 membership come from Wikipedia. If either source changes format, put one symbol per line in `data/universe/sp500.txt` or `data/universe/nasdaq100.txt` to override it.
 
 ### Optional: AI assistant
 
@@ -210,8 +222,8 @@ Portfolio data persists in the `terminal-data` volume (SQLite, WAL mode). Ports 
 ```
 ├── server/                  # Express + TypeScript API
 │   └── src/
-│       ├── providers/       # nasdaq, tradingview, yahoo, stooq, fred, econcalendar, coingecko, binance, news
-│       ├── routes/          # market, portfolio, ai
+│       ├── providers/       # alpaca (stocks, crypto, options, news, assets), fmp, sec-reference, secedgar, calendars, fred, ecb, finra, coingecko, stooq
+│       ├── routes/          # market (+ market-rows, econ-calendar), portfolio, ai, watchlists, bars
 │       ├── cache.ts         # TTL cache with stale-while-revalidate fallback
 │       └── db.ts            # SQLite (better-sqlite3, WAL)
 └── web/                      # Next.js 15 + React 19 + Tailwind 4
@@ -256,9 +268,9 @@ Please open an issue first for anything non‑trivial so we can align on approac
 
 ## ⚖️ Disclaimer
 
-For personal and educational use only. Market data comes from public endpoints and may be delayed, incomplete, or occasionally wrong — **do not use this for real investment decisions**.
+For personal and educational use only. Market data may be delayed, incomplete, or occasionally wrong — **do not use this for real investment decisions**.
 
-This project is not affiliated with, endorsed by, or sponsored by any of the data providers it connects to. It does not host or redistribute data to third parties — it's source code you run yourself, fetching data directly from the provider. Respect the terms of service of the underlying data providers; most free sources are licensed for personal/research use only and prohibit commercial redistribution.
+This project is not affiliated with, endorsed by, or sponsored by any of the data providers it connects to. It does not host or redistribute data to third parties — it's source code you run yourself, fetching data directly from the provider. Respect the terms of service of the underlying data providers (your Alpaca and FMP subscriptions included); most are licensed for personal use and prohibit redistribution.
 
 ## License
 

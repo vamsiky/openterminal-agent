@@ -1,4 +1,5 @@
 import { dataFetch, type Bar, type Snapshot } from "./alpaca.js";
+import type { Candle, Quote } from "./types.js";
 
 // Alpaca's US crypto data (/v1beta3/crypto/us). Pairs look like "BTC/USD";
 // the app writes BTC, BTC-USD or BTC/USD, so every entry point normalizes.
@@ -116,42 +117,9 @@ export async function orderbook(symbol: string): Promise<CryptoOrderBook> {
   };
 }
 
-// ---- adapters to the shapes providers/binance.ts returns today ----
+// ---- adapters to the route shapes (Quote, Candle, orderbook string pairs) ----
 
-/** Same fields as yahoo.Quote (kept here so yahoo.ts can be deleted). */
-export type Quote = {
-  symbol: string;
-  name: string | null;
-  price: number | null;
-  change: number | null;
-  changePercent: number | null;
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  previousClose: number | null;
-  bid: number | null;
-  ask: number | null;
-  volume: number | null;
-  avgVolume: number | null;
-  marketCap: number | null;
-  pe: number | null;
-  eps: number | null;
-  dividendYield: number | null;
-  week52High: number | null;
-  week52Low: number | null;
-  beta: number | null;
-  sharesOutstanding: number | null;
-  currency: string | null;
-  exchange: string | null;
-  marketState: string | null;
-  time: number | null;
-  source: string;
-};
-
-/** Same fields as yahoo.Candle: time in unix seconds. */
-export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
-
-/** Like binance.quote: one symbol, 24h-style fields from today's UTC daily bar. */
+/** One symbol, 24h-style fields from today's UTC daily bar. */
 export async function quote(symbol: string): Promise<Quote> {
   const pair = pairOrThrow(symbol);
   const snap = (await cryptoSnapshots([symbol]))[symbol];
@@ -201,14 +169,14 @@ const RANGES: Record<string, { timeframe: CryptoTimeframe; start: (now: Date) =>
   MAX: { timeframe: "1Month", start: () => new Date(Date.UTC(2021, 0, 1)) }, // Alpaca's crypto data begins in 2021
 };
 
-/** Like binance.history: the app's range keys (1D, 5D, 1M, 6M, YTD, 1Y, 5Y, MAX) -> candles, oldest first. */
+/** The app's range keys (1D, 5D, 1M, 6M, YTD, 1Y, 5Y, MAX) -> candles, oldest first. */
 export async function history(symbol: string, rangeKey: string, now = new Date()): Promise<Candle[]> {
   const { timeframe, start } = RANGES[rangeKey] ?? RANGES["6M"];
   const bars = await cryptoBars(symbol, { timeframe, start: start(now).toISOString() });
   return bars.map((b) => ({ time: Math.round(Date.parse(b.t) / 1000), open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v }));
 }
 
-/** Like binance.orderBook: [price, size] string pairs, best first, cut to `limit` levels. */
+/** [price, size] string pairs, best first, cut to `limit` levels. */
 export async function orderBook(symbol: string, limit = 20): Promise<{ bids: [string, string][]; asks: [string, string][] }> {
   const book = await orderbook(symbol);
   const pairs = (levels: OrderBookLevel[]) => levels.slice(0, limit).map((l): [string, string] => [String(l.p), String(l.s)]);

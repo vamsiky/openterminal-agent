@@ -15,7 +15,7 @@ export type AlpacaNewsItem = {
   images?: AlpacaNewsImage[];
 };
 
-/** The shape providers/news.ts returns today, which /api/news and NewsWidget read. */
+/** The /api/news row, which NewsWidget reads. */
 export type NewsItem = {
   title: string;
   link: string;
@@ -66,7 +66,7 @@ function publisherName(source: string): string {
   return source ? source.charAt(0).toUpperCase() + source.slice(1) : "Alpaca News";
 }
 
-/** Adapt to the NewsItem shape of providers/news.ts so routes and the widget need no change. */
+/** Adapt to the /api/news row. */
 export function toNewsItem(item: AlpacaNewsItem, symbol: string | null = null): NewsItem {
   return {
     title: item.headline,

@@ -2,14 +2,15 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { apiGet, fmt, fmtBig, pctClass } from "../../lib/api";
+import { apiGetWithNote, apiGet, fmt, fmtBig, NO_EU_NOTE, pctClass } from "../../lib/api";
 import { useTerminal } from "../../store/terminal";
+import ErrorNote from "../ErrorNote";
 import Flash from "../Flash";
 
 type Row = {
-  symbol: string; name: string; price: number | null;
+  symbol: string; name: string | null; price: number | null;
   changePercent: number | null; volume: number | null; marketCap: number | null;
-  sector: string;
+  sector: string | null;
 };
 
 export default function ScreenerWidget() {
@@ -37,11 +38,13 @@ export default function ScreenerWidget() {
   params.set("sort", sort);
   params.set("dir", dir);
 
-  const { data = [], isLoading, error } = useQuery({
+  const { data: result, isLoading, error } = useQuery({
     queryKey: ["screener", params.toString()],
-    queryFn: () => apiGet<Row[]>(`/api/screener?${params}`),
+    queryFn: () => apiGetWithNote<Row[]>(`/api/screener?${params}`),
     refetchInterval: 20_000,
   });
+  const data = result?.data ?? [];
+  const note = market === "eu" && data.length === 0 ? (result?.note ?? NO_EU_NOTE) : null;
 
   const th = (key: string, label: string) => (
     <th
@@ -76,7 +79,8 @@ export default function ScreenerWidget() {
         <input className="w-24" placeholder="Vol min (M)" value={volumeMinM} onChange={(e) => setVolumeMinM(e.target.value)} />
         <span className="dim ml-auto">{isLoading ? "…" : `${data.length} results`}</span>
       </div>
-      {error && <div className="p-2 down">Error: {(error as Error).message}</div>}
+      {error && <ErrorNote error={error} />}
+      {note && <div className="p-2 dim">{note}</div>}
       <table className="data-table">
         <thead>
           <tr>
@@ -93,8 +97,8 @@ export default function ScreenerWidget() {
           {data.map((q) => (
             <tr key={q.symbol} onClick={() => setActiveSymbol(q.symbol)}>
               <td className="font-bold">{q.symbol}</td>
-              <td className="!text-left max-w-40 truncate">{q.name}</td>
-              <td className="!text-left dim">{q.sector}</td>
+              <td className="!text-left max-w-40 truncate">{q.name ?? "—"}</td>
+              <td className="!text-left dim">{q.sector ?? "—"}</td>
               <td><Flash value={q.price}>{fmt(q.price)}</Flash></td>
               <td className={pctClass(q.changePercent)}>
                 <Flash value={q.changePercent}>{fmt(q.changePercent)}%</Flash>

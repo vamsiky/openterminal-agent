@@ -11,6 +11,8 @@
 // fundamentals; quarterly data, and non-US exchanges, need Premium or above.
 // A plan that lacks an endpoint answers 402/403, surfaced as an FmpError.
 
+import type { Candle, EconEvent as RouteEconEvent } from "./types.js";
+
 const BASE = "https://financialmodelingprep.com/stable";
 
 const PROFILE_TTL = 24 * 3_600_000;
@@ -33,7 +35,6 @@ export class FmpError extends Error {
   }
 }
 
-export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 
 export type Profile = {
   symbol: string;
@@ -83,7 +84,7 @@ export type EarningsCalendarRow = {
   revenueEstimated: number | null;
 };
 
-/** Same fields as the /calendar route returns today (tradingview.EarningsInfo). */
+/** The /calendar route's row. */
 export type EarningsInfo = {
   symbol: string;
   nextEarningsDate: number | null; // unix seconds
@@ -91,7 +92,7 @@ export type EarningsInfo = {
   epsForecast: number | null;
 };
 
-/** Superset of nasdaq.EarningsSurpriseRow, which /earnings-history/:symbol returns today. */
+/** The /earnings-history/:symbol row (before the route adds dayAfterChangePercent). */
 export type EarningsHistoryRow = {
   fiscalQtrEnd: string; // FMP gives no fiscal period end here; always ""
   dateReported: number; // unix seconds, UTC midnight
@@ -102,17 +103,8 @@ export type EarningsHistoryRow = {
   revenueEstimate: number | null;
 };
 
-/** Same fields as econcalendar.EconEvent, plus the currency. */
-export type EconEvent = {
-  title: string;
-  country: string;
-  date: string; // ISO
-  impact: "Low" | "Medium" | "High" | "Holiday";
-  forecast: string | null;
-  previous: string | null;
-  actual: string | null;
-  currency: string | null;
-};
+/** The /econ-calendar row, plus the currency. */
+export type EconEvent = RouteEconEvent & { currency: string | null };
 
 export function isConfigured(): boolean {
   return Boolean(process.env.FMP_API_KEY?.trim());

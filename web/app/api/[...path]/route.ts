@@ -36,10 +36,11 @@ async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
   });
 
   const body = upstream.status === 204 ? null : await upstream.arrayBuffer();
-  return new NextResponse(body, {
-    status: upstream.status,
-    headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
-  });
+  const responseHeaders = new Headers({ "content-type": upstream.headers.get("content-type") ?? "application/json" });
+  // Set by the API when a market has no data source (e.g. market=eu); the widgets show it.
+  const marketNote = upstream.headers.get("x-market-note");
+  if (marketNote) responseHeaders.set("x-market-note", marketNote);
+  return new NextResponse(body, { status: upstream.status, headers: responseHeaders });
 }
 
 type RouteContext = { params: Promise<{ path: string[] }> };

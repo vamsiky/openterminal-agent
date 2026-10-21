@@ -129,7 +129,7 @@ describe("alpaca candles", () => {
     expect(candles?.at(-1)?.time).toBe(Date.parse("2026-10-16T00:00:00Z") / 1000);
   });
 
-  it("returns null when nothing is stored, so the web sources are used", async () => {
+  it("returns null when nothing is stored, so the other sources are used", async () => {
     expect(await history.alpacaHistory("ZZZZ", "1Y")).toBeNull();
   });
 

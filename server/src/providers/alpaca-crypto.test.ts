@@ -69,7 +69,7 @@ describe("alpaca crypto", () => {
     await expect(cryptoBars("AAPL", { timeframe: "1Day", start: "2026-10-01" })).rejects.toThrow(/unsupported/);
   });
 
-  it("adapts a snapshot to the binance.quote shape", async () => {
+  it("adapts a snapshot to the route Quote shape", async () => {
     const fetchMock = mockFetch({ snapshots: { "BTC/USD": snapshot } });
     const q = await quote("btc");
     expect(urlOf(fetchMock).searchParams.get("symbols")).toBe("BTC/USD");
@@ -102,7 +102,7 @@ describe("alpaca crypto", () => {
     expect(new URL(vi.mocked(fetch).mock.calls[0][0] as string).searchParams.get("timeframe")).toBe("5Min");
   });
 
-  it("sorts the orderbook best first and adapts to binance string pairs", async () => {
+  it("sorts the orderbook best first and adapts to [price, size] string pairs", async () => {
     const body = { orderbooks: { "BTC/USD": { t: "2026-10-21T04:28:48Z", a: [{ p: 102, s: 1 }, { p: 101, s: 2 }, { p: 103, s: 3 }], b: [{ p: 99, s: 4 }, { p: 100, s: 5 }] } } };
     mockFetch(body);
     expect(await orderbook("BTC")).toEqual({

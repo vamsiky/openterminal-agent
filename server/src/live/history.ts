@@ -1,5 +1,5 @@
 import * as alpaca from "../providers/alpaca.js";
-import type { Candle } from "../providers/yahoo.js";
+import type { Candle } from "../providers/types.js";
 import { dailyBars } from "../history/store.js";
 import { tradingDay } from "../history/time.js";
 import { liveEntry } from "./feed.js";
@@ -72,7 +72,7 @@ function withLivePrice(candles: Candle[], symbol: string, daily: boolean): Candl
 
 /**
  * Candles for `symbol` (an Alpaca symbol) over `rangeKey`, or null when there
- * is nothing local to serve (the caller then uses the web sources).
+ * is nothing local to serve (the caller then uses the other sources).
  */
 export async function alpacaHistory(symbol: string, rangeKey: string, now = new Date()): Promise<Candle[] | null> {
   const intraday = INTRADAY[rangeKey];

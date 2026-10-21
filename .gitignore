@@ -11,3 +11,4 @@ out/
 # Database
 data/*.db*
 data/.api-key
+data/sec-reference.json

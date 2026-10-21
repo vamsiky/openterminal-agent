@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { apiGet, fmt, fmtBig } from "../../lib/api";
+import ErrorNote from "../ErrorNote";
 import { useWidgetSymbol, type WidgetInstance } from "../../store/terminal";
 
 type InsiderTransaction = {
@@ -40,7 +41,7 @@ export default function InsiderWidget({ widget }: { widget: WidgetInstance }) {
     staleTime: 3_600_000,
   });
 
-  if (error) return <div className="p-2 down">Error: {(error as Error).message}</div>;
+  if (error) return <ErrorNote error={error} />;
   if (isLoading) return <div className="p-2 dim">Loading insider transactions for {symbol}…</div>;
 
   return (

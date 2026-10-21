@@ -4,18 +4,20 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiGet } from "../../lib/api";
 import { isSafeHttpUrl } from "../../lib/links";
+import ErrorNote from "../ErrorNote";
 import { useWidgetSymbol, type WidgetInstance } from "../../store/terminal";
 
-type NewsItem = { title: string; link: string; publisher: string; publishedAt: string | null };
+type NewsItem = { title: string; link: string; publisher: string | null; publishedAt: string | null };
 
 export default function NewsWidget({ widget }: { widget: WidgetInstance }) {
   const symbol = useWidgetSymbol(widget);
   const [mode, setMode] = useState<"symbol" | "global">("symbol");
 
-  const { data = [], isLoading } = useQuery({
+  const { data = [], isLoading, error } = useQuery({
     queryKey: ["news", mode, symbol],
     queryFn: () => apiGet<NewsItem[]>(mode === "symbol" ? `/api/news?symbol=${encodeURIComponent(symbol)}` : "/api/news"),
     refetchInterval: 30_000,
+    retry: 0,
   });
 
   return (
@@ -28,14 +30,14 @@ export default function NewsWidget({ widget }: { widget: WidgetInstance }) {
           GLOBAL
         </button>
       </div>
-      {isLoading && <div className="p-2 dim">Loading news…</div>}
+      {error ? <ErrorNote error={error} /> : isLoading && <div className="p-2 dim">Loading news…</div>}
       {data.map((n, i) => {
         const body = (
           <>
             <div className="truncate">{n.title}</div>
             <div className="dim text-[10px]">
-              {n.publisher}
-              {n.publishedAt ? " · " + new Date(n.publishedAt).toLocaleString() : ""}
+              {n.publisher ?? ""}
+              {n.publishedAt ? (n.publisher ? " · " : "") + new Date(n.publishedAt).toLocaleString() : ""}
             </div>
           </>
         );

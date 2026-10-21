@@ -5,7 +5,7 @@
 // (release dates, only with FRED_API_KEY) and EIA (fixed weekly slot). None of them
 // publish forecasts or actuals; those fields stay null in `econEvents` until a
 // consensus source fills them.
-import type { EconEvent } from "./econcalendar.js";
+import type { EconEvent } from "./types.js";
 
 export type Release = {
   date: string; // YYYY-MM-DD, Eastern Time

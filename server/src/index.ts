@@ -35,11 +35,11 @@ const webOrigin = process.env.WEB_ORIGIN ?? "http://localhost:3000";
 app.use(cors({ origin: webOrigin }));
 app.use(express.json({ limit: "1mb" }));
 
-// No API key here by design (market.ts routes proxy free, keyless public data),
+// No API key here by design (market.ts routes serve read-only market data),
 // but still bounded per-IP: unlike /api/ai and /api/portfolios, an unauthenticated
-// caller could otherwise repeat the multi-provider fan-out in market.ts (up to
-// hundreds of outbound calls per request — see getQuotes) fast enough to get
-// this deployment's IP rate-limited or banned by Nasdaq/Yahoo/Stooq/SEC.
+// caller could otherwise repeat the multi-provider fan-out in market.ts (dozens
+// of outbound calls per request — see webQuoteMap) fast enough to use up this
+// deployment's Alpaca/FMP request budgets or get its IP banned by Stooq/SEC.
 // The bundled web app is exempt: all its panels share one bucket through its
 // proxy, and four of them (quote, watchlist, macro, crypto) poll every second,
 // which can use the whole 240 and leave a click waiting on a 429 retry. It is gated by its own

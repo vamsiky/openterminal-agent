@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { EXTENDED_SESSIONS, fmt, fmtBig, fmtChange, fmtPct, pctClass } from "./api";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiError, EXTENDED_SESSIONS, apiGet, apiGetWithNote, fmt, fmtBig, fmtChange, fmtIv, fmtPct, needsFmpKey, pctClass, sourceLabel } from "./api";
 
 describe("fmt", () => {
   it("formats with two decimals and thousands separators", () => {
@@ -57,5 +57,66 @@ describe("pctClass", () => {
 describe("EXTENDED_SESSIONS", () => {
   it("is in trading order", () => {
     expect(EXTENDED_SESSIONS.map((s) => s.key)).toEqual(["post", "overnight", "pre"]);
+  });
+});
+
+const reply = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+  ({ ok: status < 400, status, json: async () => body, headers: new Headers(headers) }) as Response;
+
+describe("apiGet errors", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("throws an ApiError with the route's error text and status", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => reply({ error: "needs FMP_API_KEY", feature: "/calendar" }, 503)));
+    const err = (await apiGet("/api/calendar").catch((e) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.message).toBe("needs FMP_API_KEY");
+    expect(err.status).toBe(503);
+    expect(needsFmpKey(err)).toBe(true);
+  });
+
+  it("falls back to the HTTP status when the body has no error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 502, json: async () => { throw new Error("not json"); } }) as unknown as Response));
+    await expect(apiGet("/api/x")).rejects.toThrow("HTTP 502");
+  });
+
+  it("only treats a 503 naming FMP_API_KEY as a missing key", () => {
+    expect(needsFmpKey(new ApiError("needs Alpaca API keys", 503))).toBe(false);
+    expect(needsFmpKey(new ApiError("needs FMP_API_KEY", 500))).toBe(false);
+    expect(needsFmpKey(new Error("needs FMP_API_KEY"))).toBe(false);
+  });
+});
+
+describe("apiGetWithNote", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("returns the X-Market-Note header with the data", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => reply([], 200, { "x-market-note": "No EU source" })));
+    expect(await apiGetWithNote("/api/heatmap?market=eu")).toEqual({ data: [], note: "No EU source" });
+  });
+
+  it("note is null without the header", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => reply([1])));
+    expect((await apiGetWithNote("/api/heatmap")).note).toBeNull();
+  });
+});
+
+describe("sourceLabel", () => {
+  it("names the current sources and passes unknown ones through", () => {
+    expect(sourceLabel("alpaca")).toBe("Alpaca");
+    expect(sourceLabel("fmp")).toBe("FMP");
+    expect(sourceLabel("ecb")).toBe("ECB");
+    expect(sourceLabel("somewhere")).toBe("somewhere");
+    expect(sourceLabel(undefined)).toBe("—");
+  });
+});
+
+describe("fmtIv", () => {
+  it("shows a fraction as a percent and dashes null", () => {
+    expect(fmtIv(0.3214)).toBe("32%");
+    expect(fmtIv(0)).toBe("0%");
+    expect(fmtIv(null)).toBe("—");
+    expect(fmtIv(undefined)).toBe("—");
+    expect(fmtIv(NaN)).toBe("—");
   });
 });

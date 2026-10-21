@@ -1,4 +1,4 @@
-import type { Candle, Quote } from "./yahoo.js";
+import type { Candle, Quote } from "./types.js";
 
 /** Map a Yahoo-style symbol to Stooq's convention (US equities get a .us suffix). */
 function stooqSymbol(symbol: string): string {

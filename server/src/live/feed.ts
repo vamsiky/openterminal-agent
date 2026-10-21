@@ -1,5 +1,5 @@
 import * as alpaca from "../providers/alpaca.js";
-import type { ExtendedHours, Quote, SessionPrice } from "../providers/yahoo.js";
+import type { ExtendedHours, Quote, SessionPrice } from "../providers/types.js";
 import { upsertMinuteBars, type MinuteBar } from "../history/store.js";
 import { dailyUniverse, minuteUniverse } from "../history/sync.js";
 import { tradingDay } from "../history/time.js";
@@ -30,7 +30,7 @@ import { regularCloseAt, nyInstant, sessionAt, type Session } from "./session.js
 const FOCUS_TTL_MS = 10 * 60_000;
 // How long a quote request waits for a first-click snapshot. Behind the shared
 // request limiter or Alpaca's 429 backoff it can take far longer; past this the
-// web sources answer and the snapshot lands for the next poll.
+// other sources answer and the snapshot lands for the next poll.
 export const SNAPSHOT_WAIT_MS = 1_500;
 const SNAPSHOT_EVERY_MS = 5 * 60_000;
 const SNAPSHOT_BATCH = 500;
@@ -466,7 +466,7 @@ async function firstSnapshots(unknown: string[], now: number): Promise<void> {
     for (const [s, snap] of Object.entries(night)) applyOvernightSnapshot(s, snap);
     for (const s of unknown) if (entries.get(s)?.price == null) unknownToAlpaca.set(s, now);
   } catch (err) {
-    // Don't retry on every poll while Alpaca is failing; the web sources answer meanwhile.
+    // Don't retry on every poll while Alpaca is failing; the other sources answer meanwhile.
     for (const s of unknown) unknownToAlpaca.set(s, now);
     lastError = `snapshot: ${err instanceof Error ? err.message : String(err)}`;
   }

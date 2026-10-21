@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { apiGet, fmt, fmtBig, pctClass } from "../../lib/api";
+import ErrorNote from "../ErrorNote";
 import Flash from "../Flash";
 import { useTerminal } from "../../store/terminal";
 
@@ -48,7 +49,7 @@ export default function CryptoWidget() {
     refetchInterval: 30_000,
   });
 
-  if (error) return <div className="p-2 down">Error: {(error as Error).message}</div>;
+  if (error) return <ErrorNote error={error} />;
 
   return (
     <div>
@@ -65,7 +66,7 @@ export default function CryptoWidget() {
         </thead>
         <tbody>
           {data.map((c) => (
-            <tr key={c.id} onClick={() => setActiveSymbol(c.symbol)}>
+            <tr key={c.id} onClick={() => setActiveSymbol(`${c.symbol}-USD`)}>
               <td className="dim">{c.rank ?? "—"}</td>
               <td className="!text-left"><span className="font-bold">{c.symbol}</span> <span className="dim">{c.name}</span></td>
               <td><Flash value={c.price}>{fmtPrice(c.price)}</Flash></td>
@@ -74,7 +75,7 @@ export default function CryptoWidget() {
               </td>
               <td>{fmtBig(c.marketCap)}</td>
               <td>{fmtBig(c.volume24h)}</td>
-              <td><Sparkline data={c.sparkline.filter((_, i) => i % 4 === 0)} /></td>
+              <td><Sparkline data={(c.sparkline ?? []).filter((_, i) => i % 4 === 0)} /></td>
             </tr>
           ))}
         </tbody>

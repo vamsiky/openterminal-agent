@@ -1,10 +1,27 @@
+/** A non-2xx API answer; `message` is the route's `error` text when it sent one. */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function failure(res: Response): Promise<ApiError> {
+  const body = await res.json().catch(() => ({}));
+  return new ApiError(body?.error ?? `HTTP ${res.status}`, res.status);
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(path);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw await failure(res);
   return res.json();
+}
+
+/** Like apiGet, plus the `X-Market-Note` header the API sets when it deliberately has nothing to return. */
+export async function apiGetWithNote<T>(path: string): Promise<{ data: T; note: string | null }> {
+  const res = await fetch(path);
+  if (!res.ok) throw await failure(res);
+  return { data: await res.json(), note: res.headers.get("x-market-note") };
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
@@ -13,11 +30,38 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error ?? `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw await failure(res);
   return res.json();
+}
+
+/** True when a route answered 503 because FMP_API_KEY isn't set. */
+export function needsFmpKey(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 503 && /FMP_API_KEY/.test(error.message);
+}
+
+export const FMP_KEY_NOTE = "Needs an FMP API key (set FMP_API_KEY): see README";
+
+/** Shown when a source has no Europe data; used if the API's own X-Market-Note is missing. */
+export const NO_EU_NOTE = "European markets have no data source at the moment.";
+
+const SOURCE_LABELS: Record<string, string> = {
+  alpaca: "Alpaca",
+  fmp: "FMP",
+  stooq: "Stooq",
+  fred: "FRED",
+  ecb: "ECB",
+  coingecko: "CoinGecko",
+};
+
+/** A quote's `source` as shown to the user; unknown sources pass through as sent. */
+export function sourceLabel(source: string | null | undefined): string {
+  if (!source) return "—";
+  return SOURCE_LABELS[source.toLowerCase()] ?? source;
+}
+
+/** Implied volatility as "32%"; the API sends a fraction or null. */
+export function fmtIv(iv: number | null | undefined): string {
+  return iv === null || iv === undefined || !isFinite(iv) ? "—" : fmt(iv * 100, 0) + "%";
 }
 
 export async function apiDelete(path: string): Promise<void> {
