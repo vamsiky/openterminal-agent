@@ -56,8 +56,8 @@ export const FACTORS: FactorDef[] = [
   { key: "vs_sma50", group: "momentum", label: "price vs 50-day average" },
   { key: "vs_sma200", group: "momentum", label: "price vs 200-day average" },
   { key: "rsi14", group: "momentum", label: "RSI(14)" },
-  { key: "rs_spy", group: "momentum", label: "6-month excess return over SPY, market-wide", market: true },
-  { key: "rs_sector", group: "momentum", label: "3-month excess return over its sector ETF, market-wide", market: true },
+  { key: "rs_spy", group: "momentum", label: "6-month excess return over SPY", market: true },
+  { key: "rs_sector", group: "momentum", label: "3-month excess return over its sector ETF", market: true },
 ];
 
 /** Added to the momentum group by the 15-minute pass only; scored with fixed maps, not percentiles. */
@@ -77,6 +77,8 @@ export const GROUP_LABELS: Record<string, string> = {
 };
 
 const FACTOR_BY_KEY = new Map([...FACTORS, ...LIVE_FACTORS].map((f) => [f.key, f]));
+/** Whether the factor is ranked against the whole market rather than the stock's sector. */
+export const isMarketWide = (key: string) => FACTOR_BY_KEY.get(key)?.market === true;
 export const factorLabel = (key: string) => FACTOR_BY_KEY.get(key)?.label ?? key;
 
 /** FMP sector -> SPDR sector ETF. */

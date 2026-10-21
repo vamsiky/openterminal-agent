@@ -3,7 +3,7 @@ import { calendarFor } from "../estimates/store.js";
 import { nyClock } from "../history/scheduler.js";
 import type { Idea, IdeaKind, OptionStrategy, Scorecard } from "../scan/contracts.js";
 import { allOptionScorecards } from "./option-score.js";
-import { GROUP_LABELS, factorLabel, getLiveScorecard, topNightly } from "./stock-score.js";
+import { GROUP_LABELS, factorLabel, getLiveScorecard, isMarketWide, topNightly } from "./stock-score.js";
 
 // Ideas: what the Ideas widget lists. Stock ideas are the universe's best
 // composites, screened nightly and re-scored every 15 minutes. Option ideas
@@ -91,7 +91,7 @@ export function stockReasons(card: Scorecard, today: string): string[] {
     .slice(0, 3);
   const reasons = groups.map(([g, score]) => {
     const best = card.factors.filter((f) => f.group === g && f.score !== null).sort((a, b) => b.score! - a.score!)[0];
-    const ordinal = best ? `; best: ${factorLabel(best.key)}, ${Math.round(best.score!)}/100 against sector peers` : "";
+    const ordinal = best ? `; best: ${factorLabel(best.key)}, ${Math.round(best.score!)}/100 ${isMarketWide(best.key) ? "against the whole market" : "against sector peers"}` : "";
     return `${GROUP_LABELS[g] ?? g} ${Math.round(score)}/100${ordinal}`;
   });
   const next = calendarFor([card.symbol], today)[0]?.nextEarningsDate;
@@ -120,13 +120,38 @@ function place(kind: IdeaKind, ranked: Candidate[], now: string): void {
 }
 
 /**
+ * One listing per company among cards in composite order: GOOG and GOOGL share
+ * a CIK (or company name), and the one with the higher dollar volume stays.
+ */
+export function onePerCompany<T extends { symbol: string }>(cards: T[]): T[] {
+  if (cards.length === 0) return cards;
+  const rows = db
+    .prepare(
+      `SELECT symbol, COALESCE(json_extract(data, '$.cik'), lower(company_name), symbol) AS company, COALESCE(price * average_volume, 0) AS dollars
+       FROM bulk_profiles WHERE symbol IN (SELECT value FROM json_each(?))`
+    )
+    .all(JSON.stringify(cards.map((c) => c.symbol))) as Array<{ symbol: string; company: string; dollars: number }>;
+  const info = new Map(rows.map((r) => [r.symbol, r]));
+  const best = new Map<string, { symbol: string; dollars: number }>();
+  for (const c of cards) {
+    const i = info.get(c.symbol);
+    const key = i?.company ?? c.symbol;
+    const cur = best.get(key);
+    if (!cur || (i?.dollars ?? 0) > cur.dollars) best.set(key, { symbol: c.symbol, dollars: i?.dollars ?? 0 });
+  }
+  const keep = new Set([...best.values()].map((b) => b.symbol));
+  return cards.filter((c) => keep.has(c.symbol));
+}
+
+/**
  * The stock screen: the top 25 composites among `universe` with enough data
  * become (or stay) active; active stock ideas outside them are dropped.
  */
 export function runStockScreen(universe: string[], now = new Date()): { listed: number; dropped: number } {
   const today = nyClock(now).date;
   const iso = now.toISOString();
-  const top = topNightly(universe, MIN_COVERAGE, STOCK_IDEAS);
+  // Extra candidates, so removing a second share class still leaves 25.
+  const top = onePerCompany(topNightly(universe, MIN_COVERAGE, STOCK_IDEAS * 3)).slice(0, STOCK_IDEAS);
   let dropped = 0;
   db.transaction(() => {
     place("stock", top.map((c) => ({ symbol: c.symbol, strategy: "buy", contract: null, score: c.composite!, reasons: stockReasons(c, today) })), iso);
