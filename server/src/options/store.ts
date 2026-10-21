@@ -100,23 +100,28 @@ export function ivHistory(symbol: string, days = 252): IvDay[] {
 }
 
 export const MIN_RANK_DAYS = 20;
+export const RANK_WINDOW = 252;
 
 export type IvRank = { ivRank: number | null; ivPercentile: number | null; days: number };
 
 /**
- * IV rank (where `current` sits between the window's low and high) and IV
- * percentile (share of days at or below it), over `history` iv30 values.
- * Both null under MIN_RANK_DAYS of history. `history` should hold prior days;
- * today's value is passed as `current`.
+ * IV rank (min-max position of `current` in the window) and IV percentile
+ * (share of the window's days strictly below it). The window is the last
+ * RANK_WINDOW rows: `prior` days plus today's `current`. `days` counts the
+ * rows used; both measures are null under MIN_RANK_DAYS rows or without a
+ * current value.
  */
-export function ivRank(current: number | null, history: Array<number | null>): IvRank {
-  const values = history.filter((v): v is number => v !== null);
-  if (current === null || values.length < MIN_RANK_DAYS) return { ivRank: null, ivPercentile: null, days: values.length };
-  const lo = Math.min(...values, current);
-  const hi = Math.max(...values, current);
-  const rank = hi > lo ? ((current - lo) / (hi - lo)) * 100 : 50;
-  const pct = (values.filter((v) => v <= current).length / values.length) * 100;
-  return { ivRank: rank, ivPercentile: pct, days: values.length };
+export function ivRank(current: number | null, prior: Array<number | null>): IvRank {
+  if (current === null) return { ivRank: null, ivPercentile: null, days: prior.filter((v) => v !== null).length };
+  const values = [...prior.filter((v): v is number => v !== null).slice(-(RANK_WINDOW - 1)), current];
+  if (values.length < MIN_RANK_DAYS) return { ivRank: null, ivPercentile: null, days: values.length };
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  return {
+    ivRank: hi > lo ? ((current - lo) / (hi - lo)) * 100 : 50,
+    ivPercentile: (values.filter((v) => v < current).length / values.length) * 100,
+    days: values.length,
+  };
 }
 
 // ---- latest metrics ----

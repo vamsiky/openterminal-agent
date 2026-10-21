@@ -29,6 +29,8 @@ export type Selection = {
   pairs: Map<string, Pair>;
   /** Underlyings left out because the cap was reached. */
   skipped: string[];
+  /** Held options dropped because holdings alone exceeded the cap. */
+  heldDropped: number;
 };
 
 /** Re-centre only once another strike is nearer by more than this share of the strike gap. */
@@ -68,8 +70,12 @@ export function selectContracts(input: SelectionInput): Selection {
     contracts.push(occ);
   };
 
-  // Held options always stream, even past the cap.
-  for (const h of input.holdings) add(h.occ);
+  // Held options come first; only if they alone exceed the cap are the last ones dropped.
+  let heldDropped = 0;
+  for (const h of input.holdings) {
+    if (!seen.has(h.occ) && contracts.length >= cap) heldDropped++;
+    else add(h.occ);
+  }
 
   const pairs = new Map<string, Pair>();
   const skipped: string[] = [];
@@ -94,5 +100,5 @@ export function selectContracts(input: SelectionInput): Selection {
     add(put);
     pairs.set(u, { expiry: front.expiry, strike, call, put });
   }
-  return { contracts, pairs, skipped };
+  return { contracts, pairs, skipped, heldDropped };
 }

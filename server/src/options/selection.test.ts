@@ -51,7 +51,7 @@ describe("selectContracts", () => {
     expect(sel.contracts).toEqual(["AAA261030C00100000", "ZZZ261120C00050000", "AAA261030P00100000"]);
   });
 
-  it("drops the lowest-priority underlyings at the cap, never holdings", () => {
+  it("drops the lowest-priority underlyings at the cap, holdings first", () => {
     const chains = new Map(["AAA", "BBB", "CCC"].map((u) => [u, chain("2026-10-30")]));
     const sel = selectContracts({
       ...base, cap: 3, underlyings: ["AAA", "BBB", "CCC"], prices, chains,
@@ -63,6 +63,15 @@ describe("selectContracts", () => {
     const roomy = selectContracts({ ...base, cap: 4, underlyings: ["AAA", "BBB", "CCC"], prices, chains, holdings: [held("ZZZ261120C00050000")] });
     expect(roomy.contracts).toHaveLength(3);
     expect(roomy.skipped).toEqual(["BBB", "CCC"]);
+  });
+
+  it("keeps the first holdings when they alone exceed the cap", () => {
+    const sel = selectContracts({
+      ...base, cap: 2, underlyings: ["AAA"], prices, chains: new Map([["AAA", chain("2026-10-30")]]),
+      holdings: [held("ZZZ261120C00050000"), held("YYY261120C00050000"), held("XXX261120C00050000")],
+    });
+    expect(sel.contracts).toEqual(["ZZZ261120C00050000", "YYY261120C00050000"]);
+    expect(sel.heldDropped).toBe(1);
   });
 
   it("applies hysteresis against the previous pair", () => {

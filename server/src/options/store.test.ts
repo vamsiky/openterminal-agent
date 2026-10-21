@@ -58,15 +58,21 @@ describe("iv history and rank", () => {
     expect(store.ivHistory("X", 1).map((r) => r.day)).toEqual(["2026-01-03"]);
   });
 
-  it("ranks only with at least 20 days of history", () => {
-    const hist = Array.from({ length: 19 }, (_, i) => Math.round(20 + i) / 100);
-    expect(store.ivRank(0.3, hist)).toEqual({ ivRank: null, ivPercentile: null, days: 19 });
-    const full = [...hist, 0.4]; // 0.20 .. 0.40
+  it("ranks over prior days plus today, with percentile strictly below", () => {
+    const prior = Array.from({ length: 18 }, (_, i) => Math.round(20 + i) / 100); // 0.20 .. 0.37
+    expect(store.ivRank(0.3, prior)).toEqual({ ivRank: null, ivPercentile: null, days: 19 });
+    const full = [...prior, 0.38]; // 19 prior + today = 20 rows
     const r = store.ivRank(0.3, full);
-    expect(r.ivRank).toBeCloseTo(50, 6);
-    expect(r.ivPercentile).toBeCloseTo(55, 6); // 11 of 20 values <= 0.30
+    expect(r.days).toBe(20);
+    expect(r.ivRank).toBeCloseTo(((0.3 - 0.2) / (0.38 - 0.2)) * 100, 6);
+    expect(r.ivPercentile).toBeCloseTo(50, 6); // 0.20..0.29 are below: 10 of 20
     expect(store.ivRank(0.5, full).ivRank).toBe(100);
     expect(store.ivRank(null, full).ivRank).toBeNull();
+  });
+
+  it("uses at most 252 rows", () => {
+    const prior = Array.from({ length: 400 }, (_, i) => i);
+    expect(store.ivRank(500, prior).days).toBe(252);
   });
 });
 
