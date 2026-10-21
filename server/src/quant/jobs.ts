@@ -4,7 +4,7 @@ import { nyInstant } from "../live/session.js";
 import { ensureCalendar, isTradingDay, sessionClose } from "../providers/alpaca-calendar.js";
 import type { QuantDeps } from "../scan/contracts.js";
 import * as alpaca from "../providers/alpaca.js";
-import { hourlyNeeded, refreshHourly } from "./hourly.js";
+import { hourlyPlan, refreshHourly } from "./hourly.js";
 import { refreshDividends } from "./dividends.js";
 import { refreshStockIdeas, runStockScreen, updateOptionIdeas } from "./ideas.js";
 import { optionScores, runOptionScan } from "./option-score.js";
@@ -154,24 +154,39 @@ function record<T extends { symbols?: number; scored?: number }>(job: JobName, f
  * (and whenever symbols have none cached, e.g. after a universe change or on
  * the first start). A failure waits an hour.
  */
+let hourlyRunning = false;
+
 export async function runHourlyIfNeeded(now = new Date()): Promise<boolean> {
+  if (hourlyRunning) return false;
   const ny = nyClock(now);
   if (!isTradingDay(ny.date) || now.getTime() < nyInstant(ny.date, HOURLY_AFTER.h, HOURLY_AFTER.m) || now.getTime() - hourlyFailedAt < HOURLY_RETRY_MS) return false;
   if (!alpaca.isConfigured()) return false;
-  const universe = resolveUniverse();
-  if (!hourlyNeeded(universe, now)) return false;
+  hourlyRunning = true;
   const started = Date.now();
-  const id = Number(db.prepare("INSERT INTO scan_runs (job, started_at) VALUES (?, ?)").run(HOURLY_JOB, new Date(started).toISOString()).lastInsertRowid);
+  let id: number | null = null;
+  let symbols = 0;
+  let status: "ok" | "error" = "ok";
+  let error: string | null = null;
   try {
-    const r = await refreshHourly(universe, now);
-    db.prepare("UPDATE scan_runs SET finished_at = ?, status = 'ok', symbols = ?, duration_ms = ? WHERE id = ?").run(new Date().toISOString(), r.symbols, Date.now() - started, id);
-    console.log(`[scan] hourly bars: ${r.symbols} symbols, ${r.requests} requests, ${r.bars} bars in ${(r.durationMs / 1000).toFixed(1)} s`);
+    const plan = hourlyPlan(resolveUniverse(), now);
+    if (!plan) return false;
+    symbols = plan.symbols.length;
+    id = Number(db.prepare("INSERT INTO scan_runs (job, started_at) VALUES (?, ?)").run(HOURLY_JOB, new Date(started).toISOString()).lastInsertRowid);
+    const r = await refreshHourly(plan.symbols, now, undefined, plan.mode === "daily");
+    console.log(`[scan] hourly bars (${plan.mode}): ${r.symbols} symbols, ${r.requests} requests, ${r.bars} bars in ${(r.durationMs / 1000).toFixed(1)} s`);
   } catch (err) {
     hourlyFailedAt = now.getTime();
+    status = "error";
+    error = err instanceof Error ? err.message : String(err);
     console.error("[scan] hourly bars failed:", err);
-    db.prepare("UPDATE scan_runs SET finished_at = ?, status = 'error', error = ?, duration_ms = ? WHERE id = ?").run(new Date().toISOString(), err instanceof Error ? err.message : String(err), Date.now() - started, id);
+  } finally {
+    // Whatever happened, a run that started is closed out.
+    if (id !== null) {
+      db.prepare("UPDATE scan_runs SET finished_at = ?, status = ?, symbols = ?, error = ?, duration_ms = ? WHERE id = ?").run(new Date().toISOString(), status, symbols, error, Date.now() - started, id);
+    }
+    hourlyRunning = false;
   }
-  return true;
+  return id !== null;
 }
 
 let running = false;
@@ -245,7 +260,8 @@ export function startQuantJobs(d: QuantDeps): { stop: () => void } | null {
       const now = new Date();
       await ensureYears(now);
       await refreshDividends(now);
-      await runHourlyIfNeeded(now);
+      // Not awaited: the backfill takes minutes and must not hold up the scans.
+      void runHourlyIfNeeded(now);
       // A fresh install has no scorecards: build them once without waiting for 07:00.
       const jobs: JobName[] = latestScorecardDay() === null && lastStart("stock-nightly") === null ? ["stock-nightly", "ideas-screen"] : dueJobs(now, (j) => lastStart(j));
       for (const job of jobs) {
