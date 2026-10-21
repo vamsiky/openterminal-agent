@@ -99,7 +99,11 @@ export default function WatchlistSync() {
           headers: { "Content-Type": "application/json" },
           body: symbols === null ? undefined : JSON.stringify({ symbols }),
           keepalive: true,
-        }).catch(() => {});
+        })
+          .then((r) => {
+            if (r.ok && unsaved.get(name) === symbols) unsaved.delete(name);
+          })
+          .catch(() => {});
       }
     };
     const onVisibility = () => {

@@ -35,10 +35,14 @@ export function sessionAt(instant: string | number | Date): Session | null {
 
 /** Epoch ms of hh:mm New York time on a New York date (YYYY-MM-DD). */
 export function nyInstant(day: string, hh: number, mm = 0): number {
-  const guess = Date.parse(`${day}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00Z`);
-  const p = parts(guess);
-  const offset = Date.UTC(p.year, p.month - 1, p.day, Math.floor(p.minutes / 60), p.minutes % 60) - guess;
-  return guess - offset;
+  const wall = Date.parse(`${day}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00Z`);
+  const offsetAt = (ms: number) => {
+    const p = parts(ms);
+    return Date.UTC(p.year, p.month - 1, p.day, Math.floor(p.minutes / 60), p.minutes % 60) - ms;
+  };
+  // The offset is taken again at the first answer, in case daylight saving
+  // changed between it and the guess (the early hours of a switch Sunday).
+  return wall - offsetAt(wall - offsetAt(wall));
 }
 
 /** When the regular session of a New York date closes. */

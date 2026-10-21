@@ -40,7 +40,7 @@ export function appSymbol(symbol: string, exchange: string): string {
 
 /** Lists in the order they appear in the file; throws when the header isn't Webull's. */
 export function parseWebullCsv(text: string): ImportedList[] {
-  const lines = text.replace(/^﻿/, "").split(/\r?\n/).filter((l) => l.trim());
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((l) => l.trim());
   const header = fields(lines[0] ?? "").map((h) => h.toLowerCase());
   const col = (name: string) => header.indexOf(name);
   const [list, symbol, exchange] = [col("watchlist"), col("symbol"), col("exchange")];

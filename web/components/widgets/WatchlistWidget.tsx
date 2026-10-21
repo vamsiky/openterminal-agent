@@ -2,9 +2,9 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { apiGet, apiPost, EXTENDED_SESSIONS, fmt, fmtBig, fmtPct, pctClass, type Quote } from "../../lib/api";
-import { normalizeSymbol, symbolsParam } from "../../lib/symbol";
-import { normalizeListName, WATCHLISTS_CHANGED } from "../../lib/watchlist";
+import { apiPost, EXTENDED_SESSIONS, fmt, fmtBig, fmtPct, pctClass } from "../../lib/api";
+import { normalizeSymbol } from "../../lib/symbol";
+import { fetchQuotes, normalizeListName, WATCHLISTS_CHANGED } from "../../lib/watchlist";
 import { useTerminal } from "../../store/terminal";
 import Flash from "../Flash";
 import { SessionCell } from "../SessionPrices";
@@ -26,7 +26,7 @@ export default function WatchlistWidget() {
 
   const { data = [] } = useQuery({
     queryKey: ["watchlist", watchlist.join(",")],
-    queryFn: () => apiGet<Quote[]>(`/api/quotes?symbols=${symbolsParam(watchlist)}`),
+    queryFn: () => fetchQuotes(watchlist),
     enabled: watchlist.length > 0,
     refetchInterval: 1_000,
   });

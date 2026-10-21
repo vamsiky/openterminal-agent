@@ -10,11 +10,12 @@ export const watchlistsRouter = Router();
 // now; the browser keeps its copy as a cache and syncs it on change.
 
 // Names as Webull writes them ("Daily Watchlist", "Energy-AI"); "import" is
-// taken by the import route below.
+// taken by the import route below (Express matches routes case-insensitively,
+// so every casing is reserved).
 export const nameSchema = z
   .string()
   .regex(/^[A-Za-z0-9](?:[A-Za-z0-9 _-]{0,38}[A-Za-z0-9_-])?$/)
-  .refine((n) => n !== "import");
+  .refine((n) => n.toLowerCase() !== "import");
 const symbolsSchema = z.object({
   symbols: z
     // Same characters as the web's normalizeSymbol (web/lib/symbol.ts).

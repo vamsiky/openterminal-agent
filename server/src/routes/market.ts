@@ -669,7 +669,7 @@ marketRouter.get("/sectors", async (req, res) => {
   try {
     const rows = await marketRows(marketParam(req));
     res.json([...new Set(rows.map((r) => r.sector))].sort());
-  } catch (err) {
+  } catch {
     res.json([]);
   }
 });

@@ -53,7 +53,7 @@ function withLivePrice(candles: Candle[], symbol: string, daily: boolean): Candl
   const last = candles.at(-1)!;
   if (daily) {
     // Daily candles follow the live day bar, not every after-hours print.
-    const close = e.dayClose ?? e.regPrice;
+    const close = e.closePrint ?? e.dayClose ?? e.regPrice;
     if (!e.barDay || e.open === null || close === null) return candles;
     const today = { time: dayTime(e.barDay), open: e.open, high: e.high ?? close, low: e.low ?? close, close, volume: e.volume ?? 0 };
     if (today.time > last.time) candles.push(today);

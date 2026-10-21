@@ -32,8 +32,24 @@ const SNAPSHOT_EVERY_MS = 5 * 60_000;
 const SNAPSHOT_BATCH = 500;
 const RESUBSCRIBE_EVERY_MS = 30_000;
 const MINUTE_FLUSH_MS = 5_000;
-// Odd-lot trades don't set the last sale price on the consolidated tape.
-const NON_PRICE_CONDITIONS = new Set(["I"]);
+// Sale conditions (CTA/UTP) of trades that don't set the last sale, high or
+// low: B, W average price; C cash; H price variation; I odd lot; M market
+// center official close; N next day; P prior reference price; Q market center
+// official open; R seller; V contingent; Z sold out of sequence; 4
+// derivatively priced; 7 qualified contingent; 9 corrected consolidated close.
+const NON_PRICE_CONDITIONS = new Set(["B", "C", "H", "I", "M", "N", "P", "Q", "R", "V", "W", "Z", "4", "7", "9"]);
+// Extended-hours trades (T form T, U extended hours sold out of sequence)
+// don't set the regular session's last sale, but they are the pre-market and
+// after-hours prices.
+const EXTENDED_CONDITIONS = new Set(["T", "U"]);
+// The closing auction prints a few milliseconds after 16:00:00 with condition
+// 6. It is the regular session's last sale (the official close), so it counts
+// as regular by its condition rather than by a grace window after 16:00, which
+// would also take in the first after-hours trades.
+const CLOSING_PRINT = "6";
+
+/** Whether instant `a` is before `b`; Alpaca's times have up to nanoseconds, so compare them as instants, not strings. */
+const before = (a: string, b: string) => Date.parse(a) < Date.parse(b);
 
 export type SessionTrade = { price: number; time: string };
 
@@ -55,6 +71,8 @@ export type LiveEntry = {
   volume: number | null;
   /** Close of barDay's day bar (as last reported), the next session's previous close. */
   dayClose: number | null;
+  /** barDay's closing auction price, the official close, when the trade feed had it. */
+  closePrint: number | null;
   /** New York date of the regular session that open/high/low/volume belong to. */
   barDay: string | null;
   /** Close of the session before barDay, and its date. */
@@ -107,7 +125,7 @@ function entry(symbol: string): LiveEntry {
     e = {
       symbol, price: null, tradeTime: null, regPrice: null, regTime: null,
       bid: null, ask: null, bidSize: null, askSize: null,
-      open: null, high: null, low: null, volume: null, dayClose: null, barDay: null, prevClose: null, prevDay: null,
+      open: null, high: null, low: null, volume: null, dayClose: null, closePrint: null, barDay: null, prevClose: null, prevDay: null,
       pre: null, post: null, overnight: null, updatedAt: 0,
     };
     entries.set(symbol, e);
@@ -117,37 +135,45 @@ function entry(symbol: string): LiveEntry {
 
 // ---- applying data ----
 
-/** A newer regular session starts: the last one's close becomes the previous close. */
-function startSession(e: LiveEntry, day: string): void {
+/**
+ * A newer regular session starts: the last one's close becomes the previous
+ * close. Returns false for a day older than the session already known.
+ */
+function startSession(e: LiveEntry, day: string): boolean {
+  if (e.barDay && day < e.barDay) return false;
   if (e.barDay && day > e.barDay) {
-    e.prevClose = e.dayClose ?? e.regPrice ?? e.prevClose;
+    e.prevClose = e.closePrint ?? e.dayClose ?? e.regPrice ?? e.prevClose;
     e.prevDay = e.barDay;
     e.open = e.high = e.low = null;
     e.volume = null;
     e.dayClose = null;
+    e.closePrint = null;
     e.regPrice = null;
     e.regTime = null;
   }
   e.barDay = day;
+  return true;
 }
 
-/** Day bars cover the regular session only (extended-hours trades don't set them). */
-function applyDayBar(e: LiveEntry, bar: { t: string; o: number; h: number; l: number; c: number; v: number }): void {
-  const day = tradingDay(bar.t);
-  if (e.barDay && day < e.barDay) return;
-  startSession(e, day);
+/**
+ * Day bars cover the regular session only (extended-hours trades don't set
+ * them). Returns false for a bar older than the session already known.
+ */
+function applyDayBar(e: LiveEntry, bar: { t: string; o: number; h: number; l: number; c: number; v: number }): boolean {
+  if (!startSession(e, tradingDay(bar.t))) return false;
   e.open = bar.o;
   e.high = bar.h;
   e.low = bar.l;
   e.volume = bar.v;
   e.dayClose = bar.c;
+  return true;
 }
 
 /** Record a trade (or a minute bar's close) at `time` against the session it falls in. */
 function applyPrice(e: LiveEntry, price: number, time: string, session: Session | null): void {
   if (session === "regular") {
-    startSession(e, tradingDay(time));
-    if (e.regTime && time < e.regTime) return;
+    if (!startSession(e, tradingDay(time))) return;
+    if (e.regTime && before(time, e.regTime)) return;
     e.regPrice = price;
     e.regTime = time;
     if (e.open === null) e.open = price;
@@ -155,7 +181,7 @@ function applyPrice(e: LiveEntry, price: number, time: string, session: Session 
     if (e.low === null || price < e.low) e.low = price;
   } else if (session) {
     const last = e[session];
-    if (last && time < last.time) return;
+    if (last && before(time, last.time)) return;
     e[session] = { price, time };
   }
 }
@@ -166,8 +192,9 @@ export function applySnapshot(symbol: string, snap: alpaca.Snapshot | null): voi
   const e = entry(symbol);
   const prev = snap.prevDailyBar;
   const daily = snap.dailyBar;
-  if (daily) {
-    applyDayBar(e, daily);
+  // A snapshot can lag the stream around the open: a day bar older than the
+  // session already known says nothing about it, nor its previous close.
+  if (daily && applyDayBar(e, daily)) {
     if (prev && tradingDay(prev.t) < tradingDay(daily.t)) {
       e.prevClose = prev.c;
       e.prevDay = tradingDay(prev.t);
@@ -179,13 +206,13 @@ export function applySnapshot(symbol: string, snap: alpaca.Snapshot | null): voi
   }
   const trade = snap.latestTrade;
   if (trade) {
-    if (!e.tradeTime || trade.t > e.tradeTime) {
+    if (!e.tradeTime || before(e.tradeTime, trade.t)) {
       e.price = trade.p;
       e.tradeTime = trade.t;
     }
     const session = sessionAt(trade.t);
     // A regular-session trade only counts for the day bar's own session.
-    if (session !== "regular" || (daily && tradingDay(trade.t) === tradingDay(daily.t))) applyPrice(e, trade.p, trade.t, session);
+    if (session !== "regular" || (daily && tradingDay(trade.t) === e.barDay)) applyPrice(e, trade.p, trade.t, session);
   }
   const quote = snap.latestQuote;
   if (quote) {
@@ -213,15 +240,21 @@ export function applyMessage(m: alpaca.StreamMessage): void {
     case "t": {
       const conditions = (m.c as string[] | undefined) ?? [];
       if (conditions.some((c) => NON_PRICE_CONDITIONS.has(c))) return;
-      const e = entry(symbol);
       const t = m.t as string;
-      if (e.tradeTime && t < e.tradeTime) return;
+      const closing = conditions.includes(CLOSING_PRINT);
+      const session = closing && sessionAt(t) === "post" ? "regular" : sessionAt(t);
+      if (session === "regular" && conditions.some((c) => EXTENDED_CONDITIONS.has(c))) return;
+      const e = entry(symbol);
       const p = m.p as number;
-      e.price = p;
-      e.tradeTime = t;
+      // A late report (the closing print can come after the first after-hours
+      // trades) still counts for its own session, but doesn't move the latest price.
+      if (!e.tradeTime || !before(t, e.tradeTime)) {
+        e.price = p;
+        e.tradeTime = t;
+      }
       // The tape has nothing overnight but the odd late report.
-      const session = sessionAt(t);
       if (session !== "overnight") applyPrice(e, p, t, session);
+      if (closing && session === "regular" && e.barDay === tradingDay(t)) e.closePrint = p;
       e.updatedAt = Date.now();
       return;
     }
@@ -236,11 +269,11 @@ export function applyMessage(m: alpaca.StreamMessage): void {
     }
     case "d": {
       const e = entry(symbol);
-      applyDayBar(e, m as unknown as alpaca.Bar);
+      if (!applyDayBar(e, m as unknown as alpaca.Bar)) return;
       if (!isRealtime(symbol)) {
         // Without the trade feed, the day bar's close is the latest regular price.
         e.regPrice = m.c as number;
-        e.regTime = new Date().toISOString();
+        e.regTime = new Date(Math.min(regularCloseAt(e.barDay!), Date.now())).toISOString();
       }
       e.updatedAt = Date.now();
       return;
@@ -261,7 +294,7 @@ export function applyMessage(m: alpaca.StreamMessage): void {
         const e = entry(symbol);
         const end = new Date(Date.parse(m.t as string) + 60_000).toISOString();
         applyPrice(e, m.c as number, end, session);
-        if (!e.tradeTime || end > e.tradeTime) {
+        if (!e.tradeTime || before(e.tradeTime, end)) {
           e.price = m.c as number;
           e.tradeTime = end;
         }
@@ -317,7 +350,7 @@ export function liveQuote(symbol: string, requestedAs = symbol, now = new Date()
   if (!e || !e.barDay) return null;
   const session = sessionAt(now);
   const finished = now.getTime() >= regularCloseAt(e.barDay);
-  const price = finished ? e.dayClose ?? e.regPrice : e.regPrice ?? e.dayClose;
+  const price = finished ? e.closePrint ?? e.dayClose ?? e.regPrice : e.regPrice ?? e.dayClose;
   if (price === null) return null;
   const change = e.prevClose !== null ? price - e.prevClose : null;
 
