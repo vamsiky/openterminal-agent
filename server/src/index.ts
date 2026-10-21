@@ -7,6 +7,7 @@ import { aiRouter } from "./routes/ai.js";
 import { watchlistsRouter } from "./routes/watchlists.js";
 import { barsRouter } from "./routes/bars.js";
 import { estimatesRouter } from "./routes/estimates.js";
+import { researchRouter } from "./routes/research/index.js";
 import { startEstimateCapture } from "./estimates/capture.js";
 import { startHistoryScheduler } from "./history/scheduler.js";
 import * as alpaca from "./providers/alpaca.js";
@@ -52,6 +53,8 @@ app.use("/api/portfolios", requireApiKey, portfolioRouter);
 app.use("/api/watchlists", requireApiKey, watchlistsRouter);
 // Daily consensus-estimate snapshots (estimates/); served from the local database.
 app.use("/api/estimates", requireApiKey, estimatesRouter);
+// FMP research datasets for the analysis agents (routes/research/).
+app.use("/api/research", requireApiKey, researchRouter);
 // Locally stored price history (history/); read-only, no provider calls.
 app.use("/api/bars", barsRouter);
 app.use(
