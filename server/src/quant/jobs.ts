@@ -1,7 +1,7 @@
 import { db } from "../db.js";
 import { nyClock } from "../history/scheduler.js";
-import { minuteBars } from "../history/store.js";
 import { nyInstant } from "../live/session.js";
+import { ensureCalendar, isTradingDay, sessionClose } from "../providers/alpaca-calendar.js";
 import type { QuantDeps } from "../scan/contracts.js";
 import { refreshStockIdeas, runStockScreen, updateOptionIdeas } from "./ideas.js";
 import { optionScores, runOptionScan } from "./option-score.js";
@@ -14,8 +14,8 @@ import { resolveUniverse } from "./universe.js";
 //   ideas-screen     right after each nightly: the stock ideas list
 //   stock-intraday   every 15 min in the regular session: live rescoring of the universe
 //   option-scan      every 5 min in the regular session: option scorecards and ideas
-// The session scans run from 09:45 ET (so a holiday shows up as a SPY with no
-// minute bars before the first one) to 16:00. Jobs never overlap: one loop
+// The session scans run from 09:35 ET to the close (early closes included, from
+// the Alpaca trading calendar), on trading days only. Jobs never overlap: one loop
 // runs due jobs one after another, and a run that outlasts its slot simply
 // makes the next slot late. SCAN_ENABLED=0 turns it all off.
 
@@ -81,12 +81,21 @@ export const quantDeps = () => deps;
 
 const isWeekday = (weekday: string) => weekday !== "Sat" && weekday !== "Sun";
 
+/** First session scan, after the open's first minutes have bars. */
+const SESSION_START = { h: 9, m: 35 };
+/** How long after a slot's close a slot still runs (the 16:00 slot lands a minute or two later). */
+const AFTER_CLOSE_MS = 3 * 60_000;
+
 /**
- * Jobs due at `now`. `started(job)` is when the job last started (epoch ms)
- * and `sessionLive()` says whether SPY traded today (asked only from 09:45,
- * to recognise holidays).
+ * Jobs due at `now`. `started(job)` is when the job last started (epoch ms);
+ * `trading` and `closeAt` come from the trading calendar.
  */
-export function dueJobs(now: Date, started: (job: JobName) => number | null, sessionLive: () => boolean): JobName[] {
+export function dueJobs(
+  now: Date,
+  started: (job: JobName) => number | null,
+  trading: (day: string) => boolean = isTradingDay,
+  closeAt: (day: string) => number = sessionClose
+): JobName[] {
   const ny = nyClock(now);
   if (!isWeekday(ny.weekday)) return [];
   const t = now.getTime();
@@ -98,33 +107,19 @@ export function dueJobs(now: Date, started: (job: JobName) => number | null, ses
   // The screen follows its nightly: due when the nightly of this slot has run but the screen has not.
   if (slot !== undefined && (started("stock-nightly") ?? 0) >= slot && (started("ideas-screen") ?? 0) < slot) due.push("ideas-screen");
 
-  const open = nyInstant(ny.date, 9, 45);
-  const close = nyInstant(ny.date, 16, 0);
-  if (t >= open && t <= close + 3 * 60_000) {
-    const slotOf = (min: number) => open + Math.floor((Math.min(t, close) - open) / (min * 60_000)) * min * 60_000;
+  if (!trading(ny.date)) return due;
+  const anchor = nyInstant(ny.date, 9, 30);
+  const first = nyInstant(ny.date, SESSION_START.h, SESSION_START.m);
+  const close = closeAt(ny.date);
+  if (t >= first && t <= close + AFTER_CLOSE_MS) {
+    // Slots sit on the clock (:00, :05, ... / :00, :15, ...) counted from the open.
+    const slotOf = (min: number) => anchor + Math.floor((Math.min(t, close) - anchor) / (min * 60_000)) * min * 60_000;
     const stockSlot = slotOf(15);
     const optionSlot = slotOf(5);
-    const stockDue = t >= stockSlot + STOCK_OFFSET_MS && (started("stock-intraday") ?? 0) < stockSlot;
-    const optionDue = t >= optionSlot + OPTION_OFFSET_MS && (started("option-scan") ?? 0) < optionSlot;
-    if ((stockDue || optionDue) && sessionLive()) {
-      if (stockDue) due.push("stock-intraday");
-      if (optionDue) due.push("option-scan");
-    }
+    if (stockSlot >= first && t >= stockSlot + STOCK_OFFSET_MS && (started("stock-intraday") ?? 0) < stockSlot) due.push("stock-intraday");
+    if (optionSlot >= first && t >= optionSlot + OPTION_OFFSET_MS && (started("option-scan") ?? 0) < optionSlot) due.push("option-scan");
   }
   return due;
-}
-
-const sessionCache = { day: "", live: false };
-
-/** SPY has minute bars from today's session. Cached once true; re-asked each tick until then. */
-function spyTradedToday(now: Date): boolean {
-  const day = nyClock(now).date;
-  if (sessionCache.day === day && sessionCache.live) return true;
-  const open = nyInstant(day, 9, 30) / 1000;
-  const live = minuteBars("SPY", open, open + 6.5 * 3600, 1).length > 0;
-  sessionCache.day = day;
-  sessionCache.live = live;
-  return live;
 }
 
 // ---- running ----
@@ -201,14 +196,22 @@ export function startQuantJobs(d: QuantDeps): { stop: () => void } | null {
   // A killed process leaves its run marked running.
   db.prepare("UPDATE scan_runs SET status = 'error', error = 'abandoned: process stopped', finished_at = ? WHERE status = 'running'").run(new Date().toISOString());
 
+  const ensureYears = async (now: Date) => {
+    const year = Number(nyClock(now).date.slice(0, 4));
+    await ensureCalendar(year);
+    // Early December: the next year's holidays are published, and January's first scans need them.
+    if (now.getUTCMonth() === 11) await ensureCalendar(year + 1);
+  };
+
   let busy = false;
   const tick = async () => {
     if (busy) return;
     busy = true;
     try {
       const now = new Date();
+      await ensureYears(now);
       // A fresh install has no scorecards: build them once without waiting for 07:00.
-      const jobs: JobName[] = latestScorecardDay() === null && lastStart("stock-nightly") === null ? ["stock-nightly", "ideas-screen"] : dueJobs(now, (j) => lastStart(j), () => spyTradedToday(now));
+      const jobs: JobName[] = latestScorecardDay() === null && lastStart("stock-nightly") === null ? ["stock-nightly", "ideas-screen"] : dueJobs(now, (j) => lastStart(j));
       for (const job of jobs) {
         runJob(job, now);
         await new Promise((r) => setImmediate(r));
