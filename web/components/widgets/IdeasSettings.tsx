@@ -8,7 +8,7 @@ import ErrorNote from "../ErrorNote";
 
 type UniverseResponse = { settings: UniverseSettings; symbolCount: number };
 type Watchlist = { id?: number; name: string; symbols: string[] };
-type Sectors = { sectors: string[]; industries?: Array<string | { sector?: string; industry: string }> };
+type Sectors = { sectors: string[]; industries?: Array<{ sector: string; industry: string }> };
 
 const MODES: Array<[UniverseSettings["mode"], string]> = [
   ["watchlists", "Watchlists"],
@@ -82,7 +82,7 @@ export default function IdeasSettings() {
   const set = (patch: Partial<UniverseSettings>) => setDraft({ ...draft, ...patch });
   const num = (v: string) => (v === "" || !isFinite(Number(v)) ? 0 : Number(v));
   const withIds = (Array.isArray(lists.data) ? lists.data : []).filter((l): l is Watchlist & { id: number } => typeof l.id === "number");
-  const industryOptions = (sectors.data?.industries ?? []).map((i) => (typeof i === "string" ? i : i.industry));
+  const industryOptions = [...new Set((sectors.data?.industries ?? []).filter((i) => draft.sectors.length === 0 || draft.sectors.includes(i.sector)).map((i) => i.industry))];
   const heldCount = positions.data?.positions.length ?? 0;
 
   return (

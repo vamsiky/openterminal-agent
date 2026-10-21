@@ -54,10 +54,10 @@ export type OptionScorecard = {
 };
 export type ScorecardResponse = { stock: Scorecard | null; live: Scorecard | null; options: OptionScorecard | null };
 
-export type ScanRun = { job?: string; started_at?: string; finished_at?: string | null; startedAt?: string; finishedAt?: string | null; symbols?: number; status?: string; error?: string | null };
+export type ScanRun = { started_at: string; finished_at: string | null; status: string; symbols: number | null; duration_ms: number | null; error: string | null };
 export type ScanStatus = {
   runs: Record<string, ScanRun | null>;
-  options: { connected?: boolean; subscribed?: number; lastError?: string | null } | null;
+  options: { connected: boolean; subscribed: number; lastError: string | null } | null;
 };
 
 export type Position = { kind: "stock"; symbol: string } | { kind: "option"; occ: string; underlying: string };

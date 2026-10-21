@@ -42,8 +42,10 @@ describe("helpers", () => {
     expect(contractLabel(null)).toBe("—");
   });
   it("finds the latest run by job word", () => {
-    expect(lastRun({ stock_15m: { finished_at: "2026-10-21 10:00:00" }, stock_nightly: { finished_at: "2026-10-21 09:00:00" }, options: null }, "stock")?.finished_at).toBe("2026-10-21 10:00:00");
-    expect(lastRun({}, "option")).toBeNull();
+    const run = (finished_at: string) => ({ started_at: finished_at, finished_at, status: "ok", symbols: 1, duration_ms: 1, error: null });
+    const runs = { "stock-intraday": run("2026-10-21 10:00:00"), "stock-nightly": run("2026-10-21 09:00:00"), "option-scan": null };
+    expect(lastRun(runs, ["stock-nightly", "stock-intraday"])?.finished_at).toBe("2026-10-21 10:00:00");
+    expect(lastRun(runs, ["option-scan"])).toBeNull();
   });
 });
 

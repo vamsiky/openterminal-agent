@@ -16,23 +16,23 @@ const REFRESH: Record<Kind, number> = { option: 60_000, stock: 300_000 };
 const scorecardKey = (symbol: string) => ["scorecard", symbol];
 const fetchScorecard = (symbol: string) => apiGet<ScorecardResponse>(`/api/scan/scorecard/${encodeURIComponent(symbol)}`);
 
-/** The run whose job name mentions `word`, newest finish first. */
-export function lastRun(runs: ScanStatus["runs"] | undefined, word: string): ScanRun | null {
-  const hits = Object.entries(runs ?? {}).filter(([job, r]) => r && job.toLowerCase().includes(word)).map(([, r]) => r as ScanRun);
-  const finished = (r: ScanRun) => r.finished_at ?? r.finishedAt ?? r.started_at ?? r.startedAt ?? "";
-  return hits.sort((a, b) => finished(b).localeCompare(finished(a)))[0] ?? null;
+const runTime = (r: ScanRun | null | undefined) => r?.finished_at ?? r?.started_at ?? "";
+
+/** The most recently finished of the named jobs. */
+export function lastRun(runs: ScanStatus["runs"] | undefined, jobs: string[]): ScanRun | null {
+  const hits = jobs.map((j) => runs?.[j]).filter((r): r is ScanRun => !!r);
+  return hits.sort((a, b) => runTime(b).localeCompare(runTime(a)))[0] ?? null;
 }
 
 function StatusLine({ status }: { status: ScanStatus | undefined }) {
   if (!status) return null;
-  const stock = lastRun(status.runs, "stock");
-  const opt = lastRun(status.runs, "option");
-  const when = (r: ScanRun | null) => ago(r?.finished_at ?? r?.finishedAt ?? r?.started_at ?? r?.startedAt);
+  const stock = lastRun(status.runs, ["stock-nightly", "stock-intraday"]);
+  const opt = lastRun(status.runs, ["option-scan"]);
   const o = status.options;
   return (
     <div className="px-2 py-0.5 dim text-[10px] border-t border-[var(--border)]">
-      Stock scan {when(stock)} · Options sweep {when(opt)} ·{" "}
-      {o ? (o.connected ? `${o.subscribed ?? 0} contracts streamed` : "option stream offline") : "option stream n/a"}
+      Stock scan {ago(runTime(stock) || null)} · Options sweep {ago(runTime(opt) || null)} ·{" "}
+      {o ? (o.connected ? `${o.subscribed} contracts streamed` : "option stream offline") : "option stream n/a"}
       {o?.lastError ? <span className="down"> · {o.lastError}</span> : null}
     </div>
   );
