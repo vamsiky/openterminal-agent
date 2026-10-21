@@ -40,17 +40,18 @@ const option = (symbol: string, strategy: "long_call" | "short_put" | "covered_c
 describe("stock dedupe", () => {
   it("queues a stock once per day", () => {
     expect(queue.enqueue(stock("AAA"), { now: NOW })).toEqual({ position: 1 });
-    expect(queue.enqueue(stock("AAA"), { now: NOW })).toBeNull();
+    expect(queue.enqueue(stock("AAA"), { now: NOW })).toMatchObject({ position: 1, existing: true });
     queue.markDone(queue.pending().length ? queue.pending()[0].id : (db.prepare("SELECT id FROM agent_queue WHERE symbol = 'AAA'").pluck().get() as number));
     expect(queue.enqueue(stock("AAA"), { now: NOW })).toBeNull(); // done today: no second run the same day
   });
 
-  // BUG: the dedupe is documented as per (symbol, strategy, contract, day), but the "already queued" check in
-  // queue.ts enqueue() ignores the day. An automatic stock item still queued from yesterday blocks today's
-  // enqueue, so today's idea is not queued at all. Expected: today's item is added (position 1).
-  it.fails("queues a stock on a new day even while yesterday's item is still waiting", () => {
-    queue.enqueue(stock("AAA"), { now: NOW });
-    expect(queue.enqueue(stock("AAA"), { now: dayAt(1) })).toEqual({ position: 1 });
+  it("keeps one pending item per symbol and strategy: a repeat on a new day refreshes it and reports its position", () => {
+    queue.enqueue({ ...stock("AAA"), rank: 9 }, { now: NOW });
+    queue.enqueue(stock("ZZZ"), { now: NOW });
+    expect(queue.enqueue({ ...stock("AAA"), rank: 0 }, { now: dayAt(1) })).toEqual({ position: 1, existing: true });
+    expect(queue.pending()).toHaveLength(2);
+    const item = queue.pending()[0];
+    expect(item).toMatchObject({ symbol: "AAA", rank: 0, day: "2026-10-22" });
   });
 
   it("does not let a finished item for the day queue again the same day", () => {
@@ -63,7 +64,7 @@ describe("stock dedupe", () => {
 describe("option dedupe key (symbol, strategy, day)", () => {
   it("refuses a second automatic option of the same strategy on the day, whatever the contract", () => {
     expect(queue.enqueue(option("NVDA", "long_call", "NVDA261120C00300000"), { now: NOW })).not.toBeNull();
-    expect(queue.enqueue(option("NVDA", "long_call", "NVDA261120C00310000"), { now: NOW })).toBeNull();
+    expect(queue.enqueue(option("NVDA", "long_call", "NVDA261120C00310000"), { now: NOW })).toMatchObject({ position: 1, existing: true });
   });
 
   it("lets a different strategy or symbol on the same day through", () => {

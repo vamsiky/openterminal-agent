@@ -61,10 +61,10 @@ describe("queue", () => {
 
   it("dedupes automatic items per symbol, strategy, contract and day", () => {
     expect(queue.enqueue(item("MU"), { now: NOW })).toEqual({ position: 1 });
-    expect(queue.enqueue(item("MU"), { now: NOW })).toBeNull();
+    expect(queue.enqueue(item("MU"), { now: NOW })).toMatchObject({ existing: true }); // pending already: reported, not queued twice
     expect(queue.enqueue({ ...item("MU"), strategy: "short_put", kind: "option", contract: "MU261120P00090000" }, { now: NOW })).not.toBeNull();
     // Automatic option items key on symbol, strategy and day, not the contract.
-    expect(queue.enqueue({ ...item("MU"), strategy: "short_put", kind: "option", contract: "MU261120P00095000" }, { now: NOW })).toBeNull();
+    expect(queue.enqueue({ ...item("MU"), strategy: "short_put", kind: "option", contract: "MU261120P00095000" }, { now: NOW })).toMatchObject({ existing: true }); // pending already: reported, not queued twice
     expect(queue.pending().find((i) => i.strategy === "short_put")?.contract).toBe("MU261120P00095000"); // follows the idea
     // Finished today: automatic items still wait for tomorrow.
     queue.markDone(queue.pending()[0].id);
@@ -86,7 +86,7 @@ describe("queue", () => {
     queue.enqueue(item("A", 1), { now: NOW });
     queue.enqueue(item("MU", 9), { now: NOW });
     expect(queue.pending().map((i) => i.symbol)).toEqual(["A", "MU"]);
-    expect(queue.enqueue(item("MU"), { manual: true, now: new Date(NOW.getTime() + 1000) })).toEqual({ position: 1 });
+    expect(queue.enqueue(item("MU"), { manual: true, now: new Date(NOW.getTime() + 1000) })).toEqual({ position: 1, existing: true });
     expect(queue.pending().map((i) => [i.symbol, i.manual])).toEqual([["MU", true], ["A", false]]);
     expect(queue.pending()).toHaveLength(2);
     const id = queue.pending()[0].id;
