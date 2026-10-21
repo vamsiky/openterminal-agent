@@ -13,6 +13,11 @@ CREATE TABLE IF NOT EXISTS option_open_interest (
   open_interest INTEGER NOT NULL,
   PRIMARY KEY (occ, day)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS option_rejected_symbols (
+  symbol TEXT NOT NULL,
+  day TEXT NOT NULL,
+  PRIMARY KEY (symbol, day)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS option_open_interest_fetched (
   underlying TEXT NOT NULL,
   day TEXT NOT NULL,
@@ -24,10 +29,29 @@ CREATE TABLE IF NOT EXISTS option_open_interest_fetched (
 const BATCH = 50;
 const PAGE_LIMIT = 10_000;
 const MAX_PAGES = 20;
+const MAX_SPLIT_DEPTH = 6; // 50 -> 1 in at most log2(50) halvings
 const RETRY_AFTER_FAIL_MS = 30 * 60_000;
 let failedAt = 0;
 
 export type ContractRow = { symbol?: string; open_interest?: string | number | null };
+
+/** Underlyings Alpaca rejected as invalid on `day` (e.g. crypto tickers); skipped by the OI fetch and the sweep. */
+export function rejectedFor(day: string): Set<string> {
+  return new Set((db.prepare("SELECT symbol FROM option_rejected_symbols WHERE day = ?").all(day) as Array<{ symbol: string }>).map((r) => r.symbol));
+}
+
+function reject(day: string, symbols: string[]): void {
+  const insert = db.prepare("INSERT OR IGNORE INTO option_rejected_symbols (symbol, day) VALUES (?, ?)");
+  db.transaction(() => {
+    for (const s of symbols) insert.run(s, day);
+  })();
+}
+
+/** Symbols a 422 names, from "invalid underlying symbols: DOGE, XYZ"; empty when it names none. */
+export function invalidSymbols(message: string): string[] {
+  const m = message.match(/invalid underlying symbols?:?\s*([A-Za-z0-9.,\s-]+)/i);
+  return m ? m[1].split(/[\s,]+/).filter((s) => /^[A-Za-z0-9.-]+$/.test(s)).map((s) => s.toUpperCase()) : [];
+}
 
 /** Store OI rows for a day; contracts without open interest are skipped. */
 export function saveOpenInterest(day: string, rows: ContractRow[]): number {
@@ -72,34 +96,68 @@ export async function ensureOpenInterest(
   fetcher: typeof tradingFetch = tradingFetch
 ): Promise<Map<string, number>> {
   const done = fetchedToday(day);
-  const todo = underlyings.filter((u) => !done.has(u));
+  const bad = rejectedFor(day);
+  const todo = underlyings.filter((u) => !done.has(u) && !bad.has(u));
+
+  /**
+   * One batch, with its pages. A 422 naming invalid symbols drops them (and
+   * remembers them for the day) and retries the rest once; a 422 naming none
+   * splits the batch in half, down to single symbols.
+   */
+  async function fetchBatch(batch: string[], depth: number, counts: Map<string, number>, retried = false): Promise<void> {
+    if (batch.length === 0) return;
+    const local = new Map<string, number>(batch.map((u) => [u, 0]));
+    let pageToken: string | undefined;
+    try {
+      for (let page = 0; page < MAX_PAGES; page++) {
+        stats.requests++;
+        const data = await fetcher("/v2/options/contracts", {
+          underlying_symbols: batch.join(","),
+          expiration_date_gte: day,
+          expiration_date_lte: expiryMax,
+          limit: String(PAGE_LIMIT),
+          page_token: pageToken,
+        });
+        const rows: Array<ContractRow & { underlying_symbol?: string }> = data?.option_contracts ?? [];
+        saveOpenInterest(day, rows);
+        for (const r of rows) if (r.underlying_symbol && local.has(r.underlying_symbol)) local.set(r.underlying_symbol, local.get(r.underlying_symbol)! + 1);
+        pageToken = data?.next_page_token ?? undefined;
+        if (!pageToken) break;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes(" 422 ")) throw err;
+      const named = invalidSymbols(message).filter((s) => batch.includes(s));
+      if (named.length > 0 && !retried) {
+        reject(day, named);
+        for (const s of named) counts.set(s, 0);
+        return fetchBatch(batch.filter((s) => !named.includes(s)), depth, counts, true);
+      }
+      if (batch.length === 1) {
+        reject(day, batch);
+        counts.set(batch[0], 0);
+        return;
+      }
+      if (depth >= MAX_SPLIT_DEPTH) throw err;
+      const half = Math.ceil(batch.length / 2);
+      await fetchBatch(batch.slice(0, half), depth + 1, counts);
+      await fetchBatch(batch.slice(half), depth + 1, counts);
+      return;
+    }
+    for (const [u, n] of local) counts.set(u, n);
+  }
   if (todo.length > 0 && nowMs - failedAt >= RETRY_AFTER_FAIL_MS) {
     try {
       for (let i = 0; i < todo.length; i += BATCH) {
-        const batch = todo.slice(i, i + BATCH);
-        const counts = new Map<string, number>(batch.map((u) => [u, 0]));
-        let pageToken: string | undefined;
-        for (let page = 0; page < MAX_PAGES; page++) {
-          stats.requests++;
-          const data = await fetcher("/v2/options/contracts", {
-            underlying_symbols: batch.join(","),
-            expiration_date_gte: day,
-            expiration_date_lte: expiryMax,
-            limit: String(PAGE_LIMIT),
-            page_token: pageToken,
-          });
-          const rows: Array<ContractRow & { underlying_symbol?: string }> = data?.option_contracts ?? [];
-          saveOpenInterest(day, rows);
-          for (const r of rows) if (r.underlying_symbol && counts.has(r.underlying_symbol)) counts.set(r.underlying_symbol, counts.get(r.underlying_symbol)! + 1);
-          pageToken = data?.next_page_token ?? undefined;
-          if (!pageToken) break;
-        }
+        const counts = new Map<string, number>();
+        await fetchBatch(todo.slice(i, i + BATCH), 0, counts);
         const mark = db.prepare("INSERT OR REPLACE INTO option_open_interest_fetched (underlying, day, contracts) VALUES (?, ?, ?)");
         db.transaction(() => {
           for (const [u, n] of counts) mark.run(u, day, n);
         })();
       }
       db.prepare("DELETE FROM option_open_interest WHERE day < date(?, '-7 days')").run(day);
+      db.prepare("DELETE FROM option_rejected_symbols WHERE day < ?").run(day);
       db.prepare("DELETE FROM option_open_interest_fetched WHERE day < date(?, '-7 days')").run(day);
     } catch (err) {
       failedAt = nowMs;

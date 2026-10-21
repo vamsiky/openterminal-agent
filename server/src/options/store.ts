@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS option_metrics (
 );
 `);
 
+// Rows from before the backfill existed were all written by the live sweep.
+if (!(db.prepare("PRAGMA table_info(iv_history)").all() as Array<{ name: string }>).some((c) => c.name === "source")) {
+  db.exec("ALTER TABLE iv_history ADD COLUMN source TEXT NOT NULL DEFAULT 'live'");
+}
+
 export type OptionBar = {
   occ: string;
   ts: number; // unix seconds, minute start
@@ -81,20 +86,36 @@ export function pruneOptionBars(nowMs = Date.now(), days = retentionDays()): num
 
 // ---- IV history ----
 
-export type IvDay = { symbol: string; day: string; iv30: number | null; atmIv: number | null; hv20: number | null };
+export type IvSource = "live" | "backfill";
+export type IvDay = { symbol: string; day: string; iv30: number | null; atmIv: number | null; hv20: number | null; source?: IvSource };
 
+// A live row always replaces whatever is there.
 const upsertIvStmt = db.prepare(`
-INSERT INTO iv_history (symbol, day, iv30, atm_iv, hv20) VALUES (@symbol, @day, @iv30, @atmIv, @hv20)
-ON CONFLICT(symbol, day) DO UPDATE SET iv30 = excluded.iv30, atm_iv = excluded.atm_iv, hv20 = excluded.hv20
+INSERT INTO iv_history (symbol, day, iv30, atm_iv, hv20, source) VALUES (@symbol, @day, @iv30, @atmIv, @hv20, 'live')
+ON CONFLICT(symbol, day) DO UPDATE SET iv30 = excluded.iv30, atm_iv = excluded.atm_iv, hv20 = excluded.hv20, source = 'live'
 `);
 export function upsertIvDay(row: IvDay): void {
   upsertIvStmt.run(row);
 }
 
+// A backfilled row never replaces a live one; it may replace an earlier backfill.
+const upsertBackfillStmt = db.prepare(`
+INSERT INTO iv_history (symbol, day, iv30, atm_iv, hv20, source) VALUES (@symbol, @day, @iv30, @atmIv, @hv20, 'backfill')
+ON CONFLICT(symbol, day) DO UPDATE SET iv30 = excluded.iv30, atm_iv = excluded.atm_iv, hv20 = excluded.hv20, source = 'backfill'
+WHERE iv_history.source = 'backfill'
+`);
+export const upsertBackfillDays = db.transaction((rows: IvDay[]) => {
+  for (const r of rows) upsertBackfillStmt.run(r);
+});
+
+export function ivHistoryCount(symbol: string): number {
+  return (db.prepare("SELECT COUNT(*) AS n FROM iv_history WHERE symbol = ?").get(symbol) as { n: number }).n;
+}
+
 /** The latest `days` rows, oldest first. */
 export function ivHistory(symbol: string, days = 252): IvDay[] {
   const rows = db
-    .prepare("SELECT symbol, day, iv30, atm_iv AS atmIv, hv20 FROM iv_history WHERE symbol = ? ORDER BY day DESC LIMIT ?")
+    .prepare("SELECT symbol, day, iv30, atm_iv AS atmIv, hv20, source FROM iv_history WHERE symbol = ? ORDER BY day DESC LIMIT ?")
     .all(symbol, days) as IvDay[];
   return rows.reverse();
 }
