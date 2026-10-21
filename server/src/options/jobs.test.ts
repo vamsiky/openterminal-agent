@@ -36,6 +36,27 @@ describe("inSweepWindow", () => {
   });
 });
 
+describe("windows follow the market calendar", () => {
+  it("skips holidays and ends at the early close", async () => {
+    const cal = await import("../providers/alpaca-calendar.js");
+    const stream = await import("./opra-stream.js");
+    cal.loadCalendarRows(2026, [
+      { date: "2026-11-25", open: "09:30", close: "16:00" },
+      { date: "2026-11-27", open: "09:30", close: "13:00" },
+    ]);
+    try {
+      expect(jobs.inSweepWindow(Date.parse("2026-11-26T16:00:00Z"))).toBe(false); // Thanksgiving, 11:00 ET
+      expect(stream.inStreamWindow(Date.parse("2026-11-26T16:00:00Z"))).toBe(false);
+      expect(jobs.inSweepWindow(Date.parse("2026-11-27T17:30:00Z"))).toBe(true); // 12:30 ET
+      expect(jobs.inSweepWindow(Date.parse("2026-11-27T18:00:00Z"))).toBe(false); // 13:00 ET close
+      expect(stream.inStreamWindow(Date.parse("2026-11-27T18:04:00Z"))).toBe(true);
+      expect(stream.inStreamWindow(Date.parse("2026-11-27T18:05:00Z"))).toBe(false);
+    } finally {
+      cal.resetCalendar();
+    }
+  });
+});
+
 describe("startOptionsJobs", () => {
   it("exposes status and runs a sweep that points the stream at the selection", async () => {
     const h = jobs.startOptionsJobs(
@@ -44,6 +65,7 @@ describe("startOptionsJobs", () => {
         prices: async () => new Map([["AAA", 100]]),
         snapshots: async () => ({}),
         hv20: () => null,
+        openInterest: async () => new Map<string, number>(),
       }
     );
     expect(h.status()).toMatchObject({ connected: false, subscribed: 0, lastError: null, lastSweep: null });

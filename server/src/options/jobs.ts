@@ -1,6 +1,6 @@
 import { liveEntry } from "../live/feed.js";
-import { nyInstant } from "../live/session.js";
 import { tradingDay } from "../history/time.js";
+import { ensureCalendar, isTradingDay, sessionClose, sessionOpen } from "../providers/alpaca-calendar.js";
 import * as alpaca from "../providers/alpaca.js";
 import type { OptionMetrics, OptionsDeps } from "../scan/contracts.js";
 import { createOpraStream, type OpraStream } from "./opra-stream.js";
@@ -8,8 +8,8 @@ import { latestOptionMetrics, pruneOptionBars } from "./store.js";
 import { runSweep, type SweepDeps, type SweepResult } from "./sweep.js";
 import type { Pair } from "./selection.js";
 
-// Schedules the options data layer: the 5-minute sweep (09:30–16:00 New York,
-// weekdays) and the OPRA stream (09:25–16:05, see opra-stream.ts). After each
+// Schedules the options data layer: the 5-minute sweep (09:30 to the close
+// on trading days) and the OPRA stream (09:25–16:05, see opra-stream.ts). After each
 // sweep the stream is pointed at the new contract selection. Option bars are
 // pruned once a day. OPTIONS_SWEEP=0 turns the sweep off, OPTIONS_STREAM=0 the stream.
 
@@ -27,11 +27,10 @@ export type SweepSummary = {
   lastError: string | null;
 };
 
-/** Weekdays 09:30–16:00 New York. Holidays run a harmless sweep over stale quotes. */
+/** Trading days from the open to the close (the early close on short days). */
 export function inSweepWindow(nowMs: number): boolean {
   const day = tradingDay(nowMs / 1000);
-  const dow = new Date(`${day}T12:00:00Z`).getUTCDay();
-  return dow !== 0 && dow !== 6 && nowMs >= nyInstant(day, 9, 30) && nowMs < nyInstant(day, 16, 0);
+  return isTradingDay(day) && nowMs >= sessionOpen(day) && nowMs < sessionClose(day);
 }
 
 export type OptionsHandle = {
@@ -135,8 +134,10 @@ export function startOptionsJobs(deps: OptionsDeps, overrides: Partial<SweepDeps
   const timer = setInterval(tick, CHECK_EVERY_MS);
   timer.unref();
   stream.start();
-  tick();
-  if (sweepEnabled) console.log("[options] sweep enabled (every 5 minutes, 09:30–16:00 New York, weekdays)");
+  // Load the market calendar (this year, and next in December) before the first sweep decision.
+  const year = new Date().getFullYear();
+  void Promise.all([ensureCalendar(year), new Date().getMonth() === 11 ? ensureCalendar(year + 1) : true]).finally(tick);
+  if (sweepEnabled) console.log("[options] sweep enabled (every 5 minutes, 09:30 to the close, trading days)");
 
   current = {
     status: () => statusOf(stream, sweepEnabled, lastSweep, sweeping),

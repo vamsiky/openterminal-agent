@@ -1,6 +1,7 @@
 import { decode, encode } from "@msgpack/msgpack";
 import { tradingDay } from "../history/time.js";
-import { nyInstant, regularCloseAt } from "../live/session.js";
+import { regularCloseAt } from "../live/session.js";
+import { isTradingDay, sessionClose, sessionOpen } from "../providers/alpaca-calendar.js";
 import { optionsFeed, parseOcc } from "../providers/alpaca-options.js";
 import { isConfigured } from "../providers/alpaca.js";
 import { greeks, impliedVol, midPrice, riskFreeRate, yearsToExpiry } from "./black-scholes.js";
@@ -16,15 +17,16 @@ import { upsertOptionBars, type OptionBar } from "./store.js";
 // delta from each quote (at most once a second per contract), and writes
 // minute bars to option_minute_bars.
 //
-// Runs 09:25–16:05 New York time on weekdays; OPTIONS_STREAM=0 opts out.
+// Runs from 09:25 to five minutes past the close on trading days; OPTIONS_STREAM=0 opts out.
 
 const STREAM_URL = "wss://stream.data.alpaca.markets/v1beta1";
 const CHECK_EVERY_MS = 30_000;
 const FLUSH_EVERY_MS = 5_000;
 const IV_MIN_GAP_MS = 1_000;
 const SUBSCRIBE_CHUNK = 200;
-const WINDOW_OPEN = { h: 9, m: 25 };
-const WINDOW_CLOSE = { h: 16, m: 5 };
+// Five minutes before the open to five after the close (early closes included).
+const WINDOW_BEFORE_MS = 5 * 60_000;
+const WINDOW_AFTER_MS = 5 * 60_000;
 
 export type ContractQuote = {
   occ: string;
@@ -60,12 +62,10 @@ export type StreamDeps = {
   writeBars?: (bars: OptionBar[]) => void;
 };
 
-/** Whether the stream should be connected at `nowMs`: weekdays 09:25–16:05 New York. */
+/** Whether the stream should be connected at `nowMs`: trading days, 09:25 to five minutes past the close. */
 export function inStreamWindow(nowMs: number): boolean {
   const day = tradingDay(nowMs / 1000);
-  const dow = new Date(`${day}T12:00:00Z`).getUTCDay();
-  if (dow === 0 || dow === 6) return false;
-  return nowMs >= nyInstant(day, WINDOW_OPEN.h, WINDOW_OPEN.m) && nowMs < nyInstant(day, WINDOW_CLOSE.h, WINDOW_CLOSE.m);
+  return isTradingDay(day) && nowMs >= sessionOpen(day) - WINDOW_BEFORE_MS && nowMs < sessionClose(day) + WINDOW_AFTER_MS;
 }
 
 /** Node's WebSocket (undici) accepts request headers; Alpaca wants the msgpack content type on option streams. */
