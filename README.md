@@ -118,7 +118,7 @@ Every source below allows automated use under its terms. Results are cached with
 | Variable | Unlocks |
 |---|---|
 | `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY` | US stock and ETF prices and charts, crypto, options, news, the heatmap, screener and recap. Without them only Stooq prices, FRED/ECB macro, CoinGecko and the official calendars work. |
-| `FMP_API_KEY` (optional) | [Financial Modeling Prep](https://site.financialmodelingprep.com/developer/docs): quote fundamentals, foreign listings and indices, FMP sectors and market caps, earnings calendar and history, and forecast/actual values on the economic calendar. FMP's Starter plan covers US listings with annual fundamentals; non‑US exchanges and quarterly data need Premium or above. |
+| `FMP_API_KEY` (optional) | [Financial Modeling Prep](https://site.financialmodelingprep.com/developer/docs): quote fundamentals, foreign listings and indices, FMP sectors and market caps, earnings calendar and history, and forecast/actual values on the economic calendar. FMP's Starter plan covers US listings, including quarterly financial statements and trailing‑twelve‑month ratios; analyst estimates are annual only on Starter, batch quotes need Premium, and non‑US exchanges need Premium (UK, Canada) or Ultimate (global). Foreign listings fall back to Stooq. |
 | `FRED_API_KEY` (optional) | Adds FRED's release dates to the economic calendar. |
 | `SEC_EDGAR_CONTACT` | Your email, sent in the User‑Agent that SEC EDGAR and BLS require. Without it insider trades, SEC shares/sectors and the BLS schedule are skipped. |
 

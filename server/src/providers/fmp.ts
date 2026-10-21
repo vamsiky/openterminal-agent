@@ -49,6 +49,20 @@ export type Profile = {
   lastDividend: number | null; // annual dividend per share
   website: string | null;
   isEtf: boolean;
+  /** Price when the profile was fetched; shares outstanding = marketCap / price. */
+  price: number | null;
+  avgVolume: number | null;
+  week52High: number | null;
+  week52Low: number | null;
+};
+
+/** Trailing-twelve-month valuation figures (Starter: US). */
+export type RatiosTtm = {
+  symbol: string;
+  pe: number | null;
+  eps: number | null;
+  /** Fraction, e.g. 0.0024 for 0.24%. */
+  dividendYield: number | null;
 };
 
 /** Quote fields FMP can fill; merge over the server Quote (which carries the rest). */
@@ -132,7 +146,12 @@ const cache = new Map<string, { at: number; value: unknown }>();
 export function resetState(): void {
   nextSlot = 0;
   cache.clear();
+  batchQuoteUnavailable = false;
 }
+
+// Batch quotes need Premium (Starter answers 402); after the first refusal,
+// quotes go one call per symbol instead of asking again every time.
+let batchQuoteUnavailable = false;
 
 async function cached<T>(key: string, ttl: number, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key);
@@ -229,9 +248,46 @@ export async function profiles(symbols: string[]): Promise<Map<string, Profile>>
         lastDividend: num(r.lastDividend),
         website: str(r.website),
         isEtf: r.isEtf === true,
+        price: num(r.price),
+        avgVolume: num(r.averageVolume),
+        ...yearRange(r.range),
       } satisfies Profile;
     });
     if (p) out.set(symbol, p);
+  });
+  return out;
+}
+
+/** The profile's "range" ("169.21-345.00") as the 52-week low and high. */
+function yearRange(range: unknown): { week52Low: number | null; week52High: number | null } {
+  const m = typeof range === "string" ? range.match(/^\s*([\d.]+)\s*-\s*([\d.]+)\s*$/) : null;
+  return { week52Low: m ? Number(m[1]) : null, week52High: m ? Number(m[2]) : null };
+}
+
+/**
+ * P/E, EPS and dividend yield over the trailing twelve months, cached 24 h.
+ * GET /ratios-ttm?symbol=X, one call per symbol. Symbols FMP doesn't know, or
+ * the plan doesn't cover (Starter: US only), are omitted.
+ */
+export async function ratiosTtm(symbols: string[]): Promise<Map<string, RatiosTtm>> {
+  requireKey();
+  const out = new Map<string, RatiosTtm>();
+  await mapLimit(norm(symbols), async (symbol) => {
+    const r = await cached(`ratios-ttm:${symbol}`, PROFILE_TTL, async () => {
+      const rows = await get("ratios-ttm", { symbol }).catch((err) => {
+        if (err instanceof FmpError && (err.status === 402 || err.status === 403)) return [];
+        throw err;
+      });
+      const row = Array.isArray(rows) ? rows[0] : null;
+      if (!row) return null;
+      return {
+        symbol,
+        pe: num(row.priceToEarningsRatioTTM),
+        eps: num(row.netIncomePerShareTTM),
+        dividendYield: num(row.dividendYieldTTM),
+      } satisfies RatiosTtm;
+    });
+    if (r) out.set(symbol, r);
   });
   return out;
 }
@@ -255,15 +311,25 @@ export async function quotes(symbols: string[]): Promise<Map<string, FmpQuote>> 
   }
   if (missing.length === 0) return out;
 
-  let rows: any[];
-  try {
-    const chunks: string[][] = [];
-    for (let i = 0; i < missing.length; i += 100) chunks.push(missing.slice(i, i + 100));
-    rows = (await mapLimit(chunks, (c) => get("batch-quote", { symbols: c.join(",") }))).flat();
-  } catch (err) {
-    if (!(err instanceof FmpError) || (err.status !== 402 && err.status !== 403)) throw err;
-    rows = (await mapLimit(missing, (symbol) => get("quote", { symbol }))).flat();
+  // A symbol the plan doesn't cover (Starter: non-US) answers 402; skip it
+  // rather than failing the others.
+  const one = (symbol: string) =>
+    get("quote", { symbol }).catch((err) => {
+      if (err instanceof FmpError && (err.status === 402 || err.status === 403)) return [];
+      throw err;
+    });
+  let rows: any[] | null = null;
+  if (!batchQuoteUnavailable) {
+    try {
+      const chunks: string[][] = [];
+      for (let i = 0; i < missing.length; i += 100) chunks.push(missing.slice(i, i + 100));
+      rows = (await mapLimit(chunks, (c) => get("batch-quote", { symbols: c.join(",") }))).flat();
+    } catch (err) {
+      if (!(err instanceof FmpError) || (err.status !== 402 && err.status !== 403)) throw err;
+      batchQuoteUnavailable = true;
+    }
   }
+  if (rows === null) rows = (await mapLimit(missing, one)).flat();
 
   for (const r of rows) {
     const symbol = String(r?.symbol ?? "").toUpperCase();
@@ -282,10 +348,10 @@ export async function quotes(symbols: string[]): Promise<Map<string, FmpQuote>> 
       low: num(r.dayLow),
       previousClose: num(r.previousClose),
       volume: num(r.volume),
-      avgVolume: num(r.avgVolume ?? r.averageVolume), // UNCONFIRMED: absent from the stable quote
+      avgVolume: num(r.avgVolume ?? r.averageVolume), // not in the stable quote (checked); profiles() has it
       marketCap,
-      pe: num(r.pe), // UNCONFIRMED
-      eps: num(r.eps), // UNCONFIRMED
+      pe: num(r.pe), // not in the stable quote (checked); ratiosTtm() has it
+      eps: num(r.eps), // not in the stable quote (checked); ratiosTtm() has it
       week52High: num(r.yearHigh),
       week52Low: num(r.yearLow),
       sharesOutstanding: num(r.sharesOutstanding) ?? (marketCap && price ? Math.round(marketCap / price) : null),
@@ -342,22 +408,31 @@ export async function earningsCalendar(from: string, to: string): Promise<Earnin
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
-/** The /calendar route's shape: per symbol, next and last report date and the next EPS forecast. */
+/**
+ * Next and last earnings dates and the EPS estimate for the next report, per
+ * symbol from GET /earnings?symbol=X (upcoming reports carry a null actual),
+ * cached 6 h. The market-wide /earnings-calendar can't be used for this: it
+ * returns at most 4,000 rows and keeps the latest dates, so a 90-day window
+ * silently drops the weeks closest to today (checked 2026-10-20).
+ */
 export async function earningsInfo(symbols: string[], now = new Date()): Promise<EarningsInfo[]> {
   requireKey();
-  const today = isoDay(now);
-  const day = 86_400_000;
-  const [ahead, ahead2, behind] = await Promise.all([
-    earningsCalendar(today, isoDay(new Date(now.getTime() + 89 * day))),
-    earningsCalendar(isoDay(new Date(now.getTime() + 90 * day)), isoDay(new Date(now.getTime() + 179 * day))),
-    earningsCalendar(isoDay(new Date(now.getTime() - 89 * day)), isoDay(new Date(now.getTime() - day))),
-  ]);
-  const todayUnix = unixDay(today)!;
-  const upcoming = [...ahead, ...ahead2].sort((a, b) => a.date - b.date);
+  const todayUnix = unixDay(isoDay(now))!;
+  const bySymbol = new Map<string, EarningsCalendarRow[]>();
+  await mapLimit(norm(symbols), async (symbol) => {
+    const rows = await cached(`earnings-info:${symbol}`, CALENDAR_TTL, async () => {
+      const raw = await get("earnings", { symbol, limit: 8 }).catch((err) => {
+        if (err instanceof FmpError && (err.status === 402 || err.status === 403)) return [];
+        throw err;
+      });
+      return (Array.isArray(raw) ? raw : []).map(earningsRow).filter((r): r is EarningsCalendarRow => r !== null);
+    });
+    bySymbol.set(symbol, rows);
+  });
   return symbols.map((raw) => {
-    const symbol = raw.trim().toUpperCase();
-    const next = upcoming.find((r) => r.symbol === symbol && r.date >= todayUnix);
-    const last = behind.filter((r) => r.symbol === symbol).sort((a, b) => b.date - a.date)[0];
+    const rows = bySymbol.get(raw.trim().toUpperCase()) ?? [];
+    const next = rows.filter((r) => r.epsActual === null && r.date >= todayUnix).sort((a, b) => a.date - b.date)[0];
+    const last = rows.filter((r) => r.epsActual !== null && r.date <= todayUnix).sort((a, b) => b.date - a.date)[0];
     return {
       symbol: raw,
       nextEarningsDate: next?.date ?? null,

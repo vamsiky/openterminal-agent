@@ -204,26 +204,28 @@ const staticInFlight = new Set<string>();
 async function fetchStaticFields(symbols: string[]): Promise<Map<string, StaticFields>> {
   const out = new Map<string, StaticFields>();
   if (fmp.isConfigured()) {
-    const [quotes, profiles] = await Promise.all([
-      fmp.quotes(symbols).catch(() => new Map<string, fmp.FmpQuote>()),
+    // Profiles and TTM ratios change daily at most and are cached a day, so
+    // the hourly refresh costs no FMP calls between them.
+    const [profiles, ratios] = await Promise.all([
       fmp.profiles(symbols).catch(() => new Map<string, fmp.Profile>()),
+      fmp.ratiosTtm(symbols).catch(() => new Map<string, fmp.RatiosTtm>()),
     ]);
     for (const s of symbols) {
-      const q = quotes.get(s);
       const p = profiles.get(s);
-      if (!q && !p) continue;
+      const r = ratios.get(s);
+      if (!p && !r) continue;
       out.set(s, {
-        name: p?.name ?? q?.name ?? null,
-        exchange: p?.exchange ?? q?.exchange ?? null,
-        avgVolume: q?.avgVolume ?? null,
-        marketCap: q?.marketCap ?? p?.marketCap ?? null,
-        pe: q?.pe ?? null,
-        eps: q?.eps ?? null,
-        dividendYield: p?.lastDividend && q?.price ? p.lastDividend / q.price : null,
-        week52High: q?.week52High ?? null,
-        week52Low: q?.week52Low ?? null,
+        name: p?.name ?? null,
+        exchange: p?.exchange ?? null,
+        avgVolume: p?.avgVolume ?? null,
+        marketCap: p?.marketCap ?? null,
+        pe: r?.pe ?? null,
+        eps: r?.eps ?? null,
+        dividendYield: r?.dividendYield ?? null,
+        week52High: p?.week52High ?? null,
+        week52Low: p?.week52Low ?? null,
         beta: p?.beta ?? null,
-        sharesOutstanding: q?.sharesOutstanding ?? null,
+        sharesOutstanding: p?.marketCap && p.price ? Math.round(p.marketCap / p.price) : null,
       });
     }
     return out;
@@ -340,13 +342,21 @@ function snapshotQuote(symbol: string, snap: alpaca.Snapshot): Quote | null {
 }
 
 /** Keyed by the requested symbol; symbols nothing answered (and with no last-known quote) are left out. */
+// Symbols no source could answer, and when to ask again. Without this, a
+// ticker nothing covers (a foreign listing on FMP Starter, say) costs the whole
+// fallback chain, Stooq's timeout included, on every poll of the widget showing
+// it, and holds up the other symbols in the same request.
+const UNANSWERED_RETRY_MS = 10 * 60_000;
+const unanswered = new Map<string, number>(); // symbol → when to try again (ms)
+
 async function webQuoteMap(symbols: string[]): Promise<Map<string, Quote>> {
   const fresh = new Map<string, Quote>();
   const missing: string[] = [];
+  const now = Date.now();
   for (const sym of symbols) {
     const hit = cacheGet<Quote>(`quote:${sym}`);
     if (hit) fresh.set(sym, hit);
-    else missing.push(sym);
+    else if ((unanswered.get(sym) ?? 0) <= now) missing.push(sym);
   }
   if (missing.length === 0) return fresh;
 
@@ -404,7 +414,9 @@ async function webQuoteMap(symbols: string[]): Promise<Map<string, Quote>> {
   for (const [sym, q] of fetched) {
     q.asOf = asOf;
     cacheStore(`quote:${sym}`, q, QUOTE_TTL);
+    unanswered.delete(sym);
   }
+  for (const sym of missing) if (!fetched.has(sym)) unanswered.set(sym, Date.now() + UNANSWERED_RETRY_MS);
 
   const out = new Map<string, Quote>();
   for (const sym of symbols) {

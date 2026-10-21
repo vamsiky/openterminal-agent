@@ -167,6 +167,25 @@ describe("quote routing", () => {
     expect(body).toEqual([expect.objectContaining({ symbol: "7203.T", price: 2_500, source: "stooq" })]);
   });
 
+  it("stops asking for a symbol no source answers for 10 minutes, then tries again", async () => {
+    vi.mocked(fmp.isConfigured).mockReturnValue(true);
+    vi.mocked(stooq.quote).mockRejectedValue(new Error("stooq timeout"));
+    const t0 = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      expect((await call("/quotes", { query: { symbols: "NOPE.TO" } })).body).toHaveProperty("error");
+      await call("/quotes", { query: { symbols: "NOPE.TO" } });
+      expect(fmp.quotes).toHaveBeenCalledTimes(1);
+      expect(stooq.quote).toHaveBeenCalledTimes(1);
+
+      clock.mockReturnValue(t0 + 10 * 60_000 + 1);
+      await call("/quotes", { query: { symbols: "NOPE.TO" } });
+      expect(stooq.quote).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("falls through Alpaca to Stooq for a US stock Alpaca doesn't answer", async () => {
     vi.mocked(alpaca.isConfigured).mockReturnValue(false);
     vi.mocked(stooq.quote).mockResolvedValue(quote("MSFT", 400, "stooq"));

@@ -10,6 +10,7 @@ import {
   isConfigured,
   profiles,
   quotes,
+  ratiosTtm,
   resetState,
 } from "./fmp.js";
 
@@ -80,6 +81,42 @@ describe("fmp provider", () => {
     expect(fetchMock.mock.calls.map((c) => String(c[0]))[1]).toContain("/quote?symbol=AAPL");
   });
 
+  it("stops asking for batch quotes after the plan refuses it, and skips symbols the plan doesn't cover", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("/batch-quote")) return fail(402);
+      if (url.includes("symbol=SHOP.TO")) return fail(402, "Premium Query Parameter");
+      return ok([{ symbol: new URL(url).searchParams.get("symbol"), price: 10 }]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const got = await quotes(["AAPL", "SHOP.TO"]);
+    expect(got.get("AAPL")?.price).toBe(10);
+    expect(got.has("SHOP.TO")).toBe(false);
+    await quotes(["NVDA"]);
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls.filter((u) => u.includes("/batch-quote"))).toHaveLength(1);
+    expect(urls.at(-1)).toContain("/quote?symbol=NVDA");
+  });
+
+  it("reads average volume and the 52-week range from the profile", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok([{ symbol: "AAPL", companyName: "Apple Inc.", price: 339.5, marketCap: 4.95e12, averageVolume: 49309450, range: "169.21-345.00" }])));
+    expect((await profiles(["AAPL"])).get("AAPL")).toMatchObject({ price: 339.5, avgVolume: 49309450, week52Low: 169.21, week52High: 345 });
+  });
+
+  it("maps TTM ratios, caches them a day, and omits symbols the plan refuses", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) =>
+      url.includes("symbol=SHOP.TO")
+        ? fail(402)
+        : ok([{ symbol: "NVDA", priceToEarningsRatioTTM: 27.23, netIncomePerShareTTM: 7.97, dividendYieldTTM: 0.0024 }])
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const got = await ratiosTtm(["NVDA", "SHOP.TO"]);
+    expect(got.get("NVDA")).toEqual({ symbol: "NVDA", pe: 27.23, eps: 7.97, dividendYield: 0.0024 });
+    expect(got.has("SHOP.TO")).toBe(false);
+    await ratiosTtm(["NVDA"]);
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("symbol=NVDA"))).toHaveLength(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/stable/ratios-ttm?symbol=");
+  });
+
   it("returns historical candles oldest first", async () => {
     vi.stubGlobal(
       "fetch",
@@ -96,25 +133,33 @@ describe("fmp provider", () => {
     expect(c[0].time).toBe(Date.UTC(2026, 0, 2) / 1000);
   });
 
-  it("builds the /calendar shape from the earnings calendar", async () => {
-    const now = new Date("2026-05-01T12:00:00Z");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation(async (url: string) => {
-        const from = new URL(url).searchParams.get("from")!;
-        if (from === "2026-05-01") return ok([{ symbol: "AAPL", date: "2026-05-20", epsEstimated: 1.5 }, { symbol: "MSFT", date: "2026-05-02", epsEstimated: 3 }]);
-        if (from < "2026-05-01") return ok([{ symbol: "AAPL", date: "2026-02-01", epsActual: 2 }]);
-        return ok([]);
-      })
-    );
-    const info = await earningsInfo(["AAPL", "ZZZ"], now);
+  it("builds the /calendar shape from each symbol's earnings, not the truncated market-wide calendar", async () => {
+    const now = new Date("2026-10-21T12:00:00Z");
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      const u = new URL(url);
+      if (u.pathname.endsWith("/earnings-calendar")) throw new Error("must not use the 4,000-row calendar");
+      if (u.searchParams.get("symbol") === "AAPL")
+        return ok([
+          { symbol: "AAPL", date: "2027-01-28", epsActual: null, epsEstimated: 2.4 },
+          { symbol: "AAPL", date: "2026-11-02", epsActual: null, epsEstimated: 1.99 },
+          { symbol: "AAPL", date: "2026-07-30", epsActual: 2.02, epsEstimated: 1.89 },
+          { symbol: "AAPL", date: "2026-04-30", epsActual: 2.01, epsEstimated: 1.95 },
+        ]);
+      if (u.searchParams.get("symbol") === "SHOP.TO") return fail(402);
+      return ok([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const info = await earningsInfo(["AAPL", "ZZZ", "SHOP.TO"], now);
     expect(info[0]).toEqual({
       symbol: "AAPL",
-      nextEarningsDate: Date.UTC(2026, 4, 20) / 1000,
-      lastEarningsDate: Date.UTC(2026, 1, 1) / 1000,
-      epsForecast: 1.5,
+      nextEarningsDate: Date.UTC(2026, 10, 2) / 1000,
+      lastEarningsDate: Date.UTC(2026, 6, 30) / 1000,
+      epsForecast: 1.99,
     });
     expect(info[1]).toEqual({ symbol: "ZZZ", nextEarningsDate: null, lastEarningsDate: null, epsForecast: null });
+    expect(info[2]).toMatchObject({ symbol: "SHOP.TO", nextEarningsDate: null });
+    await earningsInfo(["AAPL"], now);
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("symbol=AAPL"))).toHaveLength(1);
   });
 
   it("returns reported quarters newest first with a surprise percent", async () => {

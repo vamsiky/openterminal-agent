@@ -14,7 +14,7 @@ vi.mock("../live/feed.js", () => ({
 }));
 vi.mock("../live/history.js", () => ({ alpacaHistory: vi.fn() }));
 vi.mock("../history/universe.js", () => ({ alpacaSymbol: (s: string) => s, sp500: vi.fn(), nasdaq100: vi.fn() }));
-vi.mock("../providers/fmp.js", async (orig) => ({ ...(await orig<object>()), isConfigured: vi.fn(), quotes: vi.fn(), profiles: vi.fn() }));
+vi.mock("../providers/fmp.js", async (orig) => ({ ...(await orig<object>()), isConfigured: vi.fn(), quotes: vi.fn(), profiles: vi.fn(), ratiosTtm: vi.fn() }));
 vi.mock("../providers/alpaca-assets.js", () => ({ allAssets: vi.fn(), search: vi.fn() }));
 vi.mock("../providers/sec-reference.js", () => ({ reference: vi.fn() }));
 vi.mock("../providers/stooq.js", async (orig) => ({ ...(await orig<object>()), quote: vi.fn() }));
@@ -26,9 +26,11 @@ const sec = await import("../providers/sec-reference.js");
 const stooq = await import("../providers/stooq.js");
 
 const fmpQuotes = vi.mocked(fmp.quotes);
+const fmpProfiles = vi.mocked(fmp.profiles);
+const fmpRatios = vi.mocked(fmp.ratiosTtm);
 
-function fmpQuote(symbol: string, name: string): fmp.FmpQuote {
-  return { symbol, name, price: 99, exchange: null, pe: 20 } as fmp.FmpQuote;
+function fmpProfile(symbol: string, name: string): fmp.Profile {
+  return { symbol, name, price: 99, marketCap: 99_000, exchange: null, week52High: 120, week52Low: 80, avgVolume: 5_000 } as fmp.Profile;
 }
 
 /** GET /quotes?symbols=…, answered by the route's handler. */
@@ -57,7 +59,8 @@ beforeEach(() => {
   // FMP is keyed and fails unless a test says otherwise.
   vi.mocked(fmp.isConfigured).mockReset().mockReturnValue(true);
   fmpQuotes.mockReset().mockRejectedValue(new Error("fmp 429"));
-  vi.mocked(fmp.profiles).mockReset().mockResolvedValue(new Map());
+  fmpProfiles.mockReset().mockRejectedValue(new Error("fmp 429"));
+  fmpRatios.mockReset().mockRejectedValue(new Error("fmp 429"));
   vi.mocked(assets.allAssets).mockReset().mockResolvedValue([]);
   vi.mocked(sec.reference).mockReset().mockResolvedValue(new Map());
   vi.mocked(stooq.quote).mockReset().mockRejectedValue(new Error("stooq down"));
@@ -67,72 +70,80 @@ describe("static fields of live quotes", () => {
   it("backs off a ticker every source fails for: 5 minutes, then 10", async () => {
     await getQuotes(["FAIL1"]);
     await settle();
-    expect(fmpQuotes).toHaveBeenCalledTimes(1);
+    expect(fmpProfiles).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(4 * 60_000);
     await getQuotes(["FAIL1"]);
     await settle();
-    expect(fmpQuotes).toHaveBeenCalledTimes(1);
+    expect(fmpProfiles).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(60_000); // 5 minutes after the failure
     await getQuotes(["FAIL1"]);
     await settle();
-    expect(fmpQuotes).toHaveBeenCalledTimes(2);
+    expect(fmpProfiles).toHaveBeenCalledTimes(2);
 
     await vi.advanceTimersByTimeAsync(9 * 60_000);
     await getQuotes(["FAIL1"]);
     await settle();
-    expect(fmpQuotes).toHaveBeenCalledTimes(2);
+    expect(fmpProfiles).toHaveBeenCalledTimes(2);
 
     await vi.advanceTimersByTimeAsync(60_000); // 10 minutes after the second failure
     await getQuotes(["FAIL1"]);
     await settle();
-    expect(fmpQuotes).toHaveBeenCalledTimes(3);
+    expect(fmpProfiles).toHaveBeenCalledTimes(3);
   });
 
   it("backs off a ticker the sources return nothing for", async () => {
-    fmpQuotes.mockResolvedValue(new Map());
+    fmpProfiles.mockResolvedValue(new Map());
+    fmpRatios.mockResolvedValue(new Map());
     const [q] = await getQuotes(["EMPTY1"]);
     expect(q).toMatchObject({ symbol: "EMPTY1", price: 100, source: "alpaca" });
     await settle();
     await getQuotes(["EMPTY1"]);
     await settle();
-    expect(fmpQuotes).toHaveBeenCalledTimes(1);
+    expect(fmpProfiles).toHaveBeenCalledTimes(1);
   });
 
   it("asks for the stale tickers of one request in one batch, and once while it's out", async () => {
-    let answer!: (quotes: Map<string, fmp.FmpQuote>) => void;
-    fmpQuotes.mockReturnValue(new Promise((r) => (answer = r)));
+    let answer!: (quotes: Map<string, fmp.Profile>) => void;
+    fmpProfiles.mockReturnValue(new Promise((r) => (answer = r)));
+    fmpRatios.mockResolvedValue(new Map(["B1", "B2", "B3"].map((s) => [s, { symbol: s, pe: 20, eps: 5, dividendYield: 0.01 }])));
 
     // The quote doesn't wait for the fields.
     const first = await getQuotes(["B1", "B2", "B3"]);
     expect(first.map((q) => [q.symbol, q.name])).toEqual([["B1", null], ["B2", null], ["B3", null]]);
     await getQuotes(["B1", "B2", "B3"]); // an overlapping poll
     await settle();
-    expect(fmpQuotes).toHaveBeenCalledTimes(1);
-    expect(fmpQuotes).toHaveBeenCalledWith(["B1", "B2", "B3"]);
+    expect(fmpProfiles).toHaveBeenCalledTimes(1);
+    expect(fmpProfiles).toHaveBeenCalledWith(["B1", "B2", "B3"]);
 
-    answer(new Map([["B1", fmpQuote("B1", "One")], ["B2", fmpQuote("B2", "Two")], ["B3", fmpQuote("B3", "Three")]]));
+    expect(fmpRatios).toHaveBeenCalledWith(["B1", "B2", "B3"]);
+
+    answer(new Map([["B1", fmpProfile("B1", "One")], ["B2", fmpProfile("B2", "Two")], ["B3", fmpProfile("B3", "Three")]]));
     await settle();
     const next = await getQuotes(["B1", "B2", "B3"]);
     expect(next.map((q) => [q.name, q.price, q.pe])).toEqual([["One", 100, 20], ["Two", 100, 20], ["Three", 100, 20]]);
-    expect(fmpQuotes).toHaveBeenCalledTimes(1);
+    // Shares come from the profile (99,000 / 99), so market cap follows the live price.
+    expect(next[0]).toMatchObject({ eps: 5, dividendYield: 0.01, week52High: 120, week52Low: 80, avgVolume: 5_000, sharesOutstanding: 1_000, marketCap: 100_000 });
+    expect(fmpProfiles).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the last good fields while a refresh is failing", async () => {
-    fmpQuotes.mockResolvedValue(new Map([["KEEP1", fmpQuote("KEEP1", "Keep Corp")]]));
+    fmpProfiles.mockResolvedValue(new Map([["KEEP1", fmpProfile("KEEP1", "Keep Corp")]]));
+    fmpRatios.mockResolvedValue(new Map());
     await getQuotes(["KEEP1"]);
     await settle();
 
     await vi.advanceTimersByTimeAsync(3_600_000 + 1); // the hourly refresh is due
-    fmpQuotes.mockReset().mockRejectedValue(new Error("fmp 429"));
+    fmpProfiles.mockReset().mockRejectedValue(new Error("fmp 429"));
+    fmpRatios.mockReset().mockRejectedValue(new Error("fmp 429"));
     await getQuotes(["KEEP1"]);
     await settle();
-    expect(fmpQuotes).toHaveBeenCalledTimes(1);
+    expect(fmpProfiles).toHaveBeenCalledTimes(1);
     const [q] = await getQuotes(["KEEP1"]);
     await settle();
     expect(q).toMatchObject({ name: "Keep Corp", price: 100 });
-    expect(fmpQuotes).toHaveBeenCalledTimes(1); // backing off, not asking again
+    expect(fmpProfiles).toHaveBeenCalledTimes(1); // backing off, not asking again
   });
 
   it("without FMP, takes the name from the listings and market cap from SEC shares × the live price", async () => {
@@ -143,6 +154,6 @@ describe("static fields of live quotes", () => {
     await settle();
     const [q] = await getQuotes(["SECCO"]);
     expect(q).toMatchObject({ name: "Sec Co.", exchange: "Nasdaq", sharesOutstanding: 1_000, marketCap: 100_000 });
-    expect(fmpQuotes).not.toHaveBeenCalled();
+    expect(fmpProfiles).not.toHaveBeenCalled();
   });
 });
