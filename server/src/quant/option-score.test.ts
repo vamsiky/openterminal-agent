@@ -116,6 +116,38 @@ describe("buildSetups", () => {
     expect(p1.reasons.join(" ")).toMatch(/ex-dividend 2026-11-05/);
   });
 
+  it("long call: a daily trend of 14 (CRCL-like) is gated out, 25 passes", () => {
+    const m = { m5: 80, m15: 82, h1: 68, d1: 14 };
+    expect(os.buildSetups(inputs({ momentum: m })).map((s) => s.strategy)).not.toContain("long_call");
+    const ok = os.buildSetups(inputs({ momentum: { ...m, d1: 25 } })).find((s) => s.strategy === "long_call")!;
+    expect(ok.reasons[0]).toBe("momentum is strong: 15-minute 82, hourly 68, daily uptrend 25 (at least 25)");
+  });
+
+  it("long call: stretch penalty of 10 per condition, capped at 30, with one reason that names them", () => {
+    const base = inputs({ momentum: { m5: 80, m15: 91, h1: 75, d1: 42 }, metrics: metrics({ hv20: 0.62 }) });
+    const calm = os.buildSetups(base).find((s) => s.strategy === "long_call")!;
+    // ZS-like: 2.1 ATR above VWAP, 15-minute RSI 84, up 7.6% against a normal 0.62 / sqrt(252) = 3.9% day.
+    const zs = os.buildSetups({ ...base, stretch: { vwapAtr: 2.1, rsi15: 84, dayMovePct: 7.6, dailyAtrPct: 3 } }).find((s) => s.strategy === "long_call")!;
+    expect(zs.score).toBe(Math.round((calm.score - 30) * 10) / 10);
+    expect(zs.reasons).toContain("stretched: 2.1 ATR above VWAP, 15-min RSI 84, up 7.6% vs a normal 3.9% day: consider waiting for a pullback");
+    // One condition costs 10 and names only itself.
+    const one = os.buildSetups({ ...base, stretch: { vwapAtr: 2.6, rsi15: 60, dayMovePct: 2, dailyAtrPct: 3 } }).find((s) => s.strategy === "long_call")!;
+    expect(one.score).toBe(Math.round((calm.score - 10) * 10) / 10);
+    expect(one.reasons.find((r) => r.startsWith("stretched"))).toBe("stretched: 2.6 ATR above VWAP: consider waiting for a pullback");
+  });
+
+  it("long call: a calm uptrend gets no penalty or reason; without hv20 the daily ATR sets the normal move", () => {
+    const base = inputs({ momentum: { m5: 80, m15: 70, h1: 60, d1: 40 } });
+    const plain = os.buildSetups(base).find((s) => s.strategy === "long_call")!;
+    const calm = os.buildSetups({ ...base, stretch: { vwapAtr: 0.8, rsi15: 62, dayMovePct: 1.2, dailyAtrPct: 2 } }).find((s) => s.strategy === "long_call")!;
+    expect(calm.score).toBe(plain.score);
+    expect(calm.reasons.some((r) => r.startsWith("stretched"))).toBe(false);
+    const noHv = { ...base, metrics: metrics({ hv20: null }) };
+    const moved = os.buildSetups({ ...noHv, stretch: { vwapAtr: 0, rsi15: 50, dayMovePct: 3.1, dailyAtrPct: 2 } }).find((s) => s.strategy === "long_call")!;
+    expect(moved.reasons.find((r) => r.startsWith("stretched"))).toBe("stretched: up 3.1% vs a normal 2.0% day: consider waiting for a pullback");
+    expect(os.buildSetups({ ...noHv, stretch: { vwapAtr: 0, rsi15: 50, dayMovePct: 3.0, dailyAtrPct: 2 } }).find((s) => s.strategy === "long_call")!.reasons.some((r) => r.startsWith("stretched"))).toBe(false); // exactly 1.5x is not beyond it
+  });
+
   it("offers nothing without option metrics", () => {
     expect(os.buildSetups(inputs({ metrics: null }))).toEqual([]);
   });

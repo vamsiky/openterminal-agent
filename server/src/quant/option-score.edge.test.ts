@@ -36,26 +36,26 @@ afterAll(() => {
 });
 
 describe("long call gates", () => {
-  const strong = (o: Partial<Momentum>) => inputs({ momentum: mom({ m15: 40, h1: 40, d1: 0, ...o }), metrics: metrics({ ivRank: 0 }) });
+  const strong = (o: Partial<Momentum>) => inputs({ momentum: mom({ m15: 40, h1: 40, d1: 25, ...o }), metrics: metrics({ ivRank: 0 }) });
 
-  it("passes at exactly the strength threshold with the daily trend at zero", () => {
+  it("passes at exactly the strength threshold with the daily trend at its minimum of 25", () => {
     expect(byStrategy(os.buildSetups(strong({})), "long_call")).toBeDefined();
   });
 
   it("needs the 15-minute and hourly charts both positive, not only their average", () => {
-    expect(byStrategy(os.buildSetups(inputs({ momentum: mom({ m15: -1, h1: 81, d1: 0 }), metrics: metrics({ ivRank: 0 }) })), "long_call")).toBeUndefined();
-    expect(byStrategy(os.buildSetups(inputs({ momentum: mom({ m15: 10, h1: 70, d1: 0 }), metrics: metrics({ ivRank: 0 }) })), "long_call")).toBeDefined();
+    expect(byStrategy(os.buildSetups(inputs({ momentum: mom({ m15: -1, h1: 81, d1: 25 }), metrics: metrics({ ivRank: 0 }) })), "long_call")).toBeUndefined();
+    expect(byStrategy(os.buildSetups(inputs({ momentum: mom({ m15: 10, h1: 70, d1: 25 }), metrics: metrics({ ivRank: 0 }) })), "long_call")).toBeDefined();
   });
 
-  it("falls just short with an average a hair under the threshold, and with a negative daily trend", () => {
+  it("falls just short with an average a hair under the threshold, and with a daily trend under 25", () => {
     expect(byStrategy(os.buildSetups(strong({ m15: 40, h1: 39.9 })), "long_call")).toBeUndefined();
-    expect(byStrategy(os.buildSetups(strong({ d1: -0.1 })), "long_call")).toBeUndefined();
+    expect(byStrategy(os.buildSetups(strong({ d1: 24.9 })), "long_call")).toBeUndefined();
   });
 
-  it("scores 65 for the threshold momentum, cheap IV and high relative volume", () => {
-    // 40 base + 0 for strength at the threshold + 0 for a flat daily + 15 for IV rank 0 + 10 for volume >= 1.5x.
-    const setup = byStrategy(os.buildSetups(inputs({ momentum: mom({ m15: 40, h1: 40, d1: 0 }), metrics: metrics({ ivRank: 0 }), relVolume: 2 })), "long_call")!;
-    expect(setup.score).toBe(65);
+  it("scores 70 for the threshold momentum, cheap IV and high relative volume", () => {
+    // 40 base + 0 for strength at the threshold + 5 for a daily trend of 25 + 15 for IV rank 0 + 10 for volume >= 1.5x.
+    const setup = byStrategy(os.buildSetups(inputs({ momentum: mom({ m15: 40, h1: 40, d1: 25 }), metrics: metrics({ ivRank: 0 }), relVolume: 2 })), "long_call")!;
+    expect(setup.score).toBe(70);
     expect(setup.contract).toBe("AAA261120C00100000");
   });
 
@@ -65,11 +65,11 @@ describe("long call gates", () => {
   });
 
   it("counts earnings on the expiry day, but not earnings that already passed", () => {
-    // 40 base + 15 for cheap IV + 10 for volume, minus the 25 earnings penalty.
-    const onExpiry = byStrategy(os.buildSetups(inputs({ momentum: mom({ m15: 40, h1: 40, d1: 0 }), metrics: metrics({ ivRank: 0 }), relVolume: 2, nextEarnings: "2026-11-20" })), "long_call")!;
+    // 40 base + 5 for the daily trend + 15 for cheap IV + 10 for volume, minus the 25 earnings penalty.
+    const onExpiry = byStrategy(os.buildSetups(inputs({ momentum: mom({ m15: 40, h1: 40, d1: 25 }), metrics: metrics({ ivRank: 0 }), relVolume: 2, nextEarnings: "2026-11-20" })), "long_call")!;
     expect(onExpiry.reasons.join(" ")).toMatch(/caution/);
-    expect(onExpiry.score).toBe(40);
-    const passed = byStrategy(os.buildSetups(inputs({ momentum: mom({ m15: 40, h1: 40, d1: 0 }), metrics: metrics({ ivRank: 0 }), relVolume: 2, nextEarnings: "2026-10-20" })), "long_call")!;
+    expect(onExpiry.score).toBe(45);
+    const passed = byStrategy(os.buildSetups(inputs({ momentum: mom({ m15: 40, h1: 40, d1: 25 }), metrics: metrics({ ivRank: 0 }), relVolume: 2, nextEarnings: "2026-10-20" })), "long_call")!;
     expect(passed.reasons.join(" ")).not.toMatch(/caution/);
   });
 });

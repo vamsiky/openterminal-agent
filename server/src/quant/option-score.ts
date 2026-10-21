@@ -21,8 +21,17 @@ import { compositeMap, getLiveScorecard, loadDaily } from "./stock-score.js";
 export const STRONG_MOMENTUM = 40;
 /** |momentum| at or below this counts as flat, for covered calls. */
 export const FLAT_MOMENTUM = 20;
-/** The daily trend must be at least this to buy a call ("d1 not negative"). */
-export const D1_NOT_NEGATIVE = 0;
+/** Daily trend (-100..100) needed to buy a call: a real uptrend, not just "not down". */
+export const D1_MIN_LONG_CALL = 25;
+/** A long call is stretched when price is more than this many 15-minute ATRs above the session VWAP. */
+export const STRETCH_VWAP_ATR = 2;
+/** ...or the 15-minute RSI(14) is above this. */
+export const STRETCH_RSI_15M = 75;
+/** ...or today's gain from the previous close is more than this multiple of the stock's normal daily move. */
+export const STRETCH_DAY_MOVE_MULT = 1.5;
+/** Points taken off per stretch condition met, up to STRETCH_PENALTY_CAP. */
+export const STRETCH_PENALTY = 10;
+export const STRETCH_PENALTY_CAP = 30;
 /** A daily trend at or below this blocks selling a put ("not strongly negative"). */
 export const D1_STRONGLY_NEGATIVE = -50;
 /** Relative volume (time-of-day adjusted) counted as high. */
@@ -117,6 +126,50 @@ export function momentumOf(minute: Bar[], daily: Bar[], hourly?: Bar[]): Momentu
   return { m5: score(5), m15: score(15), h1: (hourly && trendScore(hourly, sessionVwap)) ?? score(60), d1: trendScore(daily) };
 }
 
+export type Stretch = {
+  /** (price - session VWAP) / ATR(14) of the 15-minute bars. */
+  vwapAtr: number | null;
+  rsi15: number | null;
+  /** Today's change from the previous close, percent. */
+  dayMovePct: number | null;
+  /** Daily ATR(14) as percent of price: the normal move when hv20 is unknown. */
+  dailyAtrPct: number | null;
+};
+
+/** Where the stock stands today: the last minute close against VWAP, 15-minute RSI and the previous daily close. */
+export function stretchOf(minute: Bar[], dailyCloses: Bar[], prevClose: number | null): Stretch {
+  const none: Stretch = { vwapAtr: null, rsi15: null, dayMovePct: null, dailyAtrPct: null };
+  const last = minute[minute.length - 1];
+  if (!last) return none;
+  const day = tradingDay(last.ts ?? 0);
+  const v = vwap(minute.filter((b) => tradingDay(b.ts ?? 0) === day));
+  const r15 = rollup(minute, 15);
+  const a = atr(r15, 14);
+  const r = r15.length >= 16 ? rsi(r15, 14) : [];
+  const da = atr(dailyCloses, 14);
+  const price = last.close;
+  return {
+    vwapAtr: v.length > 0 && a.length > 0 && a[a.length - 1].value > 0 ? (price - v[v.length - 1].value) / a[a.length - 1].value : null,
+    rsi15: r.length > 0 ? r[r.length - 1].value : null,
+    dayMovePct: prevClose ? (price / prevClose - 1) * 100 : null,
+    dailyAtrPct: da.length > 0 && price > 0 ? (da[da.length - 1].value / price) * 100 : null,
+  };
+}
+
+/** The stretch conditions met, as words with their values, and the points they cost. */
+export function stretchCheck(st: Stretch | undefined, hv20: number | null): { penalty: number; text: string | null } {
+  if (!st) return { penalty: 0, text: null };
+  const met: string[] = [];
+  if (st.vwapAtr !== null && st.vwapAtr > STRETCH_VWAP_ATR) met.push(`${st.vwapAtr.toFixed(1)} ATR above VWAP`);
+  if (st.rsi15 !== null && st.rsi15 > STRETCH_RSI_15M) met.push(`15-min RSI ${Math.round(st.rsi15)}`);
+  const normal = hv20 !== null && hv20 > 0 ? (hv20 / Math.sqrt(252)) * 100 : st.dailyAtrPct;
+  if (st.dayMovePct !== null && normal !== null && normal > 0 && st.dayMovePct > STRETCH_DAY_MOVE_MULT * normal) {
+    met.push(`up ${st.dayMovePct.toFixed(1)}% vs a normal ${normal.toFixed(1)}% day`);
+  }
+  if (met.length === 0) return { penalty: 0, text: null };
+  return { penalty: Math.min(STRETCH_PENALTY_CAP, STRETCH_PENALTY * met.length), text: `stretched: ${met.join(", ")}: consider waiting for a pullback` };
+}
+
 export type SetupInputs = {
   momentum: Momentum;
   metrics: OptionMetrics | null;
@@ -128,6 +181,8 @@ export type SetupInputs = {
   nextEarnings: string | null;
   /** Next ex-dividend date (YYYY-MM-DD) within the calendar's window, or null. */
   nextExDividend?: string | null;
+  /** How far the stock has run today, for the long call's stretch check; nulls skip a condition. */
+  stretch?: Stretch;
   today: string;
 };
 
@@ -180,12 +235,12 @@ export function buildSetups(i: SetupInputs): OptionSetup[] {
   const earn = earningsNote(i);
   const out: OptionSetup[] = [];
 
-  // Buy a call: momentum up on the 15-minute and hourly charts, daily not against it.
+  // Buy a call: momentum up on the 15-minute and hourly charts and a real daily uptrend.
   if (m15 !== null && h1 !== null && d1 !== null && m.atmCall) {
     const avg = (m15 + h1) / 2;
-    if (avg >= STRONG_MOMENTUM && Math.min(m15, h1) > 0 && d1 >= D1_NOT_NEGATIVE) {
+    if (avg >= STRONG_MOMENTUM && Math.min(m15, h1) > 0 && d1 >= D1_MIN_LONG_CALL) {
       const iv = ivCheapness(m);
-      const reasons = [`momentum is strong: 15-minute ${pct(m15)}, hourly ${pct(h1)}, daily ${pct(d1)}`];
+      const reasons = [`momentum is strong: 15-minute ${pct(m15)}, hourly ${pct(h1)}, daily uptrend ${pct(d1)} (at least ${D1_MIN_LONG_CALL})`];
       let score = SETUP_BASE + 25 * clamp((avg - STRONG_MOMENTUM) / (100 - STRONG_MOMENTUM), 0, 1) + 10 * clamp(d1 / 50, 0, 1);
       if (iv) {
         score += 15 * iv.value;
@@ -198,6 +253,11 @@ export function buildSetups(i: SetupInputs): OptionSetup[] {
       if (earn.text) {
         score -= EARNINGS_PENALTY.long_call;
         reasons.push(`caution: ${earn.text}`);
+      }
+      const stretched = stretchCheck(i.stretch, m.hv20);
+      if (stretched.text) {
+        score -= stretched.penalty;
+        reasons.push(stretched.text);
       }
       out.push({ strategy: "long_call", score: round1(clamp(score, 0, 100)), contract: m.atmCall, reasons });
     }
@@ -277,12 +337,15 @@ export function runOptionScan(symbols: string[], optionMetrics: (symbols: string
     if (lastMinute && daily.days.length > 0 && daily.days[daily.days.length - 1] < today && tradingDay(lastMinute.ts ?? 0) === today) {
       dailyBars.push({ time: dailyBars.length, open: lastMinute.close, high: lastMinute.close, low: lastMinute.close, close: lastMinute.close, volume: 0 });
     }
+    const prevIdx = daily.days.findIndex((d) => d >= today);
+    const prevClose = (prevIdx < 0 ? daily.closes.length : prevIdx) > 0 ? daily.closes[(prevIdx < 0 ? daily.closes.length : prevIdx) - 1] : null;
+    const stretch = tradingDay(lastMinute?.ts ?? 0) === today ? stretchOf(minute, dailyBars.slice(0, daily.closes.length), prevClose) : undefined;
     const momentum = momentumOf(minute, dailyBars, hourlySeries(symbol, minute, today, nowSec));
     const m = metrics.get(symbol) ?? null;
     const nextEarnings = earnings.get(symbol) ?? null;
     const live = getLiveScorecard(symbol);
     const rv = live?.factors.find((f) => f.key === "rel_volume")?.value ?? null;
-    const setups = buildSetups({ momentum, metrics: m, composite: composites.get(symbol) ?? null, relVolume: rv, sharesHeld: sharesHeld(symbol), nextEarnings, nextExDividend: exDivs.get(symbol) ?? null, today });
+    const setups = buildSetups({ momentum, metrics: m, composite: composites.get(symbol) ?? null, relVolume: rv, sharesHeld: sharesHeld(symbol), nextEarnings, nextExDividend: exDivs.get(symbol) ?? null, stretch, today });
     const earn = m ? earningsNote({ momentum, metrics: m, composite: null, relVolume: null, sharesHeld: 0, nextEarnings, today }) : { before: null };
     cards.push({
       underlying: symbol,
