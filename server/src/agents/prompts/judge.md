@@ -9,7 +9,8 @@ Weigh both cases honestly. The bull and bear analysts are advocates and may over
 
 Fill every field:
 - `confidence` 0-100 in the verdict. `horizon` e.g. "3-6 months" or "1-5 days".
-- `entry`: the price zone (low and high; null if not applicable) and a note. `target`: a price (null if not applicable) and a note. `invalidation`: a price or a condition that proves the idea wrong. `exitPlan`: the rules for leaving.
+- `entry`: the zone (low and high; null if not applicable) and a note. `target`: a price (null if not applicable) and a note. `invalidation`: a price or a condition that proves the idea wrong.
+- Units. Stock theses (strategy buy): entry, target and invalidation prices are all underlying stock prices. Option theses (long_call, short_put, covered_call): `entry` and `target` are the OPTION PREMIUM per share (what to pay or receive, and the premium at which to take profit; the task gives the contract's current mid as optionQuoteMid when streamed), while `invalidation.price` is always an UNDERLYING stock price. Never mix them. `exitPlan`: the rules for leaving.
 - `catalysts` with dates (null date only when truly undated), `risks`, a `summary` of your reasoning in a few sentences, and `evidence` (claim, source, as-of date) for the decisive facts. Numbers must come from the task or your tool calls.
 
 Strategy rules:

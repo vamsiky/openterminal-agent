@@ -10,6 +10,7 @@ import type { Idea } from "../scan/contracts.js";
 import { capUsd, judgeModel, MAX_TURNS, model } from "./config.js";
 import type { Case, MacroReport, Thesis, ThesisStrategy } from "./contracts.js";
 import { guardrail, priceWarning } from "./guardrail.js";
+import { optionMid } from "./option-quote.js";
 import { loadPrompt } from "./prompts.js";
 import { runAgent, type RunResult } from "./runtime.js";
 import { caseJson, caseOutput, judgeJson, judgeOutput, type CaseOutput } from "./schemas.js";
@@ -65,6 +66,7 @@ export function gatherContext(t: AnalysisTarget, idea: Idea | null, now: Date, m
     macro: macro && { id: macro.id, asOf: macro.asOf, session: macro.session, regime: macro.regime, summary: macro.summary, risks: macro.risks },
     nextEarningsDate: nextEarn ? new Date(nextEarn * 1000).toISOString().slice(0, 10) : null,
     nextExDividend: nextExDividends([t.symbol], day).get(t.symbol) ?? null,
+    optionQuoteMid: t.contract ? optionMid(t.contract) : null,
     quote: q && { price: q.price, change: q.change, changePercent: q.changePercent, asOf: q.asOf ?? null, extended: q.extended },
     held: { shares, options: heldOptions },
   };
@@ -120,7 +122,7 @@ export async function analyze(item: AnalysisTarget, now = new Date()): Promise<A
 
   const j = judgeRun.output;
   const rejected = guardrail({ verdict: j.verdict, invalidation: j.invalidation, catalysts: j.catalysts, strategy: item.strategy }, day, { sharesHeld: ctx.held.shares });
-  const warning = priceWarning(j, ctx.quote?.price ?? null);
+  const warning = priceWarning(j, { underlying: ctx.quote?.price ?? null, premium: optionMid(item.contract), option: item.kind === "option" });
   return {
     outcome: "done",
     thesis: insertThesis(day, {

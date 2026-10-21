@@ -12,7 +12,7 @@ import { scanRouter } from "./routes/scan.js";
 import { positionsRouter } from "./routes/positions.js";
 import { optionsDataRouter } from "./routes/options-data.js";
 import { agentsRouter } from "./routes/agents.js";
-import { startAgents, onIdeasUpdated } from "./agents/index.js";
+import { startAgents, onIdeasUpdated, setOptionQuoteSource } from "./agents/index.js";
 import { startQuantJobs, universeByPriority, setIdeasListener } from "./quant/jobs.js";
 import { stockHoldings, optionHoldings } from "./quant/positions.js";
 import { startOptionsJobs } from "./options/jobs.js";
@@ -111,4 +111,6 @@ const options = startOptionsJobs({ underlyings: universeByPriority, optionHoldin
 startQuantJobs({ optionMetrics: options.latestOptionMetrics, optionsStatus: options.status });
 // New ideas queue analyses; wired here so quant/ never imports agents/.
 setIdeasListener(onIdeasUpdated);
+// The judge's premium sanity check reads contract quotes from the options stream.
+setOptionQuoteSource((occ) => options.stream.quote(occ));
 startAgents();

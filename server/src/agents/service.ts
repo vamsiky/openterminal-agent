@@ -63,11 +63,11 @@ export function pendingAnalyses(): PendingAnalysis[] {
   ];
 }
 
-/** Queues a user-requested analysis. "busy" when that idea is already queued or running; "budget" when no room. */
+/** Queues a user-requested analysis, or promotes the same queued item to the front. "busy" only when it is running; "budget" when no room. */
 export function requestAnalysis(input: { symbol: string; strategy: import("./contracts.js").ThesisStrategy; contract?: string | null; ideaId?: number | null }): { position: number } | "busy" | "budget" | "disabled" {
   if (!agentsEnabled()) return "disabled";
   const contract = input.contract ?? null;
-  if (queue.isBusy(input.symbol, input.strategy, contract)) return "busy";
+  if (queue.isRunning(input.symbol, input.strategy, contract)) return "busy";
   if (!canAfford("bull", analysisCapUsd())) return "budget";
   const kind = input.strategy === "buy" ? "stock" : "option";
   const idea = findIdea({ symbol: input.symbol, strategy: input.strategy, contract, ideaId: input.ideaId ?? null });
