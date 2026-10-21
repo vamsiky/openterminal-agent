@@ -1,6 +1,6 @@
 /** A non-2xx API answer; `message` is the route's `error` text when it sent one. */
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly body?: unknown) {
     super(message);
     this.name = "ApiError";
   }
@@ -8,7 +8,7 @@ export class ApiError extends Error {
 
 async function failure(res: Response): Promise<ApiError> {
   const body = await res.json().catch(() => ({}));
-  return new ApiError(body?.error ?? `HTTP ${res.status}`, res.status);
+  return new ApiError(body?.error ?? `HTTP ${res.status}`, res.status, body);
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
@@ -27,6 +27,16 @@ export async function apiGetWithNote<T>(path: string): Promise<{ data: T; note: 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await failure(res);
+  return res.json();
+}
+
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
