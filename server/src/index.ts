@@ -11,7 +11,9 @@ import { researchRouter } from "./routes/research/index.js";
 import { scanRouter } from "./routes/scan.js";
 import { positionsRouter } from "./routes/positions.js";
 import { optionsDataRouter } from "./routes/options-data.js";
-import { startQuantJobs, universeByPriority } from "./quant/jobs.js";
+import { agentsRouter } from "./routes/agents.js";
+import { startAgents, onIdeasUpdated, setOptionQuoteSource } from "./agents/index.js";
+import { startQuantJobs, universeByPriority, setIdeasListener } from "./quant/jobs.js";
 import { stockHoldings, optionHoldings } from "./quant/positions.js";
 import { startOptionsJobs } from "./options/jobs.js";
 import { startEstimateCapture } from "./estimates/capture.js";
@@ -67,6 +69,8 @@ app.use("/api/research", requireApiKey, researchRouter);
 app.use("/api/scan", requireApiKey, scanRouter);
 app.use("/api/positions", requireApiKey, positionsRouter);
 app.use("/api/options-data", requireApiKey, optionsDataRouter);
+// Macro and analyst agents, theses and the pre-market brief (agents/).
+app.use("/api/agents", requireApiKey, agentsRouter);
 // Locally stored price history (history/); read-only, no provider calls.
 app.use("/api/bars", barsRouter);
 app.use(
@@ -105,3 +109,8 @@ live.startLiveFeed();
 // quant/ and options/ never import each other; they meet here.
 const options = startOptionsJobs({ underlyings: universeByPriority, optionHoldings, stockHoldings });
 startQuantJobs({ optionMetrics: options.latestOptionMetrics, optionsStatus: options.status });
+// New ideas queue analyses; wired here so quant/ never imports agents/.
+setIdeasListener(onIdeasUpdated);
+// The judge's premium sanity check reads contract quotes from the options stream.
+setOptionQuoteSource((occ) => options.stream.quote(occ));
+startAgents();

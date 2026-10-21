@@ -131,6 +131,19 @@ export function dueJobs(
 
 // ---- running ----
 
+let ideasListener: ((now: Date) => void) | null = null;
+/** Called after an ideas-screen or option-scan run succeeds; index.ts wires the agents here so quant/ never imports agents/. */
+export function setIdeasListener(fn: ((now: Date) => void) | null): void {
+  ideasListener = fn;
+}
+function notifyIdeas(now: Date): void {
+  try {
+    ideasListener?.(now);
+  } catch (err) {
+    console.error("[scan] ideas listener failed:", err);
+  }
+}
+
 function record<T extends { symbols?: number; scored?: number }>(job: JobName, fn: () => T): T | null {
   const started = Date.now();
   const id = Number(db.prepare("INSERT INTO scan_runs (job, started_at) VALUES (?, ?)").run(job, new Date(started).toISOString()).lastInsertRowid);
@@ -206,11 +219,13 @@ export function runJob(job: JobName, now = new Date()): boolean {
         });
         break;
       case "ideas-screen":
-        record(job, () => {
-          const universe = resolveUniverse();
-          runStockScreen(universe, now);
-          return { symbols: universe.length };
-        });
+        if (
+          record(job, () => {
+            const universe = resolveUniverse();
+            runStockScreen(universe, now);
+            return { symbols: universe.length };
+          })
+        ) notifyIdeas(now);
         break;
       case "stock-intraday":
         record(job, () => {
@@ -221,12 +236,14 @@ export function runJob(job: JobName, now = new Date()): boolean {
         });
         break;
       case "option-scan":
-        record(job, () => {
-          const universe = universeByPriority();
-          const r = runOptionScan(universe, deps!.optionMetrics, now);
-          updateOptionIdeas(now);
-          return { symbols: r.scored };
-        });
+        if (
+          record(job, () => {
+            const universe = universeByPriority();
+            const r = runOptionScan(universe, deps!.optionMetrics, now);
+            updateOptionIdeas(now);
+            return { symbols: r.scored };
+          })
+        ) notifyIdeas(now);
         break;
     }
   } finally {

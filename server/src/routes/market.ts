@@ -4,6 +4,7 @@ import { withFallback } from "../providers/registry.js";
 import type { Candle, MarketRow, Quote } from "../providers/types.js";
 import * as stooq from "../providers/stooq.js";
 import * as fred from "../providers/fred.js";
+import * as fmpMacro from "../providers/fmp-macro.js";
 import * as ecb from "../providers/ecb.js";
 import * as coingecko from "../providers/coingecko.js";
 import * as finra from "../providers/finra.js";
@@ -731,15 +732,39 @@ marketRouter.get("/macro", async (req, res) => {
       return;
     }
 
-    const [yieldResults, vix, quotes] = await Promise.all([
-      Promise.allSettled(YIELD_SERIES.map((s) => cached(`fred:${s.id}`, 300_000, () => fred.latest(s.id)))),
-      cached("fred:VIXCLS", 300_000, () => fred.latest("VIXCLS")).catch(() => null),
+    // FMP first (yields, VIX, policy rate, CPI); FRED only for what FMP could not give. Each value carries its source.
+    const orNull = <T,>(p: Promise<T | null>) => p.catch((err) => {
+      console.warn("[market] fmp macro series unavailable:", err instanceof Error ? err.message : err);
+      return null;
+    });
+    const [quotes, treasury, fmpVix, policy, cpi] = await Promise.all([
       getQuotes(Object.keys(INDEX_PROXIES)),
+      orNull(fmpMacro.treasuryRates()),
+      orNull(fmpMacro.vix()),
+      orNull(fmpMacro.policyRate()),
+      orNull(fmpMacro.cpiYoy()),
     ]);
-    const yields = YIELD_SERIES.map((s, i) => {
-      const r = yieldResults[i];
-      return { tenor: s.tenor, value: r.status === "fulfilled" ? r.value?.value ?? null : null };
-    }).filter((y) => y.value !== null);
+    const fmpYield: Record<string, number | null | undefined> = { "3M": treasury?.month3, "5Y": treasury?.year5, "10Y": treasury?.year10, "30Y": treasury?.year30 };
+    const missing = YIELD_SERIES.filter((s) => fmpYield[s.tenor] == null);
+    const [fredYields, fredVix, fredPolicy, fredCpi] = await Promise.all([
+      Promise.allSettled(missing.map((s) => cached(`fred:${s.id}`, 300_000, () => fred.latest(s.id)))),
+      fmpVix ? Promise.resolve(null) : cached("fred:VIXCLS", 300_000, () => fred.latest("VIXCLS")).catch(() => null),
+      policy ? Promise.resolve(null) : cached("fred:FEDFUNDS", 3_600_000, () => fred.latest("FEDFUNDS")).catch(() => null),
+      cpi ? Promise.resolve(null) : cached("fred:CPIAUCSL", 3_600_000, () => fred.series("CPIAUCSL", 16)).then(fmpMacro.cpiYoyFromSeries).catch(() => null),
+    ]);
+    const rates = fmpMacro.mergeRates(
+      {
+        yields: missing.map((s, i) => {
+          const r = fredYields[i];
+          return { tenor: s.tenor, value: r.status === "fulfilled" ? r.value?.value ?? null : null, date: r.status === "fulfilled" ? r.value?.date : undefined };
+        }),
+        vix: fredVix ? { value: fredVix.value, date: fredVix.date } : null,
+        policy: fredPolicy ? { value: fredPolicy.value, date: fredPolicy.date.slice(0, 7) } : null,
+        cpi: fredCpi,
+      },
+      { treasury, vix: fmpVix, policy, cpi }
+    );
+    const { yields } = rates;
 
     const indexes = quotes.map((q) => ({
       symbol: q.symbol,
@@ -749,7 +774,7 @@ marketRouter.get("/macro", async (req, res) => {
     }));
 
     if (yields.length === 0 && indexes.length === 0) throw new Error("no macro data from any provider");
-    res.json({ yields, vix: vix?.value ?? null, indexes, policyRate: null, inflation: null });
+    res.json({ yields, vix: rates.vix, indexes, policyRate: rates.policyRate, inflation: rates.inflation, sources: rates.sources });
   } catch (err) {
     fail(req, res, err);
   }

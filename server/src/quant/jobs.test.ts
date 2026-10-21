@@ -91,6 +91,21 @@ describe("runJob", () => {
   });
 });
 
+describe("setIdeasListener", () => {
+  it("is called after a successful ideas-screen, and a throwing listener does not break the run", () => {
+    const calls: Date[] = [];
+    jobs.setIdeasListener((d) => calls.push(d));
+    expect(jobs.runJob("ideas-screen", at(8, 5))).toBe(true);
+    expect(calls).toHaveLength(1);
+    jobs.setIdeasListener(() => {
+      throw new Error("boom");
+    });
+    expect(jobs.runJob("ideas-screen", at(8, 6))).toBe(true);
+    expect(jobs.lastRuns()["ideas-screen"].status).toBe("ok");
+    jobs.setIdeasListener(null);
+  });
+});
+
 describe("universeByPriority", () => {
   it("puts holdings first, then option score, then composite, then alphabetical", async () => {
     const pos = await import("./positions.js");

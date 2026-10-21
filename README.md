@@ -103,7 +103,7 @@ Every source below allows automated use under its terms. Results are cached with
 | Screener / heatmap / sectors | S&P 500 + Nasdaq‑100 (Wikipedia) × Alpaca prices; sector and market cap from FMP (if keyed), else SEC EDGAR (SIC‑derived sector, not GICS) | Europe is not available |
 | Options chain | Alpaca options snapshots (OPRA) | Open interest is empty |
 | News | Alpaca News (Benzinga) | — |
-| Macro (Treasury yields, VIX; euro‑area yields, ECB rate, HICP) | FRED, ECB | — |
+| Macro (Treasury yields, VIX, fed funds, CPI; euro‑area yields, ECB rate, HICP) | FMP (if keyed): treasury rates, ^VIX, federal funds, CPI year over year; ECB | FRED is the per-series fallback for the US yields, VIX, fed funds (FEDFUNDS) and CPI (CPIAUCSL). Without FMP, FRED fills them all. The `sources` map of `/api/macro` names where each value came from. |
 | Economic calendar (dates, times) | BLS, BEA, Federal Reserve, EIA; FRED release dates with `FRED_API_KEY` | — |
 | Economic calendar (forecast, previous, actual) | FMP (if keyed) | Empty without FMP |
 | Earnings calendar and history | FMP (requires `FMP_API_KEY`) | The widget says the key is missing |
@@ -285,6 +285,16 @@ The API also scores the stock and option universe on a schedule and lists the be
 - [Scan engine](docs/scan-engine.md): the universe (watchlists, sectors or the whole US market; holdings always included), the stock and options scorecards, the schedule, and the scan and positions endpoints.
 - [Positions CSV](docs/positions-csv.md): the file format for your holdings, with stock and option examples and how import errors are reported.
 - [Options data](docs/options-data.md): the live option stream, the 5-minute chain sweep, the metrics it computes, the IV history backfill, and storage and retention.
+
+<br/>
+
+## Analysis agents
+
+Agents read the scan engine's ideas and the terminal's data, weigh the case for and against each one, and write a thesis: a verdict (act, wait or pass), a plan and the evidence behind it. They also write a macro report each morning and evening and a pre-market brief. The agents never place orders and never size positions. They only sell puts, never buy them.
+
+- [Analysis agents](docs/agents.md): what each agent does and which tools it may use, the schedule, the queue, the daily budget and per-run caps, billing, the guardrail, the thesis fields, the routes, the settings, and how to tune the prompts.
+
+Costs are capped by `AGENTS_DAILY_BUDGET_USD` (default $5). With `ANTHROPIC_API_KEY` set, runs are billed to that API account. Without it, they use your logged-in Claude account and the costs shown are notional.
 
 <br/>
 
