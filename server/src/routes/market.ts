@@ -746,9 +746,11 @@ marketRouter.get("/macro", async (req, res) => {
     ]);
     const fmpYield: Record<string, number | null | undefined> = { "3M": treasury?.month3, "5Y": treasury?.year5, "10Y": treasury?.year10, "30Y": treasury?.year30 };
     const missing = YIELD_SERIES.filter((s) => fmpYield[s.tenor] == null);
-    const [fredYields, fredVix] = await Promise.all([
+    const [fredYields, fredVix, fredPolicy, fredCpi] = await Promise.all([
       Promise.allSettled(missing.map((s) => cached(`fred:${s.id}`, 300_000, () => fred.latest(s.id)))),
       fmpVix ? Promise.resolve(null) : cached("fred:VIXCLS", 300_000, () => fred.latest("VIXCLS")).catch(() => null),
+      policy ? Promise.resolve(null) : cached("fred:FEDFUNDS", 3_600_000, () => fred.latest("FEDFUNDS")).catch(() => null),
+      cpi ? Promise.resolve(null) : cached("fred:CPIAUCSL", 3_600_000, () => fred.series("CPIAUCSL", 16)).then(fmpMacro.cpiYoyFromSeries).catch(() => null),
     ]);
     const rates = fmpMacro.mergeRates(
       {
@@ -757,6 +759,8 @@ marketRouter.get("/macro", async (req, res) => {
           return { tenor: s.tenor, value: r.status === "fulfilled" ? r.value?.value ?? null : null, date: r.status === "fulfilled" ? r.value?.date : undefined };
         }),
         vix: fredVix ? { value: fredVix.value, date: fredVix.date } : null,
+        policy: fredPolicy ? { value: fredPolicy.value, date: fredPolicy.date.slice(0, 7) } : null,
+        cpi: fredCpi,
       },
       { treasury, vix: fmpVix, policy, cpi }
     );

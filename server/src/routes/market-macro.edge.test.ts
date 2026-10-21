@@ -150,15 +150,31 @@ describe("GET /api/market/macro sources", () => {
     expect(res.body.sources.yields.source).toBe("fmp:treasury-rates");
   });
 
-  // BUG: the policy rate and inflation have no FRED fallback. routes/market.ts (the /macro handler) fills them only
-  // from FMP and mergeRates (providers/fmp-macro.ts) takes no FRED input for them, though FRED publishes the
-  // same series (FEDFUNDS, CPIAUCSL). Expected: FMP empty, FRED supplies the value with its source. Actual: null.
-  it.fails("falls back to FRED for the policy rate when FMP has none", async () => {
+  it("falls back to FRED for the policy rate when FMP has none", async () => {
     fmpData = { policy: false };
     fredCsv = { FEDFUNDS: csv("FEDFUNDS", "4.33") };
     await freshServer({});
     const { body } = await macro();
     expect(body.policyRate).toBe(4.33);
     expect(body.sources.policyRate).toMatchObject({ source: "fred" });
+  });
+
+  it("falls back to FRED for CPI year over year (latest month against the same month a year earlier)", async () => {
+    fmpData = { cpi: false };
+    const rows = ["2025-08-01,310", "2025-09-01,311", "2026-07-01,318", "2026-08-01,320"];
+    fredCsv = { CPIAUCSL: `observation_date,CPIAUCSL\n${rows.join("\n")}\n` };
+    await freshServer({});
+    const { body } = await macro();
+    expect(body.inflation).toBe(3.2);
+    expect(body.sources.inflation).toEqual({ source: "fred", asOf: "2026-08" });
+  });
+
+  it("leaves the policy rate and inflation null when neither source has them", async () => {
+    fmpData = { policy: false, cpi: false };
+    fredCsv = {};
+    await freshServer({});
+    const { body } = await macro();
+    expect(body.policyRate).toBeNull();
+    expect(body.inflation).toBeNull();
   });
 });
