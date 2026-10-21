@@ -288,6 +288,16 @@ The API also scores the stock and option universe on a schedule and lists the be
 
 <br/>
 
+## Analysis agents
+
+Agents read the scan engine's ideas and the terminal's data, weigh the case for and against each one, and write a thesis: a verdict (act, wait or pass), a plan and the evidence behind it. They also write a macro report each morning and evening and a pre-market brief. The agents never place orders and never size positions. They only sell puts, never buy them.
+
+- [Analysis agents](docs/agents.md): what each agent does and which tools it may use, the schedule, the queue, the daily budget and per-run caps, billing, the guardrail, the thesis fields, the routes, the settings, and how to tune the prompts.
+
+Costs are capped by `AGENTS_DAILY_BUDGET_USD` (default $5). With `ANTHROPIC_API_KEY` set, runs are billed to that API account. Without it, they use your logged-in Claude account and the costs shown are notional.
+
+<br/>
+
 ## 🗺️ Roadmap
 
 - [ ] Chart drawing tools & multi‑asset comparison overlay
