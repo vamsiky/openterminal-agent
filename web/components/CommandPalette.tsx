@@ -3,9 +3,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { apiGet } from "../lib/api";
+import { searchName } from "../lib/symbol";
 import { useTerminal } from "../store/terminal";
 
-type SearchResult = { symbol: string; name: string; exchange: string; type: string };
+type SearchResult = { symbol: string; name: string | null; exchange: string | null; type: string | null };
 
 export default function CommandPalette() {
   const open = useTerminal((s) => s.commandOpen);
@@ -73,9 +74,9 @@ export default function CommandPalette() {
               }`}
             >
               <span className="w-24 font-bold">{r.symbol}</span>
-              <span className="flex-1 truncate">{r.name}</span>
-              <span className="dim">{r.exchange}</span>
-              <span className="dim w-16 text-right">{r.type}</span>
+              <span className="flex-1 truncate">{searchName(r.name)}</span>
+              <span className="dim">{r.exchange ?? ""}</span>
+              <span className="dim w-16 text-right">{r.type ?? ""}</span>
             </div>
           ))}
           {query && results.length === 0 && (

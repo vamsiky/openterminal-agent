@@ -2,8 +2,10 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Fragment, useMemo, useState } from "react";
-import { apiGet, fmt, pctClass } from "../../lib/api";
-import { symbolsParam } from "../../lib/symbol";
+import { apiGet, fmt, fmtBig, pctClass } from "../../lib/api";
+import ErrorNote from "../ErrorNote";
+import EstimateRevisions from "../EstimateRevisions";
+import { fetchCalendar, fmtDay, groupEarnings, inDays, timingLabel, timingTitle, type EarningsEntry } from "../../lib/earnings";
 import { useTerminal } from "../../store/terminal";
 
 type EconEvent = {
@@ -14,13 +16,6 @@ type EconEvent = {
   forecast: string | null;
   previous: string | null;
   actual: string | null;
-};
-
-type EarningsEntry = {
-  symbol: string;
-  nextEarningsDate: number | null;
-  lastEarningsDate: number | null;
-  epsForecast: number | null;
 };
 
 const IMPACT_CLASS: Record<EconEvent["impact"], string> = {
@@ -41,6 +36,19 @@ const TIMEZONES: Array<{ label: string; zone: string | undefined }> = [
   { label: "Sydney", zone: "Australia/Sydney" },
 ];
 
+function fmtEventTime(date: string, zone: string | undefined): string {
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    timeZone: zone,
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+}
+
 function EconomicTab() {
   const [minImpact, setMinImpact] = useState<"all" | "medium">("medium");
   const [tz, setTz] = useState<string>("Local");
@@ -56,7 +64,7 @@ function EconomicTab() {
     [data, minImpact]
   );
 
-  if (error) return <div className="p-2 down">Error: {(error as Error).message}</div>;
+  if (error) return <ErrorNote error={error} />;
   if (isLoading) return <div className="p-2 dim">Loading calendar…</div>;
 
   const zone = TIMEZONES.find((t) => t.label === tz)?.zone;
@@ -98,17 +106,10 @@ function EconomicTab() {
           {events.map((e, i) => (
             <tr key={`${e.title}-${e.date}-${i}`}>
               <td className="!text-left dim whitespace-nowrap">
-                {new Date(e.date).toLocaleString(undefined, {
-                  timeZone: zone,
-                  month: "short",
-                  day: "2-digit",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  timeZoneName: "short",
-                })}
+                {fmtEventTime(e.date, zone)}
               </td>
               <td>{e.country}</td>
-              <td className={`!text-left ${IMPACT_CLASS[e.impact]}`}>{e.title}</td>
+              <td className={`!text-left ${IMPACT_CLASS[e.impact] ?? "dim"}`}>{e.title}</td>
               <td>{e.forecast ?? "—"}</td>
               <td className="dim">{e.previous ?? "—"}</td>
               <td className={e.actual ? "text-[var(--text)]" : "dim"}>{e.actual ?? "—"}</td>
@@ -116,7 +117,7 @@ function EconomicTab() {
           ))}
         </tbody>
       </table>
-      {events.length === 0 && <div className="p-3 dim">No events in this window.</div>}
+      {events.length === 0 && <div className="p-3 dim">No events in the next two weeks.</div>}
     </div>
   );
 }
@@ -125,12 +126,24 @@ const fmtDate = (ts: number | null) => (ts ? new Date(ts * 1000).toLocaleDateStr
 
 type EarningsHistoryRow = {
   fiscalQtrEnd: string;
+  fiscalPeriod?: string;
+  upcoming?: boolean;
   dateReported: number;
   eps: number | null;
   consensusForecast: number | null;
   surprisePercent: number | null;
   dayAfterChangePercent: number | null;
+  revenue?: number | null;
+  revenueEstimate?: number | null;
 };
+
+/** "Q2 FY2027" + "2026-07-26" → "Q2 FY27 · Jul 26"; falls back to whichever part exists. */
+function quarterLabel(row: EarningsHistoryRow): string {
+  const period = row.fiscalPeriod?.replace(/FY\d\d(\d\d)$/, "FY$1") ?? "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(row.fiscalQtrEnd);
+  const end = m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }) : "";
+  return [period, end].filter(Boolean).join(" · ") || "—";
+}
 
 /** Actual vs forecast: beat = green, miss = red, in-line = white. */
 function surpriseClass(row: EarningsHistoryRow): string {
@@ -147,7 +160,7 @@ function EarningsHistoryRows({ symbol }: { symbol: string }) {
     staleTime: 3_600_000,
   });
 
-  if (error) return <div className="p-2 down">Error: {(error as Error).message}</div>;
+  if (error) return <ErrorNote error={error} />;
   if (isLoading) return <div className="p-2 dim">Loading history for {symbol}…</div>;
   if (data.length === 0) return <div className="p-2 dim">No earnings history for {symbol}.</div>;
 
@@ -160,26 +173,40 @@ function EarningsHistoryRows({ symbol }: { symbol: string }) {
           <th>Forecast</th>
           <th>Actual</th>
           <th>Surprise</th>
+          <th>Revenue</th>
           <th>Day After</th>
         </tr>
       </thead>
       <tbody>
-        {data.map((row) => (
+        {data.map((row) =>
+          row.upcoming ? (
+            <tr key={row.dateReported}>
+              <td colSpan={7} className="!text-left amber">
+                Next: {fmtDate(row.dateReported)} · EPS est {money(row.consensusForecast)} · Rev est{" "}
+                {row.revenueEstimate != null ? `$${fmtBig(row.revenueEstimate)}` : "—"}
+                <EstimateRevisions symbol={symbol} className="ml-3" />
+              </td>
+            </tr>
+          ) : (
           <tr key={row.dateReported}>
-            <td className="!text-left dim">{row.fiscalQtrEnd}</td>
+            <td className="!text-left dim">{quarterLabel(row)}</td>
             <td className="!text-left dim">{fmtDate(row.dateReported)}</td>
-            <td className="dim">{row.consensusForecast != null ? `$${row.consensusForecast.toFixed(2)}` : "—"}</td>
-            <td className={surpriseClass(row)}>{row.eps != null ? `$${row.eps.toFixed(2)}` : "—"}</td>
+            <td className="dim">{money(row.consensusForecast)}</td>
+            <td className={surpriseClass(row)}>{money(row.eps)}</td>
             <td className={surpriseClass(row)}>{row.surprisePercent != null ? `${fmt(row.surprisePercent, 1)}%` : "—"}</td>
+            <td className="dim" title={`Estimate ${fmtBig(row.revenueEstimate)}`}>{fmtBig(row.revenue)}</td>
             <td className={pctClass(row.dayAfterChangePercent)}>
               {row.dayAfterChangePercent != null ? `${fmt(row.dayAfterChangePercent, 1)}%` : "—"}
             </td>
           </tr>
-        ))}
+          )
+        )}
       </tbody>
     </table>
   );
 }
+
+const money = (n: number | null | undefined) => (n != null ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—");
 
 function EarningsTab() {
   const watchlist = useTerminal((s) => s.watchlist);
@@ -187,60 +214,107 @@ function EarningsTab() {
 
   const { data = [], isLoading, error } = useQuery({
     queryKey: ["calendar", watchlist],
-    queryFn: () => apiGet<EarningsEntry[]>(`/api/calendar?symbols=${symbolsParam(watchlist)}`),
+    queryFn: () => fetchCalendar(watchlist),
     enabled: watchlist.length > 0,
-    staleTime: 3_600_000,
+    staleTime: 900_000,
+    refetchOnWindowFocus: true,
   });
 
-  const sorted = useMemo(
-    () =>
-      [...data].sort((a, b) => {
-        if (a.nextEarningsDate === null && b.nextEarningsDate === null) return 0;
-        if (a.nextEarningsDate === null) return 1;
-        if (b.nextEarningsDate === null) return -1;
-        return a.nextEarningsDate - b.nextEarningsDate;
-      }),
-    [data]
-  );
+  const groups = useMemo(() => groupEarnings(data, new Date()), [data]);
 
-  if (error) return <div className="p-2 down">Error: {(error as Error).message}</div>;
+  if (error) return <ErrorNote error={error} />;
   if (isLoading) return <div className="p-2 dim">Loading earnings…</div>;
+
+  const header = (label: string, dim = false) => (
+    <tr key={`h-${label}`}>
+      <td colSpan={6} className={`!text-left uppercase text-[10px] tracking-wide pt-2 ${dim ? "dim" : "amber"}`}>
+        {label}
+      </td>
+    </tr>
+  );
+  const detail = (symbol: string) =>
+    expanded === symbol && (
+      <tr key={`d-${symbol}`}>
+        <td colSpan={6} className="!text-left p-0">
+          <EarningsHistoryRows symbol={symbol} />
+        </td>
+      </tr>
+    );
+  const toggle = (symbol: string) => () => setExpanded(expanded === symbol ? null : symbol);
+  const timeCell = (e: EarningsEntry) => (
+    <td className={e.timing ? "" : "dim"} title={timingTitle(e)}>
+      {timingLabel(e.timing)}
+    </td>
+  );
+  const symbolCell = (symbol: string) => <td className="!text-left text-[var(--text)] font-bold underline decoration-1">{symbol}</td>;
 
   return (
     <table className="data-table">
       <thead>
         <tr>
-          <th>Sym</th>
-          <th>Last Earnings</th>
-          <th>Next Earnings</th>
-          <th>EPS Est.</th>
+          <th>Date</th>
+          <th></th>
+          <th title="Usually before the open, after the close or during market hours">Time</th>
+          <th className="!text-left">Sym</th>
+          <th>EPS est</th>
+          <th>Rev est</th>
         </tr>
       </thead>
       <tbody>
-        {sorted.map((e) => (
-          <Fragment key={e.symbol}>
-            <tr
-              onClick={() => setExpanded(expanded === e.symbol ? null : e.symbol)}
-              className="cursor-pointer"
-              title="Click for earnings history"
-            >
-              <td className="!text-left text-[var(--text)] font-bold underline decoration-1">{e.symbol}</td>
-              <td className="dim">{fmtDate(e.lastEarningsDate)}</td>
-              <td className="amber">{fmtDate(e.nextEarningsDate)}</td>
-              <td>{e.epsForecast != null ? `$${e.epsForecast.toFixed(2)}` : "—"}</td>
-            </tr>
-            {expanded === e.symbol && (
-              <tr>
-                <td colSpan={4} className="!text-left p-0">
-                  <EarningsHistoryRows symbol={e.symbol} />
-                </td>
-              </tr>
-            )}
+        {groups.upcoming.map((g) => (
+          <Fragment key={g.label}>
+            {header(g.label)}
+            {g.rows.map((e) => (
+              <Fragment key={e.symbol}>
+                <tr onClick={toggle(e.symbol)} className="cursor-pointer" title="Click for earnings history">
+                  <td className="!text-left whitespace-nowrap">{fmtDay(e.nextEarningsDate!)}</td>
+                  <td className="dim whitespace-nowrap">{inDays(e.days)}</td>
+                  {timeCell(e)}
+                  {symbolCell(e.symbol)}
+                  <td title="EPS estimate">{money(e.epsForecast)}</td>
+                  <td className="dim" title="Revenue estimate">{e.revenueForecast != null ? `$${fmtBig(e.revenueForecast)}` : "—"}</td>
+                </tr>
+                {detail(e.symbol)}
+              </Fragment>
+            ))}
           </Fragment>
         ))}
-        {sorted.length === 0 && (
+        {groups.reported.length > 0 && header("Reported (last 7 days)")}
+        {groups.reported.map((e) => {
+          const cls = pctClass(e.lastSurprisePercent);
+          return (
+            <Fragment key={`r-${e.symbol}`}>
+              <tr onClick={toggle(e.symbol)} className="cursor-pointer" title="Click for earnings history">
+                <td className="!text-left whitespace-nowrap dim">{fmtDay(e.lastEarningsDate!)}</td>
+                <td className="dim whitespace-nowrap">{-e.days}d ago</td>
+                {timeCell(e)}
+                {symbolCell(e.symbol)}
+                <td className={cls} title="EPS actual vs estimate">
+                  {money(e.lastEps)} <span className="dim">vs {money(e.lastEpsEstimate)}</span>
+                </td>
+                <td className={cls} title="Surprise">{e.lastSurprisePercent != null ? `${fmt(e.lastSurprisePercent, 1)}%` : "—"}</td>
+              </tr>
+              {detail(e.symbol)}
+            </Fragment>
+          );
+        })}
+        {groups.noDate.length > 0 && header("No date", true)}
+        {groups.noDate.map((e) => (
+          <Fragment key={`n-${e.symbol}`}>
+            <tr onClick={toggle(e.symbol)} className="cursor-pointer dim" title="Click for earnings history">
+              <td className="!text-left">—</td>
+              <td />
+              <td />
+              {symbolCell(e.symbol)}
+              <td />
+              <td />
+            </tr>
+            {detail(e.symbol)}
+          </Fragment>
+        ))}
+        {data.length === 0 && (
           <tr>
-            <td colSpan={4} className="dim p-3">
+            <td colSpan={6} className="dim p-3">
               No upcoming earnings data for your watchlist.
             </td>
           </tr>

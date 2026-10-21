@@ -1,9 +1,10 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { apiGet, fmt, fmtBig, pctClass, type Quote } from "../../lib/api";
+import { apiGet, fmt, fmtBig, sourceLabel, type Quote } from "../../lib/api";
 import { useWidgetSymbol, type WidgetInstance } from "../../store/terminal";
-import Flash from "../Flash";
+import ErrorNote from "../ErrorNote";
+import { ExtendedPrices, RegularPrice } from "../SessionPrices";
 
 type ShortVolume = { date: string; shortVolume: number; shortExemptVolume: number; totalVolume: number; shortVolumePercent: number };
 
@@ -21,7 +22,7 @@ export default function QuoteWidget({ widget }: { widget: WidgetInstance }) {
     staleTime: 3_600_000,
   });
 
-  if (error) return <div className="p-2 down">Error: {(error as Error).message}</div>;
+  if (error) return <ErrorNote error={error} />;
   if (!data) return <div className="p-2 dim">Loading {symbol}…</div>;
 
   const rows: Array<[string, string, string?]> = [
@@ -37,7 +38,7 @@ export default function QuoteWidget({ widget }: { widget: WidgetInstance }) {
     ["Mkt Cap", fmtBig(data.marketCap)],
     ["P/E (ttm)", fmt(data.pe)],
     ["EPS (ttm)", fmt(data.eps)],
-    ["Div Yield", data.dividendYield !== null ? fmt(data.dividendYield * 100) + "%" : "—"],
+    ["Div Yield", data.dividendYield != null ? fmt(data.dividendYield * 100) + "%" : "—"],
     ["52W High", fmt(data.week52High)],
     ["52W Low", fmt(data.week52Low)],
     ["Beta", fmt(data.beta)],
@@ -47,16 +48,13 @@ export default function QuoteWidget({ widget }: { widget: WidgetInstance }) {
   return (
     <div className="p-2">
       <div className="flex items-baseline gap-3 mb-1">
-        <Flash value={data.price} className="text-xl font-bold">{fmt(data.price)}</Flash>
-        <Flash value={data.changePercent} className={`${pctClass(data.changePercent)} text-sm`}>
-          {data.change !== null && data.change >= 0 ? "+" : ""}
-          {fmt(data.change)} ({fmt(data.changePercent)}%)
-        </Flash>
+        <RegularPrice quote={data} />
         <span className="dim text-[10px] ml-auto">
-          {data.exchange ?? ""} · {data.currency ?? ""} · {data.source}
+          {data.exchange ?? ""} · {data.currency ?? ""} · <Freshness quote={data} />
         </span>
       </div>
-      <div className="dim text-[11px] mb-2 truncate">{data.name}</div>
+      <ExtendedPrices quote={data} className="mb-1" />
+      <div className="dim text-[11px] mb-2 truncate">{data.name ?? "—"}</div>
       <div className="grid grid-cols-2 gap-x-4">
         {rows.map(([label, value]) => (
           <div key={label} className="flex justify-between border-b border-[#161616] py-0.5">
@@ -67,4 +65,12 @@ export default function QuoteWidget({ widget }: { widget: WidgetInstance }) {
       </div>
     </div>
   );
+}
+
+/** Where the price came from: live from Alpaca, Alpaca's last trade time, or another source (FMP, Stooq, FRED, ECB). */
+export function Freshness({ quote }: { quote: Quote }) {
+  if (quote.source !== "alpaca") return <span title="delayed or daily data, cached briefly">{sourceLabel(quote.source)}</span>;
+  if (quote.live) return <span className="up" title="every trade from Alpaca's live stream">● Live</span>;
+  const at = quote.asOf ? new Date(quote.asOf).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }) : "—";
+  return <span style={{ color: "var(--amber)" }} title="regular-session price as of this time; extended hours are listed separately">● As of {at}</span>;
 }

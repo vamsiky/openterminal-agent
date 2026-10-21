@@ -26,6 +26,8 @@ services:
       - ALPACA_MAX_REQ_PER_MIN=${ALPACA_MAX_REQ_PER_MIN:-180}
       - HISTORY_SYNC=${HISTORY_SYNC:-0}
       - HISTORY_SYNC_MINUTE=${HISTORY_SYNC_MINUTE:-1}
+      - LIVE_STREAM=${LIVE_STREAM:-1}
+      - LIVE_ALL_TRADES=${LIVE_ALL_TRADES:-0}
     volumes:
       - terminal-data:/app/data
     restart: unless-stopped

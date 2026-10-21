@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { maxRequestsPerMinute, resetThrottle, stockBars, stockBarsPage } from "./alpaca.js";
+import { maxRequestsPerMinute, openStream, parseStream, resetThrottle, snapshots, stockBars, stockBarsPage } from "./alpaca.js";
 
 function mockPages(pages: unknown[]) {
   const fetchMock = vi.fn();
@@ -68,5 +68,109 @@ describe("alpaca request budget", () => {
     expect(maxRequestsPerMinute("10k")).toBe(180);
     expect(maxRequestsPerMinute("0")).toBe(180);
     expect(maxRequestsPerMinute(" 1000 ")).toBe(1000);
+  });
+});
+
+describe("alpaca snapshots", () => {
+  beforeEach(() => {
+    process.env.ALPACA_API_KEY_ID = "key-id";
+    process.env.ALPACA_API_SECRET_KEY = "secret";
+    process.env.ALPACA_MAX_REQ_PER_MIN = "60000";
+    resetThrottle();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.ALPACA_API_KEY_ID;
+    delete process.env.ALPACA_API_SECRET_KEY;
+    delete process.env.ALPACA_MAX_REQ_PER_MIN;
+    delete process.env.ALPACA_FEED;
+  });
+
+  it("returns {} for no symbols without calling out", async () => {
+    const fetchMock = mockPages([]);
+    expect(await snapshots([])).toEqual({});
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("asks for the symbols on the sip feed, or the one given", async () => {
+    const fetchMock = mockPages([{ A: null }, {}]);
+    await snapshots(["A", "B"]);
+    await snapshots(["A"], "boats");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://data.alpaca.markets/v2/stocks/snapshots?symbols=A%2CB&feed=sip");
+    expect(new URL(fetchMock.mock.calls[1][0] as string).searchParams.get("feed")).toBe("boats");
+  });
+
+  it("defaults to ALPACA_FEED", async () => {
+    process.env.ALPACA_FEED = "iex";
+    const fetchMock = mockPages([{}]);
+    await snapshots(["A"]);
+    expect(new URL(fetchMock.mock.calls[0][0] as string).searchParams.get("feed")).toBe("iex");
+  });
+
+  it("treats a null body as no snapshots", async () => {
+    mockPages([null]);
+    expect(await snapshots(["A"])).toEqual({});
+  });
+});
+
+describe("alpaca stream", () => {
+  class FakeSocket extends EventTarget {
+    static all: FakeSocket[] = [];
+    sent: any[] = [];
+    constructor(public url: string) {
+      super();
+      FakeSocket.all.push(this);
+    }
+    send(data: string) {
+      this.sent.push(JSON.parse(data));
+    }
+    receive(msgs: unknown) {
+      this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(msgs) }));
+    }
+  }
+  beforeEach(() => {
+    FakeSocket.all = [];
+    vi.stubGlobal("WebSocket", FakeSocket);
+    process.env.ALPACA_API_KEY_ID = "kid";
+    process.env.ALPACA_API_SECRET_KEY = "secret";
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.ALPACA_API_KEY_ID;
+    delete process.env.ALPACA_API_SECRET_KEY;
+    delete process.env.ALPACA_FEED;
+  });
+
+  it("opens the sip path by default and the given path otherwise", () => {
+    openStream();
+    openStream("v1beta1/boats");
+    expect(FakeSocket.all.map((s) => s.url)).toEqual([
+      "wss://stream.data.alpaca.markets/v2/sip",
+      "wss://stream.data.alpaca.markets/v1beta1/boats",
+    ]);
+  });
+
+  it("authenticates only after Alpaca says connected", () => {
+    openStream();
+    const ws = FakeSocket.all[0];
+    expect(ws.sent).toEqual([]);
+    ws.receive([{ T: "t", S: "AAPL" }]);
+    expect(ws.sent).toEqual([]);
+    ws.receive([{ T: "success", msg: "connected" }]);
+    expect(ws.sent).toEqual([{ action: "auth", key: "kid", secret: "secret" }]);
+  });
+
+  it("throws without keys", () => {
+    delete process.env.ALPACA_API_KEY_ID;
+    expect(() => openStream()).toThrow(/ALPACA_API_KEY_ID/);
+    expect(FakeSocket.all).toHaveLength(0);
+  });
+
+  it("parses arrays, single objects and buffers; bad JSON gives []", () => {
+    expect(parseStream('[{"T":"t"},{"T":"q"}]')).toEqual([{ T: "t" }, { T: "q" }]);
+    expect(parseStream('{"T":"error","code":406}')).toEqual([{ T: "error", code: 406 }]);
+    const bytes = new TextEncoder().encode('[{"T":"b"}]');
+    expect(parseStream(bytes.buffer)).toEqual([{ T: "b" }]);
+    expect(parseStream("not json")).toEqual([]);
   });
 });

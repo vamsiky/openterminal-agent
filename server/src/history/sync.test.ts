@@ -171,4 +171,46 @@ describe("watchlists", () => {
     watchlists.setWatchlist("swing", ["MSFT", "AAPL", "MSFT"]);
     expect(watchlists.getWatchlist("swing")).toEqual(["MSFT", "AAPL"]);
   });
+
+  it("imports a Webull export, replacing same-named lists and keeping the rest", () => {
+    watchlists.setWatchlist("To buy", ["OLD"]);
+    const csv = [
+      "\uFEFFWatchlist,#,Symbol,Name,Exchange",
+      'AI,1,CRDO,CREDO TECHNOLOGY GROUP HOLDING,NASDAQ',
+      'AI,2,NCNO,"Ncino, Inc.",NASDAQ',
+      "Daily Watchlist,1,GETY,GETTY IMAGES HOLDINGS INC,OTCPK",
+      "To buy,1,SITM,SITIME CORP,NASDAQ",
+      "Crypto,1,BTC,Bitcoin,CCC",
+      "Crypto,2,SHIB,Shiba Inu,CCC",
+      "Owned,1,VIX,CBOE Market Volatility Index,CBOE",
+      "Crypto,3,COIN,\"Coinbase Global, Inc.\",NASDAQ",
+      "Bad/name,1,AAPL,Apple Inc,NASDAQ",
+      "",
+    ].join("\r\n");
+    const result = watchlists.importWebull(csv);
+    expect(result.saved.map((l) => l.name)).toEqual(["AI", "Daily Watchlist", "To buy", "Crypto", "Owned"]);
+    expect(result.skipped).toEqual(["Bad/name"]);
+    expect(watchlists.getWatchlist("AI")).toEqual(["CRDO", "NCNO"]);
+    expect(watchlists.getWatchlist("To buy")).toEqual(["SITM"]);
+    expect(watchlists.getWatchlist("Crypto")).toEqual(["BTC-USD", "SHIB-USD", "COIN"]);
+    expect(watchlists.getWatchlist("Owned")).toEqual(["^VIX"]);
+    expect(watchlists.getWatchlist("swing")).toEqual(["MSFT", "AAPL"]);
+    expect(watchlists.listWatchlists().map((l) => l.name)).toContain("Daily Watchlist");
+  });
+
+  it("deletes a list and its symbols", () => {
+    watchlists.setWatchlist("gone", ["ZZZ"]);
+    watchlists.deleteWatchlist("gone");
+    expect(watchlists.getWatchlist("gone")).toBeNull();
+    expect(watchlists.allWatchlistSymbols()).not.toContain("ZZZ");
+  });
+
+  it("rejects names the web app can't send", () => {
+    for (const bad of ["", " AI", "AI ", "a/b", "import", "x".repeat(41)]) expect(watchlists.nameSchema.safeParse(bad).success).toBe(false);
+    for (const ok of ["AI", "Daily Watchlist", "Energy-AI", "default"]) expect(watchlists.nameSchema.safeParse(ok).success).toBe(true);
+  });
+
+  it("rejects a file that isn't a Webull export", () => {
+    expect(() => watchlists.importWebull("Symbol,Qty\nAAPL,1")).toThrow(/Webull/);
+  });
 });

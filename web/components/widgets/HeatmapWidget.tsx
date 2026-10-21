@@ -3,20 +3,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import * as d3 from "d3";
-import { apiGet } from "../../lib/api";
+import { apiGetWithNote, NO_EU_NOTE } from "../../lib/api";
 import { useTerminal } from "../../store/terminal";
+import ErrorNote from "../ErrorNote";
 
-type Cell = { symbol: string; name: string | null; sector: string; marketCap: number | null; changePercent: number | null };
+type Cell = { symbol: string; name: string | null; sector: string | null; marketCap: number | null; changePercent: number | null };
 
 export default function HeatmapWidget() {
   const ref = useRef<HTMLDivElement>(null);
   const setActiveSymbol = useTerminal((s) => s.setActiveSymbol);
   const [market, setMarket] = useState<"us" | "eu">("us");
-  const { data, error } = useQuery({
+  const { data: result, error } = useQuery({
     queryKey: ["heatmap", market],
-    queryFn: () => apiGet<Cell[]>(`/api/heatmap?market=${market}`),
+    queryFn: () => apiGetWithNote<Cell[]>(`/api/heatmap?market=${market}`),
     refetchInterval: 3_000,
   });
+  const data = result?.data;
+  const euNote = market === "eu" && data?.length === 0 ? (result?.note ?? NO_EU_NOTE) : null;
 
   useEffect(() => {
     const el = ref.current;
@@ -33,7 +36,7 @@ export default function HeatmapWidget() {
       const root = d3
         .hierarchy<Node>({
           name: "root",
-          children: [...d3.group(valid, (d) => d.sector)].map(([sector, items]) => ({
+          children: [...d3.group(valid, (d) => d.sector ?? "Other")].map(([sector, items]) => ({
             name: sector,
             children: items.map((d) => ({ name: d.symbol, data: d })),
           })),
@@ -134,9 +137,13 @@ export default function HeatmapWidget() {
       </div>
       <div className="flex-1 min-h-0">
         {error ? (
-          <div className="p-2 down">Error: {(error as Error).message}</div>
+          <ErrorNote error={error} />
         ) : !data ? (
           <div className="p-2 dim">Loading heatmap…</div>
+        ) : euNote ? (
+          <div className="p-2 dim">{euNote}</div>
+        ) : data.length === 0 ? (
+          <div className="p-2 dim">No rows yet. Reference data (market caps, sectors) loads in the background; try again in a few minutes.</div>
         ) : (
           <div ref={ref} className="w-full h-full" />
         )}

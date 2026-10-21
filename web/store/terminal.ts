@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { normalizeSymbol } from "../lib/symbol";
+import { isForeignSymbol, normalizeSymbol } from "../lib/symbol";
 
 export type WidgetType =
   | "quote"
@@ -18,6 +18,7 @@ export type WidgetType =
   | "ai"
   | "calendar"
   | "insider"
+  | "fundamentals"
   | "tv"
   | "recap";
 
@@ -28,12 +29,18 @@ export type WidgetInstance = {
   linked: boolean; // follows the globally active symbol
 };
 
+export type Watchlist = { name: string; symbols: string[] };
+
 export type LayoutItem = { i: string; x: number; y: number; w: number; h: number };
 
 type TerminalState = {
   activeSymbol: string;
   widgets: WidgetInstance[];
   layout: LayoutItem[];
+  /** Every list, in display order. */
+  watchlists: Watchlist[];
+  activeWatchlist: string;
+  /** Symbols of the active list (what the watchlist widget, calendar and palette use). */
   watchlist: string[];
   commandOpen: boolean;
   setActiveSymbol: (s: string) => void;
@@ -46,6 +53,11 @@ type TerminalState = {
   addToWatchlist: (s: string) => void;
   removeFromWatchlist: (s: string) => void;
   setWatchlist: (symbols: string[]) => void;
+  /** Replaces every list at once (used when the server's copy is loaded). */
+  setWatchlists: (lists: Watchlist[]) => void;
+  setActiveWatchlist: (name: string) => void;
+  createWatchlist: (name: string) => void;
+  deleteWatchlist: (name: string) => void;
   resetWorkspace: () => void;
 };
 
@@ -79,9 +91,26 @@ const SIZE_BY_TYPE: Record<WidgetType, { w: number; h: number }> = {
   ai: { w: 5, h: 10 },
   calendar: { w: 12, h: 11 },
   insider: { w: 7, h: 9 },
+  fundamentals: { w: 7, h: 12 },
   tv: { w: 6, h: 11 },
   recap: { w: 5, h: 12 },
 };
+
+const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "SPY"];
+
+/** Keeps `watchlist` in step with the active list, falling back to the first list. */
+function withLists(lists: Watchlist[], active: string) {
+  const current = lists.find((l) => l.name === active) ?? lists[0];
+  return { watchlists: lists, activeWatchlist: current?.name ?? "default", watchlist: current?.symbols ?? [] };
+}
+
+function editActive(st: TerminalState, edit: (symbols: string[]) => string[]) {
+  const lists = st.watchlists.length ? st.watchlists : [{ name: st.activeWatchlist, symbols: [] }];
+  return withLists(
+    lists.map((l) => (l.name === st.activeWatchlist ? { ...l, symbols: edit(l.symbols) } : l)),
+    st.activeWatchlist
+  );
+}
 
 export const useTerminal = create<TerminalState>()(
   persist(
@@ -89,7 +118,9 @@ export const useTerminal = create<TerminalState>()(
       activeSymbol: "AAPL",
       widgets: DEFAULT_WIDGETS,
       layout: DEFAULT_LAYOUT,
-      watchlist: ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "SPY"],
+      watchlists: [{ name: "default", symbols: DEFAULT_SYMBOLS }],
+      activeWatchlist: "default",
+      watchlist: DEFAULT_SYMBOLS,
       commandOpen: false,
       setActiveSymbol: (s) => {
         const sym = normalizeSymbol(s);
@@ -125,16 +156,38 @@ export const useTerminal = create<TerminalState>()(
       setLayout: (layout) => set({ layout }),
       addToWatchlist: (s) => {
         const sym = normalizeSymbol(s);
-        if (!sym) return;
-        set((st) => ({
-          watchlist: st.watchlist.includes(sym) ? st.watchlist : [...st.watchlist, sym],
-        }));
+        if (!sym || isForeignSymbol(sym)) return;
+        set((st) => editActive(st, (list) => (list.includes(sym) ? list : [...list, sym])));
       },
-      removeFromWatchlist: (s) => set((st) => ({ watchlist: st.watchlist.filter((x) => x !== s) })),
-      setWatchlist: (symbols) => set({ watchlist: symbols }),
+      removeFromWatchlist: (s) => set((st) => editActive(st, (list) => list.filter((x) => x !== s))),
+      setWatchlist: (symbols) => set((st) => editActive(st, () => symbols)),
+      setWatchlists: (lists) => set((st) => withLists(lists, st.activeWatchlist)),
+      setActiveWatchlist: (name) => set((st) => withLists(st.watchlists, name)),
+      createWatchlist: (name) =>
+        set((st) =>
+          st.watchlists.some((l) => l.name === name)
+            ? withLists(st.watchlists, name)
+            : withLists([...st.watchlists, { name, symbols: [] }], name)
+        ),
+      deleteWatchlist: (name) =>
+        set((st) => {
+          const rest = st.watchlists.filter((l) => l.name !== name);
+          return withLists(rest.length ? rest : [{ name: "default", symbols: [] }], st.activeWatchlist);
+        }),
       resetWorkspace: () => set({ widgets: DEFAULT_WIDGETS, layout: DEFAULT_LAYOUT }),
     }),
-    { name: "openterminal-workspace" }
+    {
+      name: "openterminal-workspace",
+      version: 1,
+      // Version 0 kept a single list in `watchlist`; it becomes the "default" list.
+      migrate: (persisted, version) => {
+        const st = (persisted ?? {}) as Partial<TerminalState>;
+        if (version < 1 && Array.isArray(st.watchlist)) {
+          return { ...st, ...withLists([{ name: "default", symbols: st.watchlist }], "default") } as TerminalState;
+        }
+        return st as TerminalState;
+      },
+    }
   )
 );
 
