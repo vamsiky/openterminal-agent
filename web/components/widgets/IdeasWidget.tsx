@@ -6,9 +6,13 @@ import { apiGet, fmt } from "../../lib/api";
 import { ago, contractLabel, GROUP_LABELS, strategyLabel, type Idea, type ScanRun, type ScanStatus, type ScorecardResponse } from "../../lib/ideas";
 import { useTerminal } from "../../store/terminal";
 import ErrorNote from "../ErrorNote";
+import { agentsLine, type AgentsStatus } from "../../lib/agents";
+import BriefView from "./BriefView";
 import IdeasSettings from "./IdeasSettings";
+import ThesisView from "./ThesisView";
 
 type Kind = "stock" | "option";
+type Tab = Kind | "brief";
 type IdeasResponse = { asOf: string | null; ideas: Idea[] };
 
 const REFRESH: Record<Kind, number> = { option: 60_000, stock: 300_000 };
@@ -24,13 +28,14 @@ export function lastRun(runs: ScanStatus["runs"] | undefined, jobs: string[]): S
   return hits.sort((a, b) => runTime(b).localeCompare(runTime(a)))[0] ?? null;
 }
 
-function StatusLine({ status }: { status: ScanStatus | undefined }) {
-  if (!status) return null;
-  const stock = lastRun(status.runs, ["stock-nightly", "stock-intraday"]);
-  const opt = lastRun(status.runs, ["option-scan"]);
-  const o = status.options;
+function StatusLine({ status, agents }: { status: ScanStatus | undefined; agents: AgentsStatus | undefined }) {
+  if (!status && !agents) return null;
+  const stock = lastRun(status?.runs, ["stock-nightly", "stock-intraday"]);
+  const opt = lastRun(status?.runs, ["option-scan"]);
+  const o = status?.options ?? null;
   return (
     <div className="px-2 py-0.5 dim text-[10px] border-t border-[var(--border)]">
+      {agents && <>{agentsLine(agents)} · </>}
       Stock scan {ago(runTime(stock) || null)} · Options sweep {ago(runTime(opt) || null)} ·{" "}
       {o ? (o.connected ? `${o.subscribed} contracts streamed` : "option stream offline") : "option stream n/a"}
       {o?.lastError ? <span className="down"> · {o.lastError}</span> : null}
@@ -78,7 +83,8 @@ function Reasons({ reasons, open }: { reasons: string[]; open: boolean }) {
 
 export default function IdeasWidget() {
   const setActiveSymbol = useTerminal((s) => s.setActiveSymbol);
-  const [kind, setKind] = useState<Kind>("stock");
+  const [tab, setTab] = useState<Tab>("stock");
+  const kind: Kind = tab === "option" ? "option" : "stock";
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
 
@@ -86,7 +92,9 @@ export default function IdeasWidget() {
     queryKey: ["ideas", kind],
     queryFn: () => apiGet<IdeasResponse>(`/api/scan/ideas?kind=${kind}&status=active&limit=50`),
     refetchInterval: REFRESH[kind],
+    enabled: tab !== "brief",
   });
+  const agents = useQuery({ queryKey: ["agents-status"], queryFn: () => apiGet<AgentsStatus>("/api/agents/status"), refetchInterval: 30_000, retry: false });
   const status = useQuery({ queryKey: ["scan-status"], queryFn: () => apiGet<ScanStatus>("/api/scan/status"), refetchInterval: 60_000 });
 
   const rows = ideas.data?.ideas ?? [];
@@ -101,14 +109,17 @@ export default function IdeasWidget() {
   return (
     <div className="flex flex-col h-full text-[11px]">
       <div className="flex items-center gap-1 p-1">
-        <button className={`term-btn ${kind === "stock" ? "active" : ""}`} onClick={() => { setKind("stock"); setExpanded(null); }}>Stocks</button>
-        <button className={`term-btn ${kind === "option" ? "active" : ""}`} onClick={() => { setKind("option"); setExpanded(null); }}>Options</button>
+        <button className={`term-btn ${tab === "stock" ? "active" : ""}`} onClick={() => { setTab("stock"); setExpanded(null); }}>Stocks</button>
+        <button className={`term-btn ${tab === "option" ? "active" : ""}`} onClick={() => { setTab("option"); setExpanded(null); }}>Options</button>
+        <button className={`term-btn ${tab === "brief" ? "active" : ""}`} onClick={() => { setTab("brief"); setExpanded(null); }}>Brief</button>
         <span className="dim ml-1 flex-1 truncate">Candidates only, not orders{ideas.data?.asOf ? ` · as of ${ago(ideas.data.asOf)}` : ""}</span>
         <button className={`term-btn ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen((o) => !o)} title="Universe and positions">Settings</button>
       </div>
       {settingsOpen && <IdeasSettings />}
       <div className="flex-1 overflow-auto">
-        {ideas.isLoading ? (
+        {tab === "brief" ? (
+          <BriefView />
+        ) : ideas.isLoading ? (
           <div className="p-2 dim">Loading ideas…</div>
         ) : ideas.error ? (
           <ErrorNote error={ideas.error} />
@@ -167,6 +178,7 @@ export default function IdeasWidget() {
                             </ul>
                           )}
                           <ScoreBars symbol={r.symbol} />
+                          <ThesisView idea={r} agents={agents.data} />
                         </td>
                       </tr>
                     )}
@@ -177,7 +189,7 @@ export default function IdeasWidget() {
           </table>
         )}
       </div>
-      <StatusLine status={status.data} />
+      <StatusLine status={status.data} agents={agents.data} />
     </div>
   );
 }

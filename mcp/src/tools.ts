@@ -343,6 +343,41 @@ export const tools: Tool[] = [
     shape: { symbol },
     run: (a, cfg) => apiGet(cfg, `/api/options-data/metrics/${enc(a.symbol)}`),
   },
+  {
+    name: "macro",
+    description:
+      "Current US macro snapshot as the app's /api/macro route returns it: Treasury yields, Fed funds, major indexes, VIX, oil and the dollar, with changes. " +
+      "Use it to judge the market regime (rates, risk appetite, volatility) before weighing a trade idea. For scheduled releases use `economic_calendar`.",
+    shape: {},
+    run: (_a, cfg) => apiGet(cfg, "/api/macro"),
+  },
+  {
+    name: "market_news",
+    description:
+      "Top market news headlines (newest first). Give `symbol` to get news for one US-listed stock instead of the broad market. " +
+      "Headlines only; for full articles, press releases and filings of a company use `content`.",
+    shape: { symbol: symbol.optional() },
+    run: (a, cfg) => apiGet(cfg, "/api/news", pick(a, ["symbol"])),
+  },
+  {
+    name: "thesis",
+    description:
+      "The latest AI-written trade thesis for a symbol and strategy (404/error when none exists yet). Strategies: buy (stock), long_call (buy call), short_put (sell cash-secured put), covered_call (sell call against owned shares); puts are only ever sold. " +
+      "Returns verdict (act/wait/pass), confidence, horizon, entry, target, invalidation, exit plan, catalysts, risks, the judge's summary and the bull and bear cases with evidence. Advice only, never an order. " +
+      "Give `contract` (OCC symbol) for option strategies.",
+    shape: {
+      symbol,
+      strategy: z.enum(["buy", "long_call", "short_put", "covered_call"]),
+      contract: z.string().min(1).max(40).optional().describe("OCC option symbol, for option strategies."),
+    },
+    run: (a, cfg) => apiGet(cfg, "/api/agents/theses/latest", { symbol: a.symbol, strategy: a.strategy, ...pick(a, ["contract"]) }),
+  },
+  {
+    name: "brief",
+    description: "The latest pre-market brief as markdown (regime, today's calendar, overnight movers, act/wait ideas, watch-outs), with its day. Written at 07:00 ET on trading days.",
+    shape: {},
+    run: (_a, cfg) => apiGet(cfg, "/api/agents/brief/latest"),
+  },
 ];
 
 /** Compact JSON, cut at `max` characters with a note on how to get the rest. */

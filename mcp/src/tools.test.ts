@@ -45,7 +45,7 @@ describe("tool list", () => {
     expect(list.tools.map((t) => t.name)).toEqual([
       "research_summary", "fundamentals", "ownership", "transcripts", "search_transcripts", "content",
       "quote", "price_history", "earnings_calendar", "estimate_revisions", "economic_calendar", "market", "screen",
-      "ideas", "scorecard", "universe", "option_metrics",
+      "ideas", "scorecard", "universe", "option_metrics", "macro", "market_news", "thesis", "brief",
     ]);
     for (const t of list.tools) {
       expect(t.annotations?.readOnlyHint).toBe(true);
@@ -185,6 +185,34 @@ describe("scan tools", () => {
       expect(rejected).toBe(true);
     }
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("agent tools", () => {
+  it("macro and brief take no arguments", async () => {
+    await call("macro", {});
+    expect(last().pathname).toBe("/api/macro");
+    await call("brief", {});
+    expect(last().pathname).toBe("/api/agents/brief/latest");
+  });
+
+  it("market_news forwards the optional symbol", async () => {
+    await call("market_news", {});
+    expect(last().pathname + last().search).toBe("/api/news");
+    await call("market_news", { symbol: "NVDA" });
+    expect(last().pathname + last().search).toBe("/api/news?symbol=NVDA");
+  });
+
+  it("thesis sends symbol, strategy and contract, and rejects buying puts", async () => {
+    await call("thesis", { symbol: "AAPL", strategy: "short_put", contract: "AAPL261120P00150000" });
+    expect(last().pathname + last().search).toBe("/api/agents/theses/latest?symbol=AAPL&strategy=short_put&contract=AAPL261120P00150000");
+    await call("thesis", { symbol: "AAPL", strategy: "buy" });
+    expect(last().search).toBe("?symbol=AAPL&strategy=buy");
+    const n = calls.length;
+    let rejected = false;
+    try { rejected = (await call("thesis", { symbol: "AAPL", strategy: "long_put" })).res.isError === true; } catch { rejected = true; }
+    expect(rejected).toBe(true);
+    expect(calls).toHaveLength(n);
   });
 });
 
