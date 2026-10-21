@@ -80,6 +80,8 @@ A thesis that failed does not count. That idea is queued again the next day.
 - **Automatic option items:** by symbol, strategy and day. The contract is not part of the key, because the idea's contract moves as the price moves. The thesis still records the contract it analysed.
 - **Manual option items:** by symbol, strategy, contract and day.
 
+Re-enqueueing an item that is already pending refreshes it (its day, rank, reason and contract) and returns its position. There are no duplicates.
+
 **Order.** Manual requests go first, then held symbols, then idea rank.
 
 **Concurrency.** At most `AGENTS_CONCURRENCY` analyses run at once (default 2).
@@ -113,7 +115,8 @@ A full stock or option analysis is bull plus bear plus judge, so at most $0.90 u
 **How the cap behaves.**
 
 - Before a run starts, its cap is added to what has been spent today. If the total would be over the daily budget, the run is refused. It is recorded with status `skipped` and error `budget_exhausted`, and counted as skipped for the day.
-- An analysis that is refused waits in the queue for the next trading day.
+- If the judge is refused for budget after bull and bear have run, their two cases are kept for 24 hours (in `case_cache`) and the item stays queued. The next attempt runs only the judge, once it fits in the budget.
+- An analysis refused before any case ran waits in the queue for the next trading day.
 - A **$0.60 reserve** is held back from analyses until the day's brief has run or been skipped, and never past 12:00 ET. The macro reports and the brief can use it. The post-close macro report is not reserved.
 - A run is stopped at its cap. The cost reported when it finishes can be a little higher than the cap, so a single run can overshoot slightly. No new run starts once the budget is spent.
 - Each run has a 10-minute timeout. A run that times out is an error.
