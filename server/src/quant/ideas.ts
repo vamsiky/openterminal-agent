@@ -79,7 +79,7 @@ export function ideasAsOf(kind?: IdeaKind): string | null {
   return r.t;
 }
 
-/** "momentum 92: 6-month return in the 98th percentile of its sector" for the three strongest groups. */
+/** "momentum 92/100; best: 6-month return, 98/100 against sector peers" for the three strongest groups. */
 export function stockReasons(card: Scorecard, today: string): string[] {
   const groups = Object.entries(card.groups)
     .filter((g): g is [string, number] => g[1] !== null)
@@ -87,7 +87,7 @@ export function stockReasons(card: Scorecard, today: string): string[] {
     .slice(0, 3);
   const reasons = groups.map(([g, score]) => {
     const best = card.factors.filter((f) => f.group === g && f.score !== null).sort((a, b) => b.score! - a.score!)[0];
-    const ordinal = best ? `; best: ${factorLabel(best.key)} (${Math.round(best.score!)}th percentile in its sector)` : "";
+    const ordinal = best ? `; best: ${factorLabel(best.key)}, ${Math.round(best.score!)}/100 against sector peers` : "";
     return `${GROUP_LABELS[g] ?? g} ${Math.round(score)}/100${ordinal}`;
   });
   const next = calendarFor([card.symbol], today)[0]?.nextEarningsDate;

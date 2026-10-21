@@ -56,7 +56,7 @@ describe("stock ideas", () => {
     expect(list[0]).toMatchObject({ symbol: "S00", rank: 1, strategy: "buy", status: "active", score: 90, firstSeen: NOW.toISOString() });
     expect(list.map((i) => i.symbol)).not.toContain("LOWC");
     expect(list[0].reasons).toHaveLength(3);
-    expect(list[0].reasons[0]).toMatch(/^momentum 95\/100; best: 6-month return \(99th percentile in its sector\)/);
+    expect(list[0].reasons[0]).toMatch(/^momentum 95\/100; best: 6-month return, 99\/100 against sector peers/);
 
     // S24 falls out when a better stock arrives; a stock outside the universe never lists.
     seedCards({ NEW: 95, OUT: 100 });
