@@ -144,6 +144,7 @@ async function attempt<T>(spec: RunSpec<T>, prompt: string, now: Date): Promise<
   const started = Date.now();
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), RUN_TIMEOUT_MS);
+  timer.unref();
   const stderr: string[] = [];
   let auth: RunResult<T>["auth"] = null;
   let result: any = null;
