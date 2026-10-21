@@ -65,9 +65,25 @@ describe("watchlists routes", () => {
     expect(await (await fetch(`${base}/Gone`)).json()).toEqual({ name: "Gone", symbols: null });
   });
 
+  it("rejects a foreign symbol and skips it on import", async () => {
+    const res = await post("/Intl", { symbols: ["AAPL", "SHOP.TO"] });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "US-listed symbols only (e.g. TSM for TSMC)" });
+    expect(await (await fetch(`${base}/Intl`)).json()).toEqual({ name: "Intl", symbols: null });
+    expect((await post("/Intl", { symbols: ["BRK.B", "MKC.V", "TSM"] })).status).toBe(200);
+
+    const csv = "Watchlist,#,Symbol,Name,Exchange\nMix,1,TSM,TSMC,NYSE\nMix,2,0700.HK,Tencent,HKEX\nMix,3,SHOP.TO,Shopify,TSX\nMix,4,PRYMY,Prysmian,OTCM\n";
+    expect(await (await post("/import", { csv })).json()).toEqual({
+      saved: [{ name: "Mix", symbols: 2 }],
+      skipped: [],
+      skippedSymbols: ["0700.HK", "SHOP.TO"],
+    });
+    expect(await (await fetch(`${base}/Mix`)).json()).toEqual({ name: "Mix", symbols: ["TSM", "PRYMY"] });
+  });
+
   it("imports a Webull export and rejects bad input", async () => {
     const res = await post("/import", { csv: "Watchlist,#,Symbol,Name,Exchange\nAI,1,crdo,Credo,NASDAQ\nAI,2,btc,Bitcoin,CCC\n" });
-    expect(await res.json()).toEqual({ saved: [{ name: "AI", symbols: 2 }], skipped: [] });
+    expect(await res.json()).toEqual({ saved: [{ name: "AI", symbols: 2 }], skipped: [], skippedSymbols: [] });
     expect(await (await fetch(`${base}/AI`)).json()).toEqual({ name: "AI", symbols: ["CRDO", "BTC-USD"] });
     expect((await post("/import", {})).status).toBe(400);
     const bad = await post("/import", { csv: "foo,bar\n1,2\n" });
@@ -84,6 +100,7 @@ describe("watchlists routes", () => {
     expect(watchlists.importWebull("Watchlist,Symbol\nImport,AAPL\nOk,MSFT\n")).toEqual({
       saved: [{ name: "Ok", symbols: 1 }],
       skipped: ["Import"],
+      skippedSymbols: [],
     });
     expect((await fetch(`${base}/Import`)).status).toBe(400);
   });

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../db.js";
+import { isForeignSymbol } from "../history/universe.js";
 import { parseWebullCsv } from "../watchlists/webull.js";
 
 export const watchlistsRouter = Router();
@@ -22,6 +23,8 @@ const symbolsSchema = z.object({
     .array(z.string().regex(/^(?=.*[A-Za-z0-9])[A-Za-z0-9.\-^=&]{1,20}$/).transform((s) => s.toUpperCase()))
     .max(500),
 });
+
+const US_ONLY = "US-listed symbols only (e.g. TSM for TSMC)";
 
 export function getWatchlist(name: string): string[] | null {
   const list = db.prepare("SELECT id FROM watchlists WHERE name = ?").get(name) as { id: number } | undefined;
@@ -47,14 +50,25 @@ export function deleteWatchlist(name: string): void {
 
 /**
  * Saves every list in a Webull export, replacing lists with the same name and
- * leaving the others alone. Returns what was saved and the list names skipped.
+ * leaving the others alone. Returns what was saved, the list names skipped
+ * and the foreign symbols left out (US-listed symbols only).
  */
-export function importWebull(csv: string): { saved: Array<{ name: string; symbols: number }>; skipped: string[] } {
+export function importWebull(csv: string): {
+  saved: Array<{ name: string; symbols: number }>;
+  skipped: string[];
+  skippedSymbols: string[];
+} {
   const saved: Array<{ name: string; symbols: number }> = [];
   const skipped: string[] = [];
+  const skippedSymbols: string[] = [];
   for (const list of parseWebullCsv(csv)) {
     const name = nameSchema.safeParse(list.name);
-    const symbols = symbolsSchema.safeParse({ symbols: list.symbols });
+    const us = list.symbols.filter((s) => {
+      const foreign = isForeignSymbol(s);
+      if (foreign && !skippedSymbols.includes(s)) skippedSymbols.push(s);
+      return !foreign;
+    });
+    const symbols = symbolsSchema.safeParse({ symbols: us });
     if (!name.success || !symbols.success) {
       skipped.push(list.name);
       continue;
@@ -62,7 +76,7 @@ export function importWebull(csv: string): { saved: Array<{ name: string; symbol
     setWatchlist(name.data, symbols.data.symbols);
     saved.push({ name: name.data, symbols: symbols.data.symbols.length });
   }
-  return { saved, skipped };
+  return { saved, skipped, skippedSymbols };
 }
 
 /** Every symbol on any watchlist, deduplicated. */
@@ -112,6 +126,7 @@ watchlistsRouter.post("/:name", (req, res) => {
   if (!name.success) return res.status(400).json({ error: "invalid watchlist name" });
   const body = symbolsSchema.safeParse(req.body);
   if (!body.success) return res.status(400).json({ error: body.error.message });
+  if (body.data.symbols.some(isForeignSymbol)) return res.status(400).json({ error: US_ONLY });
   setWatchlist(name.data, body.data.symbols);
   res.json({ name: name.data, symbols: getWatchlist(name.data) });
 });

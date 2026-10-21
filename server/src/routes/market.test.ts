@@ -21,7 +21,6 @@ vi.mock("../providers/fred.js", () => ({ series: vi.fn(), latest: vi.fn() }));
 vi.mock("../providers/ecb.js", () => ({ series: vi.fn(), latest: vi.fn() }));
 vi.mock("../providers/stooq.js", () => ({ quote: vi.fn(), history: vi.fn() }));
 vi.mock("../providers/calendars.js", () => ({ econEvents: vi.fn() }));
-vi.mock("./us-listing.js", async (orig) => ({ ...(await orig<object>()), lookup: vi.fn() }));
 vi.mock("../providers/fmp.js", async (orig) => ({
   ...(await orig<object>()),
   isConfigured: vi.fn(),
@@ -46,7 +45,6 @@ let ecb: typeof import("../providers/ecb.js");
 let stooq: typeof import("../providers/stooq.js");
 let calendars: typeof import("../providers/calendars.js");
 let fmp: typeof import("../providers/fmp.js");
-let usListing: typeof import("./us-listing.js");
 
 beforeAll(async () => {
   tmpDir = mkdtempSync(join(tmpdir(), "openterminal-market-test-"));
@@ -62,7 +60,6 @@ beforeAll(async () => {
   stooq = await import("../providers/stooq.js");
   calendars = await import("../providers/calendars.js");
   fmp = await import("../providers/fmp.js");
-  usListing = await import("./us-listing.js");
   vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new Error("no network in tests"))));
 });
 
@@ -81,7 +78,6 @@ beforeEach(() => {
   vi.mocked(stooq.quote).mockReset().mockRejectedValue(new Error("stooq down"));
   vi.mocked(stooq.history).mockReset().mockRejectedValue(new Error("stooq down"));
   vi.mocked(crypto.quote).mockReset();
-  vi.mocked(usListing.lookup).mockReset().mockResolvedValue(new Map());
 });
 
 type Res = { statusCode: number; body: any; headers: Record<string, string> };
@@ -156,19 +152,35 @@ describe("quote routing", () => {
     expect(body[1]).toMatchObject({ symbol: "USDJPY=X", price: 160, previousClose: 150, source: "ecb" });
   });
 
-  it("prices a foreign listing from FMP when keyed", async () => {
+  it("prices a US OTC name from FMP when keyed", async () => {
     vi.mocked(fmp.isConfigured).mockReturnValue(true);
-    vi.mocked(fmp.quotes).mockResolvedValue(new Map([["0700.HK", { symbol: "0700.HK", price: 600, name: "Tencent" } as any]]));
-    const { body } = await call("/quotes", { query: { symbols: "0700.HK" } });
+    vi.mocked(fmp.quotes).mockResolvedValue(new Map([["PRYMY", { symbol: "PRYMY", price: 30, name: "Prysmian" } as any]]));
+    const { body } = await call("/quotes", { query: { symbols: "PRYMY" } });
     expect(stooq.quote).not.toHaveBeenCalled();
-    expect(body).toEqual([expect.objectContaining({ symbol: "0700.HK", price: 600, name: "Tencent", source: "fmp", marketCap: null })]);
+    expect(body).toEqual([expect.objectContaining({ symbol: "PRYMY", price: 30, name: "Prysmian", source: "fmp", marketCap: null })]);
   });
 
-  it("falls back to Stooq for a foreign listing without FMP", async () => {
-    vi.mocked(stooq.quote).mockResolvedValue(quote("7203.T", 2_500, "stooq"));
-    const { body } = await call("/quotes", { query: { symbols: "7203.T" } });
+  it("falls back to Stooq for a US OTC name without FMP", async () => {
+    vi.mocked(stooq.quote).mockResolvedValue(quote("IESVF", 25, "stooq"));
+    const { body } = await call("/quotes", { query: { symbols: "IESVF" } });
     expect(fmp.quotes).not.toHaveBeenCalled();
-    expect(body).toEqual([expect.objectContaining({ symbol: "7203.T", price: 2_500, source: "stooq" })]);
+    expect(body).toEqual([expect.objectContaining({ symbol: "IESVF", price: 25, source: "stooq" })]);
+  });
+
+  it("makes no provider call for foreign symbols and leaves them out", async () => {
+    vi.mocked(fmp.isConfigured).mockReturnValue(true);
+    vi.mocked(alpaca.isConfigured).mockReturnValue(true);
+    vi.mocked(alpaca.snapshots).mockResolvedValue({ FRGN: snap(200, 190) });
+    const { body } = await call("/quotes", { query: { symbols: "FRGN,0700.HK,SHOP.TO,2330.TW,SAP.DE" } });
+    expect(body.map((q: { symbol: string }) => q.symbol)).toEqual(["FRGN"]);
+    expect(alpaca.snapshots).toHaveBeenCalledWith(["FRGN"]);
+    expect(fmp.quotes).not.toHaveBeenCalledWith(expect.arrayContaining(["0700.HK"]));
+    expect(stooq.quote).not.toHaveBeenCalled();
+
+    const only = await call("/quotes", { query: { symbols: "7203.T,BHP.AX" } });
+    expect(only.body).toEqual([]);
+    expect(stooq.quote).not.toHaveBeenCalled();
+    expect(alpaca.snapshots).toHaveBeenCalledTimes(1);
   });
 
   it("stops asking for a symbol no source answers for 10 minutes, then tries again", async () => {
@@ -177,38 +189,17 @@ describe("quote routing", () => {
     const t0 = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(t0);
     try {
-      expect((await call("/quotes", { query: { symbols: "NOPE.TO" } })).body).toHaveProperty("error");
-      await call("/quotes", { query: { symbols: "NOPE.TO" } });
+      expect((await call("/quotes", { query: { symbols: "NOPEY" } })).body).toHaveProperty("error");
+      await call("/quotes", { query: { symbols: "NOPEY" } });
       expect(fmp.quotes).toHaveBeenCalledTimes(1);
       expect(stooq.quote).toHaveBeenCalledTimes(1);
 
       clock.mockReturnValue(t0 + 10 * 60_000 + 1);
-      await call("/quotes", { query: { symbols: "NOPE.TO" } });
+      await call("/quotes", { query: { symbols: "NOPEY" } });
       expect(stooq.quote).toHaveBeenCalledTimes(2);
     } finally {
       clock.mockRestore();
     }
-  });
-
-  it("prices a foreign listing FMP refuses from its US listing, labelled as such", async () => {
-    vi.mocked(fmp.isConfigured).mockReturnValue(true);
-    vi.mocked(fmp.quotes).mockRejectedValue(new Error("fmp: 402"));
-    vi.mocked(usListing.lookup).mockResolvedValue(
-      new Map([
-        ["SHOP.TO", { symbol: "SHOP", exchange: "Nasdaq", kind: "interlisted" as const }],
-        ["2330.TW", { symbol: "TSM", exchange: "NYSE", kind: "adr" as const }],
-      ])
-    );
-    vi.mocked(alpaca.snapshots).mockResolvedValue({ SHOP: snap(150, 140), TSM: snap(300, 290) });
-    const { body } = await call("/quotes", { query: { symbols: "SHOP.TO,2330.TW,9999.HK" } });
-    expect(usListing.lookup).toHaveBeenCalledWith(["SHOP.TO", "2330.TW", "9999.HK"]);
-    expect(alpaca.snapshots).toHaveBeenCalledWith(["SHOP", "TSM"]);
-    expect(body).toEqual([
-      expect.objectContaining({ symbol: "SHOP.TO", price: 150, currency: "USD", source: "alpaca", listing: { symbol: "SHOP", exchange: "Nasdaq", kind: "interlisted" } }),
-      expect.objectContaining({ symbol: "2330.TW", price: 300, currency: "USD", listing: { symbol: "TSM", exchange: "NYSE", kind: "adr" } }),
-    ]);
-    // A symbol with no US listing still goes to Stooq.
-    expect(vi.mocked(stooq.quote).mock.calls.map((c) => c[0])).toEqual(["9999.HK"]);
   });
 
   it("falls through Alpaca to Stooq for a US stock Alpaca doesn't answer", async () => {
@@ -230,26 +221,29 @@ describe("history routing", () => {
     expect(body).toEqual(candles);
   });
 
-  it("uses FMP for a foreign listing when keyed, Stooq without", async () => {
+  it("uses FMP for a US OTC name when keyed, Stooq without", async () => {
     vi.mocked(fmp.isConfigured).mockReturnValue(true);
     vi.mocked(fmp.historical).mockResolvedValue(candles);
-    expect((await call("/history/:symbol", { params: { symbol: "SAP.DE" }, query: { range: "1Y" } })).body).toEqual(candles);
-    expect(fmp.historical).toHaveBeenCalledWith("SAP.DE", expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
+    expect((await call("/history/:symbol", { params: { symbol: "PRYMY" }, query: { range: "1Y" } })).body).toEqual(candles);
+    expect(fmp.historical).toHaveBeenCalledWith("PRYMY", expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
 
     vi.mocked(fmp.isConfigured).mockReturnValue(false);
     vi.mocked(stooq.history).mockResolvedValue(candles);
-    expect((await call("/history/:symbol", { params: { symbol: "BMW.DE" }, query: { range: "1Y" } })).body).toEqual(candles);
-    expect(stooq.history).toHaveBeenCalledWith("BMW.DE");
+    expect((await call("/history/:symbol", { params: { symbol: "FANUY" }, query: { range: "1Y" } })).body).toEqual(candles);
+    expect(stooq.history).toHaveBeenCalledWith("FANUY");
   });
 
-  it("charts a foreign listing FMP refuses from its US listing's Alpaca bars, before Stooq", async () => {
+  it("answers 400 for a foreign symbol without asking any provider", async () => {
     vi.mocked(fmp.isConfigured).mockReturnValue(true);
-    vi.mocked(fmp.historical).mockRejectedValue(new Error("fmp: 402"));
-    vi.mocked(usListing.lookup).mockResolvedValue(new Map([["7203.T", { symbol: "TM", exchange: "NYSE", kind: "adr" as const }]]));
-    const { alpacaHistory } = await import("../live/history.js");
-    vi.mocked(alpacaHistory).mockResolvedValue(candles);
-    expect((await call("/history/:symbol", { params: { symbol: "7203.T" }, query: { range: "1M" } })).body).toEqual(candles);
-    expect(alpacaHistory).toHaveBeenCalledWith("TM", "1M");
+    vi.mocked(alpaca.isConfigured).mockReturnValue(true);
+    vi.mocked(fmp.historical).mockClear();
+    vi.mocked(stooq.history).mockClear();
+    for (const symbol of ["7203.T", "SAP.DE", "0700.HK"]) {
+      const res = await call("/history/:symbol", { params: { symbol }, query: { range: "1M" } });
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toEqual({ error: "US-listed symbols only" });
+    }
+    expect(fmp.historical).not.toHaveBeenCalled();
     expect(stooq.history).not.toHaveBeenCalled();
   });
 });

@@ -16,7 +16,7 @@ import { apiGet, fmt, fmtBig, type Candle, type Quote } from "../../lib/api";
 import { sma, ema, vwap, rsi, macd, bollinger, type Point } from "../../lib/indicators";
 import { useWidgetSymbol, type WidgetInstance } from "../../store/terminal";
 import { ExtendedPrices, RegularPrice } from "../SessionPrices";
-import { Freshness, ListingNote } from "./QuoteWidget";
+import { Freshness } from "./QuoteWidget";
 
 const RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"] as const;
 const CHART_TYPES = ["candles", "bars", "line", "area"] as const;
@@ -251,7 +251,6 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
             <span className="dim text-[10px]"><Freshness quote={quote} /></span>
           </span>
           <ExtendedPrices quote={quote} />
-          <ListingNote quote={quote} />
         </div>
       )}
       <div className="flex gap-1 p-1 flex-wrap shrink-0">

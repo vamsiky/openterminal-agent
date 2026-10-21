@@ -12,4 +12,3 @@ out/
 data/*.db*
 data/.api-key
 data/sec-reference.json
-data/us-listings.json

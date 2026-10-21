@@ -13,7 +13,7 @@ vi.mock("../live/feed.js", () => ({
   liveQuote: (_alpaca: string, symbol: string) => ({ symbol, name: null, price: 100, change: 1, source: "alpaca", live: true }),
 }));
 vi.mock("../live/history.js", () => ({ alpacaHistory: vi.fn() }));
-vi.mock("../history/universe.js", () => ({ alpacaSymbol: (s: string) => s, sp500: vi.fn(), nasdaq100: vi.fn() }));
+vi.mock("../history/universe.js", () => ({ alpacaSymbol: (s: string) => s, isForeignSymbol: () => false, sp500: vi.fn(), nasdaq100: vi.fn() }));
 vi.mock("../providers/fmp.js", async (orig) => ({ ...(await orig<object>()), isConfigured: vi.fn(), quotes: vi.fn(), profiles: vi.fn(), ratiosTtm: vi.fn() }));
 vi.mock("../providers/alpaca-assets.js", () => ({ allAssets: vi.fn(), search: vi.fn() }));
 vi.mock("../providers/sec-reference.js", () => ({ reference: vi.fn() }));

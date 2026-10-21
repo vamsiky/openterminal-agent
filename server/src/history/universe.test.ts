@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alpacaSymbol, parseNasdaq100Wikitext, parseSp500Wikitext, parseSymbolDirectory } from "./universe.js";
+import { alpacaSymbol, isForeignSymbol, parseNasdaq100Wikitext, parseSp500Wikitext, parseSymbolDirectory } from "./universe.js";
 
 describe("symbol directory parsing", () => {
   it("reads Nasdaq-listed symbols and skips test issues and the footer", () => {
@@ -84,5 +84,18 @@ describe("alpacaSymbol", () => {
     expect(alpacaSymbol("AAPL")).toBe("AAPL");
     expect(alpacaSymbol("BF.B")).toBe("BF.B");
     for (const s of ["^GSPC", "EURUSD=X", "GC=F", "0700.HK", "BTC-USD", "M&M.NS"]) expect(alpacaSymbol(s)).toBeNull();
+  });
+});
+
+describe("isForeignSymbol", () => {
+  it("flags numeric roots and exchange suffixes of two or more letters", () => {
+    for (const s of ["0700.HK", "2330.TW", "7203.T", "005930.KS", "SHOP.TO", "ASML.AS", "SAP.DE", "NOVO-B.CO", "BHP.AX", "INFY.NS", "RY.TO", "BBD-B.TO", "shop.to"]) {
+      expect(isForeignSymbol(s), s).toBe(true);
+    }
+  });
+  it("leaves US symbols, share classes, crypto, indices and FX alone", () => {
+    for (const s of ["AAPL", "TSM", "BRK.B", "BRK-B", "BF.B", "MKC.V", "PRYMY", "BTC", "BTC-USD", "^VIX", "^GSPC", "EURUSD=X", "GC=F"]) {
+      expect(isForeignSymbol(s), s).toBe(false);
+    }
   });
 });

@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { apiPost, EXTENDED_SESSIONS, fmt, fmtBig, fmtPct, pctClass } from "../../lib/api";
-import { normalizeSymbol } from "../../lib/symbol";
+import { isForeignSymbol, normalizeSymbol, US_ONLY_MESSAGE } from "../../lib/symbol";
 import { fetchQuotes, normalizeListName, WATCHLISTS_CHANGED } from "../../lib/watchlist";
 import { useTerminal } from "../../store/terminal";
 import Flash from "../Flash";
@@ -51,13 +51,14 @@ export default function WatchlistWidget() {
   const importCsv = async (file: File) => {
     setNotice("Importing…");
     try {
-      const result = await apiPost<{ saved: Array<{ name: string }>; skipped: string[] }>("/api/watchlists/import", {
+      const result = await apiPost<{ saved: Array<{ name: string }>; skipped: string[]; skippedSymbols?: string[] }>("/api/watchlists/import", {
         csv: await file.text(),
       });
       window.dispatchEvent(new Event(WATCHLISTS_CHANGED));
       setNotice(
         `Imported ${result.saved.length} watchlists` +
           (result.skipped.length ? `; skipped ${result.skipped.join(", ")}` : "") +
+          (result.skippedSymbols?.length ? `; US-listed symbols only, left out ${result.skippedSymbols.join(", ")}` : "") +
           "."
       );
     } catch (err) {
@@ -108,6 +109,11 @@ export default function WatchlistWidget() {
             setInvalid(true);
             return;
           }
+          if (isForeignSymbol(sym)) {
+            setInvalid(true);
+            setNotice(US_ONLY_MESSAGE);
+            return;
+          }
           addToWatchlist(sym);
           setInput("");
         }}
@@ -117,6 +123,7 @@ export default function WatchlistWidget() {
           onChange={(e) => {
             setInput(e.target.value);
             setInvalid(false);
+            if (notice === US_ONLY_MESSAGE) setNotice(null);
           }}
           placeholder="Add ticker…"
           title={invalid ? "Not a valid ticker symbol" : undefined}

@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { normalizeSymbol } from "../lib/symbol";
+import { isForeignSymbol, normalizeSymbol } from "../lib/symbol";
 
 export type WidgetType =
   | "quote"
@@ -154,7 +154,7 @@ export const useTerminal = create<TerminalState>()(
       setLayout: (layout) => set({ layout }),
       addToWatchlist: (s) => {
         const sym = normalizeSymbol(s);
-        if (!sym) return;
+        if (!sym || isForeignSymbol(sym)) return;
         set((st) => editActive(st, (list) => (list.includes(sym) ? list : [...list, sym])));
       },
       removeFromWatchlist: (s) => set((st) => editActive(st, (list) => list.filter((x) => x !== s))),

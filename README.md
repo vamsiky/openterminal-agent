@@ -97,7 +97,7 @@ Every source below allows automated use under its terms. Results are cached with
 | Crypto board | CoinGecko | — |
 | VIX | FRED | — |
 | FX (`EURUSD=X` …) | ECB reference rates (daily) | — |
-| Foreign listings, other indices | FMP (if keyed) | Stooq |
+| OTC names, other indices | FMP (if keyed) | Stooq (plain US tickers only) |
 | Historical candles | Alpaca bars (US stocks, crypto) | FMP (if keyed) → Stooq |
 | Symbol search | Nasdaq Trader symbol directories + Alpaca crypto pairs | — |
 | Screener / heatmap / sectors | S&P 500 + Nasdaq‑100 (Wikipedia) × Alpaca prices; sector and market cap from FMP (if keyed), else SEC EDGAR (SIC‑derived sector, not GICS) | Europe is not available |
@@ -118,7 +118,7 @@ Every source below allows automated use under its terms. Results are cached with
 | Variable | Unlocks |
 |---|---|
 | `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY` | US stock and ETF prices and charts, crypto, options, news, the heatmap, screener and recap. Without them only Stooq prices, FRED/ECB macro, CoinGecko and the official calendars work. |
-| `FMP_API_KEY` (optional) | [Financial Modeling Prep](https://site.financialmodelingprep.com/developer/docs): quote fundamentals, foreign listings and indices, FMP sectors and market caps, earnings calendar and history, and forecast/actual values on the economic calendar. FMP's Starter plan covers US listings, including quarterly financial statements and trailing‑twelve‑month ratios; analyst estimates are annual only on Starter, batch quotes need Premium, and non‑US exchanges need Premium (UK, Canada) or Ultimate (global). Foreign listings fall back to Stooq. |
+| `FMP_API_KEY` (optional) | [Financial Modeling Prep](https://site.financialmodelingprep.com/developer/docs): quote fundamentals, OTC names and indices, FMP sectors and market caps, earnings calendar and history, and forecast/actual values on the economic calendar. FMP's Starter plan covers US listings, including quarterly financial statements and trailing‑twelve‑month ratios; analyst estimates are annual only on Starter, batch quotes need Premium, and non‑US exchanges need a higher plan. US-listed symbols only. |
 | `FRED_API_KEY` (optional) | Adds FRED's release dates to the economic calendar. |
 | `SEC_EDGAR_CONTACT` | Your email, sent in the User‑Agent that SEC EDGAR and BLS require. Without it insider trades, SEC shares/sectors and the BLS schedule are skipped. |
 
@@ -166,7 +166,7 @@ The stored bars are served read-only at `/api/bars/daily/:symbol?from=YYYY-MM-DD
 - Charts for US tickers come from the stored history plus today's live bar (daily ranges) or Alpaca's intraday bars (1D, 5D, 1M).
 - Prices are split by session. The main price, change and change % are the regular session's (09:30–16:00 New York; the close once it's over). Beside them, in the chart header, the quote panel and the watchlist, come **After hours** (16:00–20:00), **Overnight** (20:00–04:00, Sunday to Thursday nights) and **Pre-market** (04:00–09:30): the latest price in each session since the last regular close, with its change from that close. Overnight prices come from Alpaca's Blue Ocean ATS feed (`boats`) on a second stream connection; set `LIVE_OVERNIGHT=0` to leave it off.
 - The quote panel shows **● Live** while the regular price moves with every trade, **● As of** a time when it doesn't (stream down, market closed), or the source's name. A green dot next to an extended session means that session is on and live.
-- Crypto, VIX, FX, foreign listings, news and options come from the sources in [Data sources](#data-sources). `/api/status` shows the stream's state. Set `LIVE_STREAM=0` to turn it off. Alpaca allows one stream connection per account, so another app using the same keys' stream makes this one fail with error 406.
+- Crypto, VIX, FX, OTC names, news and options come from the sources in [Data sources](#data-sources). `/api/status` shows the stream's state. Set `LIVE_STREAM=0` to turn it off. Alpaca allows one stream connection per account, so another app using the same keys' stream makes this one fail with error 406.
 
 S&P 500 and Nasdaq-100 membership come from Wikipedia. If either source changes format, put one symbol per line in `data/universe/sp500.txt` or `data/universe/nasdaq100.txt` to override it.
 

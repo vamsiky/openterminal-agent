@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { fmpSymbol } from "../providers/fmp.js";
 import { z } from "zod";
 import { tradingDay } from "../history/time.js";
 import { history, nextReportDate, revisions } from "../estimates/store.js";
@@ -15,7 +16,8 @@ estimatesRouter.get("/:symbol", (req, res) => {
   const report = req.query.report === undefined ? undefined : reportSchema.safeParse(req.query.report);
   if (report && !report.success) return res.status(400).json({ error: "report must be YYYY-MM-DD" });
 
-  const sym = symbol.data.toUpperCase();
+  // Snapshots keep FMP's spelling of share classes (BRK-B), so ask for that.
+  const sym = fmpSymbol(symbol.data);
   const today = tradingDay(new Date().toISOString());
   const reportDate = report?.data ?? nextReportDate(sym, today);
   const points = reportDate ? history(sym, reportDate) : [];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSymbol, searchName, symbolsParam } from "./symbol";
+import { isForeignSymbol, normalizeSymbol, searchName, symbolsParam } from "./symbol";
 
 describe("normalizeSymbol", () => {
   it("uppercases and trims", () => {
@@ -30,5 +30,18 @@ describe("searchName", () => {
     expect(searchName("Alphabet Inc. - Class A Common Stock")).toBe("Alphabet Inc.");
     expect(searchName("Bitcoin")).toBe("Bitcoin");
     expect(searchName(null)).toBe("");
+  });
+});
+
+describe("isForeignSymbol", () => {
+  it("flags numeric roots and exchange suffixes of two or more letters", () => {
+    for (const s of ["0700.HK", "2330.TW", "7203.T", "005930.KS", "SHOP.TO", "ASML.AS", "SAP.DE", "NOVO-B.CO", "BHP.AX", "INFY.NS", "RY.TO", "BBD-B.TO"]) {
+      expect(isForeignSymbol(s), s).toBe(true);
+    }
+  });
+  it("leaves US symbols, share classes, crypto, indices and FX alone", () => {
+    for (const s of ["AAPL", "TSM", "BRK.B", "BRK-B", "MKC.V", "BTC-USD", "^VIX", "EURUSD=X"]) {
+      expect(isForeignSymbol(s), s).toBe(false);
+    }
   });
 });

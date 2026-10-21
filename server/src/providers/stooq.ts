@@ -4,11 +4,17 @@ import type { Candle, Quote } from "./types.js";
 // slow or unreachable Stooq mustn't hold the whole request: give up after 4 s.
 const TIMEOUT_MS = 4_000;
 
-/** Map a Yahoo-style symbol to Stooq's convention (US equities get a .us suffix). */
+/**
+ * Map a Yahoo-style symbol to Stooq's convention (US equities get a .us suffix).
+ * A dotted symbol can't be told from an exchange suffix (BRK.B vs VOD.L), so
+ * none is sent: US-listed symbols only.
+ */
 function stooqSymbol(symbol: string): string {
   const s = symbol.toLowerCase();
+  if (s.includes(".")) throw new Error("stooq: US-listed symbols only");
   if (s.startsWith("^")) return s; // indexes share the caret convention
-  if (s.includes(".") || s.includes("=") || s.includes("-")) return s;
+  if (/^[a-z]+-[a-z]$/.test(s)) return s + ".us"; // share class: brk-b.us
+  if (s.includes("=") || s.includes("-")) return s;
   return s + ".us";
 }
 

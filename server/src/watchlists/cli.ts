@@ -14,9 +14,10 @@ if (command === "import") {
     console.error("usage: import <webull export .csv>");
     process.exit(2);
   }
-  const { saved, skipped } = importWebull(readFileSync(file, "utf8"));
+  const { saved, skipped, skippedSymbols } = importWebull(readFileSync(file, "utf8"));
   for (const l of saved) console.log(`${l.name.padEnd(24)} ${l.symbols} symbols`);
   if (skipped.length) console.log(`Skipped (name or symbols not accepted): ${skipped.join(", ")}`);
+  if (skippedSymbols.length) console.log(`Skipped (US-listed symbols only): ${skippedSymbols.join(", ")}`);
   console.log(`Imported ${saved.length} watchlists.`);
 } else if (command === "list") {
   for (const l of listWatchlists()) console.log(`${l.name.padEnd(24)} ${l.symbols.length}  ${l.symbols.slice(0, 8).join(" ")}${l.symbols.length > 8 ? " …" : ""}`);

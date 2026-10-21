@@ -4,6 +4,7 @@ import {
   FmpNotConfigured,
   earnings,
   earningsCalendar,
+  fmpSymbol,
   earningsInfo,
   economicCalendar,
   historical,
@@ -95,6 +96,23 @@ describe("fmp provider", () => {
     const urls = fetchMock.mock.calls.map((c) => String(c[0]));
     expect(urls.filter((u) => u.includes("/batch-quote"))).toHaveLength(1);
     expect(urls.at(-1)).toContain("/quote?symbol=NVDA");
+  });
+
+  it("asks FMP for share classes with a dash and answers under the caller's spelling", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      const sym = new URL(url).searchParams.get("symbol");
+      if (url.includes("/batch-quote")) return fail(402);
+      if (url.includes("/profile")) return ok(sym === "BRK-B" ? [{ symbol: "BRK-B", companyName: "Berkshire Hathaway Inc.", marketCap: 1.15e12, price: 539.8 }] : []);
+      return ok(sym === "BRK-B" ? [{ symbol: "BRK-B", price: 539.8 }] : []);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    expect((await profiles(["BRK.B"])).get("BRK.B")).toMatchObject({ name: "Berkshire Hathaway Inc." });
+    expect((await quotes(["BRK.B"])).get("BRK.B")?.price).toBe(539.8);
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls.every((u) => !u.includes("BRK.B"))).toBe(true);
+    expect(fmpSymbol("brk.b")).toBe("BRK-B");
+    expect(fmpSymbol("AAPL")).toBe("AAPL");
+    expect(fmpSymbol("BRK-B")).toBe("BRK-B");
   });
 
   it("reads average volume and the 52-week range from the profile", async () => {

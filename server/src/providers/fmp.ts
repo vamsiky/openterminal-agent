@@ -1,4 +1,4 @@
-// Financial Modeling Prep (optional, keyed). Static fields, foreign/index
+// Financial Modeling Prep (optional, keyed). Static fields, OTC/index
 // quotes and history, earnings and the economic calendar's forecast/actual.
 //
 // Uses the "stable" API (https://financialmodelingprep.com/stable/...). The
@@ -163,10 +163,22 @@ async function cached<T>(key: string, ttl: number, load: () => Promise<T>): Prom
   return value;
 }
 
+/**
+ * FMP writes share classes with a dash (BRK-B, BF-B) and answers nothing for
+ * the dot form the app uses (BRK.B), checked 2026-10-21.
+ */
+export function fmpSymbol(symbol: string): string {
+  return symbol.trim().toUpperCase().replace(/^([A-Z]+)\.([A-Z])$/, "$1-$2");
+}
+
 async function get(path: string, params: Record<string, string | number | undefined>): Promise<any> {
   const key = requireKey();
   const url = new URL(`${BASE}/${path}`);
-  for (const [k, v] of Object.entries(params)) if (v !== undefined) url.searchParams.set(k, String(v));
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined) continue;
+    const value = k === "symbol" ? fmpSymbol(String(v)) : k === "symbols" ? String(v).split(",").map(fmpSymbol).join(",") : String(v);
+    url.searchParams.set(k, value);
+  }
   url.searchParams.set("apikey", key);
 
   for (let attempt = 0; ; attempt++) {
@@ -312,6 +324,7 @@ export async function quotes(symbols: string[]): Promise<Map<string, FmpQuote>> 
     else missing.push(s);
   }
   if (missing.length === 0) return out;
+  const requested = new Map(missing.map((s) => [fmpSymbol(s), s]));
 
   // A symbol the plan doesn't cover (Starter: non-US) answers 402; skip it
   // rather than failing the others.
@@ -334,7 +347,8 @@ export async function quotes(symbols: string[]): Promise<Map<string, FmpQuote>> 
   if (rows === null) rows = (await mapLimit(missing, one)).flat();
 
   for (const r of rows) {
-    const symbol = String(r?.symbol ?? "").toUpperCase();
+    // Back to the caller's spelling (BRK-B from FMP answers a request for BRK.B).
+    const symbol = requested.get(String(r?.symbol ?? "").toUpperCase()) ?? String(r?.symbol ?? "").toUpperCase();
     if (!symbol) continue;
     const price = num(r.price);
     const marketCap = num(r.marketCap);

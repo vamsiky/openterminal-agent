@@ -19,3 +19,11 @@ export function symbolsParam(symbols: string[]): string {
 export function searchName(name: string | null | undefined): string {
   return (name ?? "").replace(/ - (Common Stock|Class [A-Z] Common Stock|Ordinary Shares)$/i, "");
 }
+
+/** True for a symbol listed outside the US (0700.HK, SHOP.TO); a single-letter suffix is a US share class (BRK.B). US-listed symbols only. */
+export function isForeignSymbol(raw: string): boolean {
+  const s = raw.trim().toUpperCase();
+  return /^\d+[A-Z0-9-]*\./.test(s) || /\.[A-Z]{2,}$/.test(s);
+}
+
+export const US_ONLY_MESSAGE = "US-listed symbols only (e.g. TSM for TSMC)";

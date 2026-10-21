@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useTerminal } from "../store/terminal";
+import WatchlistWidget from "./widgets/WatchlistWidget";
 import CalendarWidget from "./widgets/CalendarWidget";
 import CryptoWidget from "./widgets/CryptoWidget";
 import NewsWidget from "./widgets/NewsWidget";
@@ -52,7 +53,7 @@ describe("QuoteWidget", () => {
     const q = Object.fromEntries(
       ["name", "open", "high", "low", "previousClose", "bid", "ask", "volume", "avgVolume", "marketCap", "pe", "eps", "dividendYield", "week52High", "week52Low", "beta", "sharesOutstanding", "currency", "exchange", "marketState"].map((k) => [k, null])
     );
-    stubApi([["/api/quotes", () => reply([{ ...q, symbol: "0700.HK", price: 400, change: null, changePercent: null, source: "stooq" }])]]);
+    stubApi([["/api/quotes", () => reply([{ ...q, symbol: "PRYMY", price: 400, change: null, changePercent: null, source: "stooq" }])]]);
     const { container } = wrap(<QuoteWidget widget={widget} />);
     await screen.findByText("Stooq");
     expect(container.textContent).not.toMatch(/NaN|undefined/i);
@@ -152,5 +153,22 @@ describe("CryptoWidget", () => {
     wrap(<CryptoWidget />);
     fireEvent.click(await screen.findByText("SOL"));
     expect(useTerminal.getState().activeSymbol).toBe("SOL-USD");
+  });
+});
+
+describe("WatchlistWidget", () => {
+  it("refuses a foreign symbol with the US-only message and adds a US one", async () => {
+    stubApi([["/api/", () => reply([])]]);
+    useTerminal.setState({ watchlists: [{ name: "default", symbols: [] }], activeWatchlist: "default", watchlist: [] });
+    wrap(<WatchlistWidget />);
+    const input = screen.getByPlaceholderText("Add ticker…");
+    fireEvent.change(input, { target: { value: "shop.to" } });
+    fireEvent.submit(input.closest("form")!);
+    await screen.findByText("US-listed symbols only (e.g. TSM for TSMC)");
+    expect(useTerminal.getState().watchlist).toEqual([]);
+
+    fireEvent.change(input, { target: { value: "tsm" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(useTerminal.getState().watchlist).toEqual(["TSM"]);
   });
 });

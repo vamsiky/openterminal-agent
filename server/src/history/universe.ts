@@ -133,10 +133,21 @@ export async function nasdaq100(): Promise<string[]> {
 /**
  * Map a Yahoo-style ticker to Alpaca's stock symbol, or null when Alpaca has
  * no US stock bars for it: share classes use a dot (BRK-B → BRK.B), and
- * indices (^GSPC), FX (EURUSD=X), futures (GC=F), foreign listings (0700.HK)
+ * indices (^GSPC), FX (EURUSD=X), futures (GC=F)
  * and crypto pairs (BTC-USD) are not US stocks.
  */
 export function alpacaSymbol(raw: string): string | null {
   const s = raw.toUpperCase().replace(/^([A-Z]+)-([A-Z])$/, "$1.$2");
   return /^[A-Z][A-Z0-9]{0,6}(\.[A-Z])?$/.test(s) ? s : null;
+}
+
+/**
+ * True for a symbol listed outside the US: a numeric root with a dot suffix
+ * (0700.HK, 7203.T) or an exchange suffix of two or more letters (SHOP.TO,
+ * NOVO-B.CO). A single-letter suffix is a US share class (BRK.B, MKC.V).
+ * US-listed symbols only.
+ */
+export function isForeignSymbol(raw: string): boolean {
+  const s = raw.trim().toUpperCase();
+  return /^\d+[A-Z0-9-]*\./.test(s) || /\.[A-Z]{2,}$/.test(s);
 }
