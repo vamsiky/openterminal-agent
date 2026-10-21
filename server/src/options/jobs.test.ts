@@ -68,7 +68,7 @@ describe("startOptionsJobs", () => {
         openInterest: async () => new Map<string, number>(),
       }
     );
-    expect(h.status()).toMatchObject({ connected: false, subscribed: 0, lastError: null, lastSweep: null });
+    expect(h.status()).toMatchObject({ connected: false, subscribed: 0, lastError: null, lastSweep: null, rejectedSymbols: [] });
     const result = await h.sweepNow();
     expect(result?.underlyings).toBe(1);
     expect(h.status().lastSweep).toMatchObject({ underlyings: 1, errors: 0 });

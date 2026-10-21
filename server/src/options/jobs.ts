@@ -3,6 +3,7 @@ import { tradingDay } from "../history/time.js";
 import { ensureCalendar, isTradingDay, sessionClose, sessionOpen } from "../providers/alpaca-calendar.js";
 import * as alpaca from "../providers/alpaca.js";
 import type { OptionMetrics, OptionsDeps } from "../scan/contracts.js";
+import { rejectedFor } from "./open-interest.js";
 import { createOpraStream, type OpraStream } from "./opra-stream.js";
 import { latestOptionMetrics, pruneOptionBars } from "./store.js";
 import { runSweep, type SweepDeps, type SweepResult } from "./sweep.js";
@@ -53,6 +54,8 @@ function statusOf(stream: OpraStream, enabled: boolean, lastSweep: SweepSummary 
     // The sweep's error shows when the stream has none, so one field tells the widget something is wrong.
     lastError: s.lastError ?? lastSweep?.lastError ?? null,
     sweepEnabled: enabled,
+    /** Underlyings Alpaca rejected today; skipped by the sweep and the open-interest fetch. */
+    rejectedSymbols: [...rejectedFor(tradingDay(Date.now() / 1000))],
     sweeping,
     lastSweep,
   };
