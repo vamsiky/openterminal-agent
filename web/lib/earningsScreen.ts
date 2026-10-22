@@ -27,7 +27,7 @@ export type Verdict = "candidate" | "conditional" | "pass";
 
 export type EarningsSetup = {
   symbol: string; name: string | null; sector: string | null; industry: string | null; marketCap: number | null;
-  upcoming: { reportDate: string; time: ReportTime | null; timeSource: "fmp" | "press_release" | null; fmpConfirmed: boolean | null;
+  upcoming: { reportDate: string; time: ReportTime | null; timeSource: "fmp" | "press_release" | null; timeBasis?: "upcoming" | "history" | "press_release" | null; fmpConfirmed: boolean | null;
               t0: string; epsEstimate: number | null; revenueEstimate: number | null; fiscalPeriod: string | null };
   horizon: Horizon; asOf: string;
   score: number; verdict: Verdict;

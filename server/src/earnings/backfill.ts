@@ -8,13 +8,17 @@ import { backfillOptions } from "./option-paths.js";
 import { rebuildStats } from "./stats.js";
 import { refreshAnalystActions, refreshUpcoming } from "./upcoming.js";
 import { processSymbol, type StoredEvent, type SymbolResult } from "./events.js";
+import { markComplete, markPhaseDone, markPhaseStart, markRunStart } from "./progress.js";
 import { earningsUniverse } from "./universe.js";
 import { ensureCalendarRange } from "./sessions.js";
 import { buildStockPaths } from "./stock-paths.js";
 
 // Usage (from the repo root):
-//   npm run backfill-earnings -w server -- [--symbols A,B] [--phase events|stock|options|all] [--since 2017-01-01]
+//   npm run backfill-earnings -w server -- [--symbols A,B] [--phase events|stock|options|upcoming|all] [--since 2017-01-01]
 // (the options phase never goes back past 2024-02-01, where Alpaca's option history starts)
+// upcoming: only the upcoming-calendar refresh (report times and their basis); no Alpaca key needed.
+// --mark-complete: one-off for a database whose backfill finished before phase markers existed; verifies
+//   the progress rows (each task at least 99% of the largest, no error rows) and writes the markers.
 // events: FMP per-symbol earnings history, confirmed and stored in earnings.db.
 // stock:  anchors from daily_bars plus 15-minute SIP bars (one multi-symbol request per date).
 // options: historical option paths (option-paths.ts). After any completed run the pooled stats are rebuilt.
@@ -23,7 +27,7 @@ import { buildStockPaths } from "./stock-paths.js";
 // Request caps: EARNINGS_BACKFILL_ALPACA_PER_MIN (default 2500) and EARNINGS_BACKFILL_FMP_PER_MIN
 // (default 1500), so the live sweep keeps headroom under Alpaca's 5,000/min.
 
-export type Phase = "events" | "stock" | "options" | "all";
+export type Phase = "events" | "stock" | "options" | "upcoming" | "all";
 export const DEFAULT_SINCE = "2017-01-01";
 export const OPTIONS_FLOOR = "2024-02-01";
 
@@ -129,11 +133,21 @@ export function applyCaps(): void {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes("--mark-complete")) {
+    const r = markComplete(earningsDb);
+    log(`marked the backfill complete: ${JSON.stringify(r)}`);
+    return;
+  }
   if (!fmpConfigured()) throw new Error("FMP_API_KEY is not set");
+  if (arg("phase") === "upcoming") {
+    const up = await refreshUpcoming(tradingDay(new Date().toISOString()));
+    log(`[upcoming] ${JSON.stringify(up)}`);
+    return;
+  }
   if (!alpacaConfigured()) throw new Error("ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY are not set");
   applyCaps();
   const phase = (arg("phase") ?? "all") as Phase;
-  if (!["events", "stock", "options", "all"].includes(phase)) throw new Error("--phase must be events, stock, options or all");
+  if (!["events", "stock", "options", "all"].includes(phase)) throw new Error("--phase must be events, stock, options, upcoming or all");
   const since = arg("since") ?? DEFAULT_SINCE;
   const explicit = arg("symbols");
   const symbols = explicit ? explicit.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) : await earningsUniverse();
@@ -142,18 +156,32 @@ async function main(): Promise<void> {
   log(`earnings backfill: phase=${phase} since=${since} symbols=${symbols.length}${explicit ? " (explicit, redone)" : ""} alpaca=${process.env.ALPACA_MAX_REQ_PER_MIN}/min fmp=${process.env.FMP_MAX_REQ_PER_MIN}/min`);
   await ensureCalendarRange(Number(since.slice(0, 4)) - 1, Number(today.slice(0, 4)) + 1);
 
+  // Markers record the finished phases for /status. A run that names symbols is partial, so it leaves them alone.
+  // Symbols that list after a run starts are not part of it; the nightly job picks them up.
+  const track = !explicit;
+  if (track && phase === "all") markRunStart(earningsDb, symbols.length);
+  const begin = (p: "events" | "stock" | "options") => track && markPhaseStart(earningsDb, p, symbols.length);
+  // A phase with error rows is not finished: no marker, so /status keeps showing it until a re-run clears them.
+  const end = (p: "events" | "stock" | "options", errors: number) => track && errors === 0 && markPhaseDone(earningsDb, p);
+
   if (phase === "events" || phase === "all") {
+    begin("events");
     const { totals } = await runEvents(symbols, { since, today, force });
+    end("events", totals.errors);
     log(`[events] done: ${JSON.stringify(totals)}`);
   }
   if (phase === "stock" || phase === "all") {
+    begin("stock");
     const totals = await runStock(symbols, { today, force });
+    end("stock", totals.errors);
     log(`[stock] done: ${JSON.stringify(totals)}`);
   }
   if (phase === "options" || phase === "all") {
     const optSince = optionsSince(since);
     log(`[options] since ${optSince}${optSince !== since ? ` (floor: Alpaca option history starts ${OPTIONS_FLOOR}; --since ${since} applies to events and stock only)` : ""}`);
+    begin("options");
     const r = await backfillOptions(symbols, { since: optSince });
+    end("options", r.errors);
     log(`[options] done: ${JSON.stringify(r)}`);
   }
   if (phase === "all") {

@@ -34,7 +34,7 @@ The stock side covers every US-listed common stock in `bulk_profiles` (NYSE, NAS
 
 - **Report time `time`:** `bmo` (before the open), `amc` (after the close), `dmh` (during market hours) or `null`.
 - **`timeSource`:** `fmp` when FMP gives the time, `press_release` when the time is inferred from a press release, `null` when neither is known.
-- **`timeBasis`** (optional, on `/calendar` and `EarningsSetup.upcoming`): how the time was obtained. `upcoming` is the upcoming row's own FMP time (`timeSource` `fmp`). `history` is the majority of the name's past FMP report times, used when the upcoming row's time is null; `timeSource` stays `press_release` for these rows, so the frozen union is unchanged. `press_release` is a time inferred from a press release. `null` when there is no time.
+- **`timeBasis`** (optional, on `/calendar` and `EarningsSetup.upcoming`): how the time was obtained, stored in `upcoming.time_basis` by `refreshUpcoming`. `upcoming` is the upcoming row's own FMP time (`timeSource` `fmp`). `history` is the majority of the name's past FMP report times, used when the upcoming row's time is null (`timeSource` is still `fmp`, because the time came from FMP). `press_release` is a time inferred from a press release (`timeSource` `press_release`). `null` when there is no time, or on rows written before the column existed (the next upcoming refresh fills it).
 - `dmh` comes only from press-release inference (a release time between 09:30 and 16:00 ET).
 - **T0**, the last full session before the announcement. **R**, the reaction session, the first session after the announcement.
 
@@ -127,7 +127,7 @@ All tables live in `data/earnings.db` (under `DATA_DIR`, in WAL mode). The file 
 | --- | --- | --- |
 | `events` | `(symbol, report_date)` | One row per FMP report: time and its source, T0, R, fiscal fields, EPS and revenue actual and estimate, the four checks, `confirmed`, `reason`, FMP's own `confirmed` flag, and `original_date` when the date was shifted |
 | `stock_paths` | `(symbol, report_date)` | One column per stock anchor (`t0_m20` … `r_p20`, `t0_1000`, `t0_1545`), plus `prev_close`, `r_volume_ratio` (R's volume over the 20-session median), `atr14_pct` |
-| `upcoming` | `(symbol, report_date)` | The next 120 days of the FMP calendar for US-listed names, with report time, T0, R and estimates. Replaced on each nightly refresh when every window fetched. |
+| `upcoming` | `(symbol, report_date)` | The next 120 days of the FMP calendar for US-listed names, with report time, `time_source`, `time_basis`, T0, R and estimates. Replaced on each nightly refresh when every window fetched. |
 | `analyst_actions` | `(symbol, date, firm, action)` | Grade changes and price-target moves from the last 90 days. Price-target rows have the action `pt_raise`, `pt_cut`, `pt_set` or `pt_maintain`. |
 | `option_paths` | `(symbol, report_date, entry, expiry_kind, leg)` | One `OptionLegPath` per leg. `prices` is JSON keyed by anchor. |
 | `option_ladder_bars` | `(occ, day)` | Daily bars of the strike ladder, from 25 sessions before T0 to the session after R. Kept so windows can be recomputed without another fetch. |
@@ -165,7 +165,8 @@ Flags:
 
 | Flag | Values | Default |
 | --- | --- | --- |
-| `--phase` | `events`, `stock`, `options`, `all` | `all` |
+| `--phase` | `events`, `stock`, `options`, `upcoming`, `all` | `all` |
+| `--mark-complete` | flag; no other options | off |
 | `--symbols` | comma-separated tickers | every US-listed name in `bulk_profiles` |
 | `--since` | `YYYY-MM-DD` | `2017-01-01` |
 
@@ -175,9 +176,22 @@ What each phase does, in order:
 2. **stock.** Builds the stock paths for the stored events, in passes of up to 1,500 symbols. Each pass fetches the 15-minute bars one date at a time, several symbols per request.
 3. **options.** For each symbol's confirmed events from `--since` on, lists the contracts, fetches the daily ladder and the intraday bars, and writes the option legs. Six symbols run at once.
 4. **upcoming and analyst (only with `--phase all`).** Fills the upcoming calendar and the analyst actions.
+   `--phase upcoming` runs only the upcoming-calendar refresh (it needs the FMP key only), for refreshing report times and their basis without the nightly job.
 5. **stats.** Rebuilds every `stats` scope. This runs after every run, whatever the phase.
 
 **Warning on `--since` and the options phase.** The options phase uses the same `--since` value as the events phase. The default `2017-01-01` therefore asks Alpaca for contracts and bars for events back to 2017. Alpaca's option bars start around February 2024, so the earlier requests return nothing. Pass `--since 2024-02-01` for the options phase, or run the phases separately.
+
+### Phase markers and `--mark-complete`
+
+A run without `--symbols` records `backfill_progress` markers: task `run` (symbol `all`, `updated_at` = run start, detail has the universe size, written by `--phase all`) and task `phase` (symbol `events`, `stock` or `options`; status `running` while the phase works, `done` with the finish time when it ends with no error rows). `/status` reads these: a phase that has started without its `done` marker is the running phase, and the backfill is `done` when all three markers are newer than the run start. The universe changes daily as listings change, so the per-task symbol counts can differ by a few names; that does not matter to the markers. Names that list later are covered by the nightly job.
+
+A database whose backfill finished before the markers existed has none, and `/status` falls back to counts (a task at 99% of the largest count, and no error rows, is complete). To write the markers once for such a database:
+
+```sh
+npm run backfill-earnings -w server -- --mark-complete
+```
+
+It verifies that each of the three tasks has at least 99% of the largest done count and no error rows, then writes the markers (run start = the earliest progress row, phase finish = the latest row of each task). It fails with the reason otherwise, and writes nothing.
 
 ### Resume and re-runs
 
@@ -528,14 +542,14 @@ curl -s -H "x-api-key: $KEY" "$B/api/earnings/status"
 
 ```json
 {
-  "backfill": { "phase": "options", "symbolsDone": 1200, "symbolsTotal": 4800, "eventsStored": 61000, "eventsConfirmed": 52000, "optionEvents": 18000, "startedAt": "...", "updatedAt": "...", "errors": 3 },
+  "backfill": { "phase": "options", "phases": { "events": { "done": 4800, "total": 4800, "finishedAt": "..." }, "stock": { "done": 4800, "total": 4800, "finishedAt": "..." }, "options": { "done": 1200, "total": 4800, "finishedAt": null } }, "symbolsDone": 1200, "symbolsTotal": 4800, "eventsStored": 61000, "eventsConfirmed": 52000, "optionEvents": 18000, "startedAt": "...", "updatedAt": "...", "errors": 3 },
   "nightly": { "lastRun": "2026-10-21T22:30:04.000Z", "newEvents": 14 },
   "snapshots": { "lastRun": "2026-10-22T14:30:02.000Z", "namesTracked": 420, "rowsToday": 812 },
   "db": { "sizeBytes": 123456789 }
 }
 ```
 
-The numbers above are placeholders. `phase` is the latest backfill phase recorded: `options` if any options rows exist, else `stock`, else `events`, else `idle`.
+The numbers above are placeholders. `phase` is `idle` before any backfill, the running or first unfinished phase (`events`, `stock` or `options`), or `done`. It comes from the completion markers (see Phase markers); without markers it falls back to the done counts. `phases` gives `{ done, total, finishedAt }` for each of `events`, `stock` and `options` (`total` is the universe size at the run, never below `done`; `finishedAt` is null until the phase's marker is newer than the run start).
 
 ### `POST /review`
 

@@ -4,9 +4,8 @@ import { nyClock } from "../history/scheduler.js";
 import { greeks, riskFreeRate, yearsToExpiry } from "../options/black-scholes.js";
 import { chain as liveChain, expirations as liveExpirations } from "../providers/alpaca-options.js";
 import { isTradingDay, sessionClose } from "../providers/alpaca-calendar.js";
-import type { CapBucket, EarningsSetup, EventStats, Gate, Horizon, ReportTime, ScoreComponent } from "./contracts.js";
+import type { CapBucket, EarningsSetup, EventStats, Gate, Horizon, ReportTime, ScoreComponent, TimeBasis } from "./contracts.js";
 import { earningsDb } from "./db.js";
-import { timeBasisOf } from "./upcoming.js";
 import { ALL_KEY, capBucket, capKey, median, poolKey, symKey } from "./stats.js";
 import { BANDS, EARNINGS_WEIGHTS_VERSION, GATES, LOW_VOLUME_PENALTY, SETUP, WEIGHTS, type HorizonWeights } from "./weights.js";
 
@@ -295,7 +294,7 @@ export function scoreSetup(i: ScoreInputs): EarningsSetup {
 // ---- loading ----
 
 export type UpcomingRow = {
-  symbol: string; report_date: string; time: ReportTime | null; time_source: "fmp" | "press_release" | null; t0: string | null; r: string | null;
+  symbol: string; report_date: string; time: ReportTime | null; time_source: "fmp" | "press_release" | null; time_basis: TimeBasis | null; t0: string | null; r: string | null;
   fiscal_period: string | null; eps_estimate: number | null; revenue_estimate: number | null; fmp_confirmed_flag: number | null;
 };
 type Profile = { name: string | null; sector: string | null; industry: string | null; marketCap: number | null };
@@ -509,7 +508,7 @@ export function gather(rows: UpcomingRow[], horizon: Horizon, now = new Date()):
       sector: p?.sector ?? null,
       industry: p?.industry ?? null,
       marketCap: p?.marketCap ?? null,
-      upcoming: { reportDate: row.report_date, time: row.time, timeSource: row.time_source, timeBasis: timeBasisOf(row.symbol, row.time, row.time_source), fmpConfirmed: row.fmp_confirmed_flag === null ? null : row.fmp_confirmed_flag === 1, t0: row.t0 ?? row.report_date, epsEstimate: row.eps_estimate, revenueEstimate: row.revenue_estimate, fiscalPeriod: row.fiscal_period },
+      upcoming: { reportDate: row.report_date, time: row.time, timeSource: row.time_source, timeBasis: row.time ? row.time_basis ?? null : null, fmpConfirmed: row.fmp_confirmed_flag === null ? null : row.fmp_confirmed_flag === 1, t0: row.t0 ?? row.report_date, epsEstimate: row.eps_estimate, revenueEstimate: row.revenue_estimate, fiscalPeriod: row.fiscal_period },
       horizon,
       asOf,
       price: snap?.event?.spot ?? snap?.next?.spot ?? t.close,
@@ -547,7 +546,7 @@ export function nextSession(now = new Date()): string {
   return day;
 }
 
-const UPCOMING_COLS = "symbol, report_date, time, time_source, t0, r, fiscal_period, eps_estimate, revenue_estimate, fmp_confirmed_flag";
+const UPCOMING_COLS = "symbol, report_date, time, time_source, time_basis, t0, r, fiscal_period, eps_estimate, revenue_estimate, fmp_confirmed_flag";
 
 /** Upcoming rows that match the date window (by report date or T0), one per symbol (the earliest). */
 export function upcomingRows(p: { from?: string; to?: string; symbols?: string[]; time?: ReportTime }, now = new Date()): UpcomingRow[] {

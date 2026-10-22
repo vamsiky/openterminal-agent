@@ -123,7 +123,7 @@ describe("other reads", () => {
     expect((await get("/setup/RNG?horizon=bad")).status).toBe(400);
   });
   it("GET /setup falls back to a live chain only here, when no snapshot exists", async () => {
-    m.edb.prepare("INSERT INTO upcoming (symbol, report_date, time, time_source, t0, r) VALUES ('LIVE','2026-10-22','amc','fmp','2026-10-22','2026-10-23')").run();
+    m.edb.prepare("INSERT INTO upcoming (symbol, report_date, time, time_source, time_basis, t0, r) VALUES ('LIVE','2026-10-22','amc','fmp','history','2026-10-22','2026-10-23')").run();
     const s = await m.score.setupFor("LIVE", "intraday", {
       now: m.seed.NOW,
       live: async () => ({ price: 50, candidates: [{ kind: "event", leg: "atm_call", occ: "LIVE261023C00050000", expiry: "2026-10-23", strike: 50, bid: 1, ask: 1.04, iv: 0.5, delta: 0.5, volume: 90, openInterest: 10 }] }),
@@ -137,6 +137,7 @@ describe("other reads", () => {
   it("GET /calendar", async () => {
     const { body } = await get("/calendar?from=2026-10-22&to=2026-10-22&time=amc");
     expect(body.length).toBeGreaterThan(7);
+    expect(body.find((r: any) => r.symbol === "LIVE")).toMatchObject({ timeSource: "fmp", timeBasis: "history" });
     const rng = body.find((r: any) => r.symbol === "RNG");
     expect(rng).toMatchObject({ reportDate: "2026-10-22", time: "amc", timeSource: "fmp", optionable: true, tradable: true });
     expect(rng.lastReport.reactionPct).toBeCloseTo(25.09, 1);
@@ -176,6 +177,12 @@ describe("other reads", () => {
     mark("options", 4);
     expect((await get("/status")).body.backfill.phase).toBe("options");
     mark("options", 10);
+    expect((await get("/status")).body.backfill.phase).toBe("done");
+    m.edb.prepare("DELETE FROM backfill_progress").run();
+    // The options-retry run saw one more listed name than events and stock: still done at 99%, and with markers.
+    mark("events", 1000);
+    mark("stock", 1000);
+    mark("options", 1001);
     expect((await get("/status")).body.backfill.phase).toBe("done");
     m.edb.prepare("DELETE FROM backfill_progress").run();
     expect(body.snapshots.namesTracked).toBe(127);

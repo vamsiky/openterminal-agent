@@ -318,7 +318,7 @@ export default function EarningsTab({ agents }: { agents: AgentsStatus | undefin
                         <td style={{ textAlign: "left", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis" }}>{s.name ?? "—"}</td>
                         <td style={{ textAlign: "left" }} className="dim">{s.sector ?? "—"}</td>
                         <td>{s.marketCap === null ? "—" : fmtBig(s.marketCap)}</td>
-                        <td title={s.upcoming.timeSource ? `Source: ${s.upcoming.timeSource}` : "Time unknown"}>{s.upcoming.time ? TIME_LABEL[s.upcoming.time] : "?"}</td>
+                        <td title={s.upcoming.timeSource ? `Source: ${s.upcoming.timeSource}${s.upcoming.timeBasis ? ` (${s.upcoming.timeBasis})` : ""}` : "Time unknown"}>{s.upcoming.time ? TIME_LABEL[s.upcoming.time] : "?"}</td>
                         <td>{fmt(s.score, 0)}</td>
                         <td><span className={`${chipClass(s.verdict)} border border-current px-1`}>{s.verdict}</span></td>
                         <td>{s.contract ? `${contractLabel(s.contract.occ)} · ${s.contract.spreadPct === null ? "—" : fmt(s.contract.spreadPct, 1) + "%"}` : <span className="dim">no options</span>}</td>
