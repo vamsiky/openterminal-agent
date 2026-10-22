@@ -281,10 +281,10 @@ Each horizon's maxima add to 100.
 
 The score is for one contract, chosen by `chooseContract`:
 
-- **Intraday and week:** the lowest-spread call among the event-expiry legs (`atm_call` and `otm_call`). If there are no event-expiry legs, all legs are used.
-- **Month:** the first expiry at least 25 calendar days after the entry date (the snapshot date). The lowest-spread leg of that expiry is chosen.
+- **Intraday and week:** the pool is the event-expiry legs (`atm_call` and `otm_call`). If there are no event-expiry legs, all legs are used.
+- **Month:** the pool is the first expiry at least 25 calendar days after the entry date (the snapshot date).
 
-The spread is `(ask − bid) ÷ mid`, in percent. A tie goes to the higher volume.
+From the pool, legs that pass both the spread gate and the volume gate (two-sided quote, spread at most 15%, volume at least 50) are preferred, and the lowest spread among them wins. If no leg passes both, the lowest-spread leg is chosen. The spread is `(ask − bid) ÷ mid`, in percent. A tie goes to the higher volume.
 
 ### Tradability (`tradability`)
 
