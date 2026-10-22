@@ -43,7 +43,7 @@ const SPOT_COLUMN: Record<string, string> = {
   "T0-20": "t0_m20", "T0-10": "t0_m10", "T0-5": "t0_m5", "T0-2": "t0_m2", "T0-1": "t0_m1", "T0:10:00": "t0_1000", "T0:open": "t0_open", "T0:close": "t0_close",
 };
 
-export type Stats = { requests: number };
+export type Stats = { requests: number; listing?: number };
 export type EventRef = { symbol: string; reportDate: string };
 type EventRow = { symbol: string; report_date: string; t0: string; r: string };
 type Bar = OptionDayBar;
@@ -265,7 +265,8 @@ async function ensureYears(...days: string[]): Promise<void> {
   for (const y of new Set(days.map((d) => Number(d.slice(0, 4))))) await ensureCalendar(y);
 }
 
-const quarterOf = (day: string): string => `${day.slice(0, 4)}Q${Math.floor((Number(day.slice(5, 7)) - 1) / 3) + 1}`;
+// The trading API is the slowest endpoint (a few hundred requests a minute), so listings are per calendar year of R.
+const chunkOf = (day: string): string => day.slice(0, 4);
 
 /** Strike range for a stretch of days: daily_bars low/high with a wide margin, else the event spots. */
 function strikeBand(symbol: string, from: string, to: string, spots: number[]): [number, number] {
@@ -281,9 +282,10 @@ function strikeBand(symbol: string, from: string, to: string, spots: number[]): 
   return [lo, hi];
 }
 
-/** Contracts of a symbol for the events of one expiry quarter: one listing (all pages) per status, not one per event. */
+/** Contracts of a symbol for the events of one year: one listing (all pages) per status, not one per event. */
 async function listChunk(symbol: string, evs: EventInput[], stats: Stats): Promise<OptionContract[]> {
   const spots = evs.flatMap(spotsOf);
+  const own: Stats = { requests: 0 };
   const [lo, hi] = strikeBand(symbol, addSessions(evs[0].t0, -25), addSessions(evs[evs.length - 1].r, 1), spots);
   const base = {
     underlying: symbol,
@@ -293,10 +295,12 @@ async function listChunk(symbol: string, evs: EventInput[], stats: Stats): Promi
     strikeLte: Math.ceil(hi),
   };
   const today = new Date().toISOString().slice(0, 10);
-  const inactive = await listContracts({ ...base, status: "inactive" }, stats, 30, false);
-  const active = base.expiryLte >= today ? await listContracts({ ...base, status: "active" }, stats, 30, false) : [];
+  const inactive = await listContracts({ ...base, status: "inactive" }, own, 30, false);
+  const active = base.expiryLte >= today ? await listContracts({ ...base, status: "active" }, own, 30, false) : [];
   const seen = new Map<string, OptionContract>();
   for (const c of [...inactive, ...active]) seen.set(c.occ, c);
+  stats.requests += own.requests;
+  stats.listing = (stats.listing ?? 0) + own.requests;
   return [...seen.values()];
 }
 
@@ -419,7 +423,7 @@ type SymbolOutcome = { legs: Map<string, number>; failed: Set<string> };
 
 /**
  * Fetch and build the option paths of several events of one symbol. Contract
- * listings are per expiry quarter, ladder bars are shared across events, and
+ * listings are per year of R, ladder bars are shared across events, and
  * an event whose requests failed is reported in `failed` and not written.
  */
 async function processSymbolEvents(symbol: string, evs: EventInput[], neighbors: number | "all", stats: Stats): Promise<SymbolOutcome> {
@@ -428,7 +432,7 @@ async function processSymbolEvents(symbol: string, evs: EventInput[], neighbors:
   await ensureYears(addDays(evs[0].t0, -45), addDays(evs[evs.length - 1].r, 3));
   const chunks = new Map<string, EventInput[]>();
   for (const ev of [...evs].sort((a, b) => a.r.localeCompare(b.r))) {
-    const q = quarterOf(ev.r);
+    const q = chunkOf(ev.r);
     if (!chunks.has(q)) chunks.set(q, []);
     chunks.get(q)!.push(ev);
   }
@@ -490,7 +494,8 @@ export async function backfillOptions(
   symbols: string[],
   opts: { since?: string; ladderNeighbors?: number | "all"; concurrency?: number } = {}
 ): Promise<{ events: number; legs: number; requests: number; errors: number }> {
-  const since = opts.since ?? DEFAULT_SINCE;
+  // Alpaca has no option bars before Feb 2024, so earlier events are never tried whatever `since` says.
+  const since = opts.since && opts.since > DEFAULT_SINCE ? opts.since : DEFAULT_SINCE;
   const stats: Stats = { requests: 0 };
   let events = 0;
   let legs = 0;
@@ -515,6 +520,7 @@ export async function backfillOptions(
     }
     mark.run(TASK, symbol, failed ? "error" : "done", JSON.stringify({ through: rows.length ? rows[rows.length - 1].report_date : (through ?? null), failed }));
   });
+  console.log(`[option-paths] requests=${stats.requests} (contract listings ${stats.listing ?? 0}, bars ${stats.requests - (stats.listing ?? 0)}) events=${events} legs=${legs} errors=${errors}`);
   return { events, legs, requests: stats.requests, errors };
 }
 

@@ -14,6 +14,7 @@ beforeAll(async () => {
   process.env.ALPACA_API_KEY_ID = "test";
   process.env.ALPACA_API_SECRET_KEY = "test";
   process.env.ALPACA_MAX_REQ_PER_MIN = "1000000";
+  process.env.TRADING_MAX_REQ_PER_MIN = "1000000";
   sn = await import("./snapshots.js");
   edb = await import("./db.js");
   ({ nyInstant } = await import("../live/session.js"));

@@ -18,6 +18,18 @@ const ALLOWED_PATHS = new Set(["/v2/options/contracts", "/v2/calendar"]);
 
 const CONTRACT_STATUSES = new Set(["active", "inactive"]);
 
+// The trading API allows far fewer requests than the data API, so its calls
+// also pass a limiter of their own (TRADING_MAX_REQ_PER_MIN, default 300).
+let tradingSlot = 0;
+async function tradingThrottle(): Promise<void> {
+  const n = Number(process.env.TRADING_MAX_REQ_PER_MIN?.trim() || NaN);
+  const gap = 60_000 / (Number.isFinite(n) && n >= 1 ? n : 300);
+  const now = Date.now();
+  const wait = Math.max(0, tradingSlot - now);
+  tradingSlot = Math.max(now, tradingSlot) + gap;
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+}
+
 let resolvedBase: string | null = null;
 
 /** Test hook: forget which host worked. */
@@ -48,6 +60,7 @@ export async function tradingFetch(path: string, params: Record<string, string |
     const url = new URL(path, bases[b]);
     for (const [k, v] of Object.entries(params)) if (v !== undefined) url.searchParams.set(k, v);
     for (let attempt = 0; ; attempt++) {
+      await tradingThrottle();
       await throttle();
       const res = await fetch(url.toString(), {
         method: "GET",

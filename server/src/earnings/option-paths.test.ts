@@ -17,6 +17,7 @@ beforeAll(async () => {
   process.env.ALPACA_API_KEY_ID = "test";
   process.env.ALPACA_API_SECRET_KEY = "test";
   process.env.ALPACA_MAX_REQ_PER_MIN = "1000000";
+  process.env.TRADING_MAX_REQ_PER_MIN = "1000000";
   op = await import("./option-paths.js");
   trading = await import("../providers/alpaca-trading.js");
   bs = await import("../options/black-scholes.js");
