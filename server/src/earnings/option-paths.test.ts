@@ -207,7 +207,7 @@ describe("paths from bars (pure)", () => {
 describe("backfillOptions with mocked Alpaca", () => {
   const SESSIONS = (() => {
     const out: string[] = [];
-    for (let d = Date.parse("2026-06-10T00:00:00Z"); d <= Date.parse("2026-07-30T00:00:00Z"); d += 86_400_000) {
+    for (let d = Date.parse("2026-06-10T00:00:00Z"); d <= Date.parse("2026-08-28T00:00:00Z"); d += 86_400_000) {
       const dow = new Date(d).getUTCDay();
       if (dow !== 0 && dow !== 6) out.push(new Date(d).toISOString().slice(0, 10));
     }
@@ -218,12 +218,18 @@ describe("backfillOptions with mocked Alpaca", () => {
   const strikes = [90, 92.5, 95, 97.5, 100, 102.5, 105, 107.5, 110];
   const calls: string[] = [];
 
-  function mockAlpaca(opts: { noBarsFor?: string[] } = {}) {
+  function mockAlpaca(opts: { noBarsFor?: string[]; failBars?: boolean; rate429?: number } = {}) {
+    let limited = opts.rate429 ?? 0;
     calls.length = 0;
     vi.stubGlobal("fetch", async (input: string) => {
       const u = new URL(input);
       calls.push(`${u.pathname}?${u.searchParams.get("timeframe") ?? u.searchParams.get("status") ?? ""}`);
       if (u.pathname === "/v2/calendar") return new Response("nope", { status: 500 });
+      if (limited > 0 && u.pathname === "/v2/options/contracts") {
+        limited--;
+        return new Response("slow down", { status: 429, headers: { "retry-after": "0" } });
+      }
+      if (opts.failBars && u.pathname === "/v1beta1/options/bars") return new Response("boom", { status: 500 });
       if (u.pathname === "/v2/options/contracts") {
         const inactive = u.searchParams.get("status") === "inactive";
         const rows = inactive
@@ -242,9 +248,13 @@ describe("backfillOptions with mocked Alpaca", () => {
           if (tf === "1Day") {
             bars[s] = SESSIONS.map((d, i) => ({ t: `${d}T04:00:00Z`, o: base + 0.01 * i, h: base, l: base, c: base + 0.02 * i, v: 50 }));
           } else {
-            const day = new Date(u.searchParams.get("start")!).toISOString().slice(0, 10);
-            // sparse: only the 09:45 and 15:30 bars (start times; EDT = UTC-4)
-            bars[s] = [{ t: `${day}T13:45:00Z`, o: base, h: base, l: base, c: base + 0.5, v: 4 }, { t: `${day}T19:30:00Z`, o: base, h: base, l: base, c: base + 1, v: 2 }];
+            const from = new Date(u.searchParams.get("start")!).toISOString().slice(0, 10);
+            const to = new Date(u.searchParams.get("end")!).toISOString().slice(0, 10);
+            // sparse: only the 09:45 and 15:30 bars of each session in the range (start times; EDT = UTC-4)
+            bars[s] = SESSIONS.filter((d) => d >= from && d <= to).flatMap((day) => [
+              { t: `${day}T13:45:00Z`, o: base, h: base, l: base, c: base + 0.5, v: 4 },
+              { t: `${day}T19:30:00Z`, o: base, h: base, l: base, c: base + 1, v: 2 },
+            ]);
           }
         }
         return new Response(JSON.stringify({ bars, next_page_token: null }), { status: 200 });
@@ -267,7 +277,7 @@ describe("backfillOptions with mocked Alpaca", () => {
     expect(res.errors).toBe(0);
     expect(res.events).toBe(1); // unconfirmed and pre-cutoff events are skipped
     expect(res.legs).toBeGreaterThan(20);
-    expect(res.requests).toBeGreaterThan(3);
+    expect(res.requests).toBe(3); // one listing, one ladder request, one intraday request
     const e = edb.earningsDb;
     expect((e.prepare("SELECT COUNT(*) n FROM option_ladder_bars").get() as any).n).toBeGreaterThan(100);
     expect((e.prepare("SELECT COUNT(*) n FROM option_intraday_bars").get() as any).n).toBeGreaterThan(10);
@@ -303,5 +313,37 @@ describe("backfillOptions with mocked Alpaca", () => {
     const before = count();
     await op.buildOptionPathsFor([{ symbol: "TST", reportDate: "2026-07-23" }]);
     expect(count()).toBe(before);
+  });
+
+  it("shares listings and ladder bars across a symbol's events, retries 429s, and never finishes an event after a failed request", async () => {
+    const e = edb.earningsDb;
+    const addEvent = (d: string, t0: string, r: string, spot: number) => {
+      e.prepare("INSERT INTO events (symbol, report_date, time, t0, r, confirmed, reason) VALUES ('TST', ?, 'amc', ?, ?, 1, 'ok')").run(d, t0, r);
+      e.prepare("INSERT INTO stock_paths (symbol, report_date, t0_m20, t0_m10, t0_m5, t0_m2, t0_m1, t0_open, t0_1000, t0_1545, t0_close, r_open, r_close) VALUES ('TST', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(d, ...Array<number>(11).fill(spot));
+    };
+    addEvent("2026-08-06", "2026-08-06", "2026-08-07", 100.2);
+    addEvent("2026-08-13", "2026-08-13", "2026-08-14", 99.6);
+    mockAlpaca({ rate429: 2 });
+    const res = await op.backfillOptions(["TST"], { since: "2026-08-01" });
+    expect(res.errors).toBe(0);
+    expect(res.events).toBe(2);
+    // The same quarter: inactive and active listings once (R + 80 days reaches today), one shared ladder request, one intraday request each. The 429s are retried, not counted.
+    expect(res.requests).toBe(5);
+    expect(calls.filter((c) => c.startsWith("/v2/options/contracts")).length).toBe(4); // inactive + 2 retried 429s + active
+
+    // A failing bars request leaves the event unwritten and the symbol retryable.
+    addEvent("2026-08-20", "2026-08-20", "2026-08-21", 100.1);
+    mockAlpaca({ failBars: true });
+    const bad = await op.backfillOptions(["TST"], { since: "2026-08-01" });
+    expect(bad.errors).toBe(1);
+    expect(bad.legs).toBe(0);
+    expect(e.prepare("SELECT COUNT(*) n FROM option_paths WHERE report_date = '2026-08-20'").get()).toMatchObject({ n: 0 });
+    expect(e.prepare("SELECT status FROM backfill_progress WHERE task='options' AND symbol='TST'").get()).toMatchObject({ status: "error" });
+    mockAlpaca();
+    const ok = await op.backfillOptions(["TST"], { since: "2026-08-01" });
+    expect(ok).toMatchObject({ errors: 0, events: 1 });
+    expect(e.prepare("SELECT COUNT(*) n FROM option_paths WHERE report_date = '2026-08-20'").get()).toMatchObject({ n: expect.any(Number) });
+    expect((e.prepare("SELECT COUNT(*) n FROM option_paths WHERE report_date = '2026-08-20'").get() as any).n).toBeGreaterThan(0);
+    expect(e.prepare("SELECT status FROM backfill_progress WHERE task='options' AND symbol='TST'").get()).toMatchObject({ status: "done" });
   });
 });

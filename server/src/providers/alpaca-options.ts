@@ -200,15 +200,15 @@ export async function optionDailyBars(symbols: string[], start: string, end: str
 }
 
 /**
- * Intraday bars (15-minute by default) for many option contracts on one New
- * York trading day, regular session only, all pages. Contracts that did not
+ * Intraday bars (15-minute by default) for many option contracts from `day`
+ * through `endDay` (default the same New York trading day), regular session only, all pages. Contracts that did not
  * trade are absent, and so are quiet intervals: callers must handle gaps.
  */
-export async function optionIntradayBars(symbols: string[], day: string, timeframe = "15Min", stats?: { requests: number }, maxPages = 20): Promise<Record<string, OptionDayBar[]>> {
+export async function optionIntradayBars(symbols: string[], day: string, timeframe = "15Min", stats?: { requests: number }, maxPages = 20, endDay = day): Promise<Record<string, OptionDayBar[]>> {
   const out: Record<string, OptionDayBar[]> = {};
   if (symbols.length === 0) return out;
   const start = new Date(nyInstant(day, 9, 30)).toISOString();
-  const end = new Date(nyInstant(day, 16, 0)).toISOString();
+  const end = new Date(nyInstant(endDay, 16, 0)).toISOString();
   let pageToken: string | undefined;
   for (let page = 0; page < maxPages; page++) {
     if (stats) stats.requests++;

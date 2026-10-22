@@ -11,6 +11,7 @@ import { isConfigured, throttle } from "./alpaca.js";
 // first and the paper host answers when the live one says 401/403; whichever
 // works is remembered. ALPACA_TRADING_BASE pins the host.
 
+const MAX_RETRIES = 8;
 const LIVE_BASE = "https://api.alpaca.markets";
 const PAPER_BASE = "https://paper-api.alpaca.markets";
 const ALLOWED_PATHS = new Set(["/v2/options/contracts", "/v2/calendar"]);
@@ -56,9 +57,10 @@ export async function tradingFetch(path: string, params: Record<string, string |
           Accept: "application/json",
         },
       });
-      if (res.status === 429 && attempt < 5) {
-        const retryAfter = Number(res.headers.get("retry-after"));
-        await new Promise((r) => setTimeout(r, (isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2 ** attempt) * 1000));
+      if (res.status === 429 && attempt < MAX_RETRIES) {
+        const header = res.headers.get("retry-after");
+        const retryAfter = header === null || header === "" ? NaN : Number(header);
+        await new Promise((r) => setTimeout(r, Math.min(isFinite(retryAfter) && retryAfter >= 0 ? retryAfter : 2 ** attempt, 30) * 1000 + Math.random() * 500));
         continue;
       }
       if (res.status === 401 || res.status === 403) {
@@ -109,11 +111,12 @@ export function resetContractMemo(): void {
 export async function listContracts(
   opts: { underlying: string; type?: "call" | "put"; expiryGte: string; expiryLte: string; strikeGte?: number; strikeLte?: number; status: ContractStatus },
   stats?: { requests: number },
-  maxPages = 20
+  maxPages = 20,
+  memoise = true
 ): Promise<OptionContract[]> {
   const underlying = opts.underlying.toUpperCase();
   const key = JSON.stringify({ ...opts, underlying });
-  const memo = listMemo.get(key);
+  const memo = memoise ? listMemo.get(key) : undefined;
   if (memo) return memo;
   const out: OptionContract[] = [];
   let pageToken: string | undefined;
@@ -148,7 +151,9 @@ export async function listContracts(
     pageToken = data?.next_page_token ?? undefined;
     if (!pageToken) break;
   }
-  listMemo.set(key, out);
-  if (listMemo.size > 500) listMemo.delete(listMemo.keys().next().value!);
+  if (memoise) {
+    listMemo.set(key, out);
+    if (listMemo.size > 500) listMemo.delete(listMemo.keys().next().value!);
+  }
   return out;
 }
