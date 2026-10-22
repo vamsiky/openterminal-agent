@@ -132,6 +132,25 @@ describe("confirmation", () => {
     expect(stored("X", "2026-08-05")).toMatchObject({ original_date: "2026-08-04", reason: "date_shifted", confirmed: 1, check_volume: 1, t0: "2026-08-05", r: "2026-08-06" });
   });
 
+  it("keeps FMP's date when a transcript is dated exactly on it, even if volume is lukewarm there", async () => {
+    bars("X", { "2026-08-06": 6000 });
+    earningsReports.mockResolvedValue([row("2026-08-04", "amc")]);
+    transcriptDates.mockResolvedValue(["2026-08-04"]);
+    const r = await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
+    expect(r).toMatchObject({ confirmed: 1, shifted: 0 });
+    expect(stored("X", "2026-08-04")).toMatchObject({ reason: "ok", check_transcript: 1, check_volume: 0 });
+  });
+
+  it("does not shift on a gap alone", async () => {
+    bars("X", {});
+    db.prepare("UPDATE daily_bars SET open = 110 WHERE symbol = 'X' AND day = '2026-08-05'").run(); // a 10% gap on the adjacent session; flat everywhere else
+    db.prepare("UPDATE daily_bars SET close = 100 + (CAST(substr(day, 9, 2) AS INTEGER) % 2) WHERE symbol = 'X'").run(); // gives the baseline some daily movement
+    earningsReports.mockResolvedValue([row("2026-08-04", "bmo")]);
+    await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
+    expect(stored("X", "2026-08-04")).toMatchObject({ reason: "unconfirmed" });
+    expect(stored("X", "2026-08-05")).toBeUndefined();
+  });
+
   it("also finds a shift to the earlier session, and a re-run is idempotent", async () => {
     bars("X", { "2026-08-04": 6000 }); // real R is 08-04 (bmo on 08-04); FMP says 08-05
     earningsReports.mockResolvedValue([row("2026-08-05", "bmo")]);

@@ -13,7 +13,8 @@ import { loadDaily, reaction, type Daily } from "./stock-paths.js";
 //   pressRelease an earnings-like press release dated the report date (bmo: or the evening before)
 //   volume       R's volume is 1.5x the 20-session median before T0, or R's gap 1.5x the average daily move
 // Confirmed means fmp plus one other. When volume fails on FMP's date but passes on the
-// adjacent trading day, the corrected date is stored (reason date_shifted). The press-release
+// adjacent trading day (volume ratio at least 1.5 and above FMP's date's) and no transcript is dated
+// exactly on FMP's date, the corrected date is stored (reason date_shifted). The press-release
 // check costs a request per event, so it only runs when the transcript and volume checks both
 // fail (or the report time is unknown and a release is the only way to infer it).
 
@@ -114,11 +115,13 @@ export async function evaluate(symbol: string, row: fmp.EarningsCalendarRow, tra
   let reportDate = date;
   let shifted = false;
   let rx = reactionOn(date);
-  if (rx && !rx.pass) {
-    // Volume says nothing happened on FMP's date: maybe the adjacent session.
+  // A call transcript dated exactly on FMP's date vouches for it: large caps often react by under
+  // 1.5x, which must not move a date a transcript backs (JPM, XOM, AAPL did in the pilot).
+  if (rx && !rx.pass && !transcripts.includes(date)) {
+    // Volume says nothing happened on FMP's date: maybe the adjacent session, if volume (not a mere gap) is clear there.
     const scored = [addSessions(date, -1), addSessions(date, 1)]
       .map((d) => ({ d, rx: reactionOn(d) }))
-      .filter((c): c is { d: string; rx: NonNullable<typeof rx> } => c.rx !== null && c.rx.pass)
+      .filter((c): c is { d: string; rx: NonNullable<typeof rx> } => c.rx !== null && (c.rx.volumeRatio ?? 0) >= 1.5 && (c.rx.volumeRatio ?? 0) > (rx?.volumeRatio ?? 0))
       .sort((a, b) => (b.rx.volumeRatio ?? 0) - (a.rx.volumeRatio ?? 0));
     if (scored.length > 0) {
       reportDate = scored[0].d;

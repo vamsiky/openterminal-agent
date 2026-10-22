@@ -122,6 +122,7 @@ export function barClose(bars: alpaca.Bar[], endMs: number): number | null {
 export const anchorTimes = (day: string) => ({ ten: nyInstant(day, 10, 0), late: nyInstant(day, 15, 45) });
 
 const CHUNK = 100;
+const FETCH_WORKERS = 8;
 
 /**
  * 15-minute bars for the given (symbol, T0) pairs, one multi-symbol request per date (several
@@ -134,23 +135,32 @@ export async function fetchIntraday(pairs: Array<{ symbol: string; t0: string }>
     byDate.get(p.t0)!.add(p.symbol);
   }
   const out = new Map<string, { ten: number | null; late: number | null }>();
+  // One job per (date, chunk of 100 symbols); a few run at once (the shared throttle still caps the rate).
+  const jobs: Array<{ t0: string; list: string[] }> = [];
   for (const [t0, symbols] of byDate) {
-    const { ten, late } = anchorTimes(t0);
-    // Bars from 09:30 to the 16:00 close (early-close days simply end sooner).
-    const start = new Date(nyInstant(t0, 9, 30)).toISOString();
-    const end = new Date(Math.max(sessionClose(t0), late)).toISOString();
     const list = [...symbols];
-    for (let i = 0; i < list.length; i += CHUNK) {
-      const got = new Map<string, alpaca.Bar[]>();
-      for await (const page of alpaca.stockBars({ symbols: list.slice(i, i + CHUNK), timeframe: "15Min", start, end })) {
-        for (const [sym, bars] of Object.entries(page)) got.set(sym, [...(got.get(sym) ?? []), ...bars]);
-      }
-      for (const sym of list.slice(i, i + CHUNK)) {
-        const bars = got.get(sym) ?? [];
-        out.set(`${sym}|${t0}`, { ten: barClose(bars, ten), late: barClose(bars, late) });
-      }
-    }
+    for (let i = 0; i < list.length; i += CHUNK) jobs.push({ t0, list: list.slice(i, i + CHUNK) });
   }
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(FETCH_WORKERS, jobs.length) }, async () => {
+      while (next < jobs.length) {
+        const { t0, list } = jobs[next++];
+        const { ten, late } = anchorTimes(t0);
+        // Bars from 09:30 to the 16:00 close (early-close days simply end sooner).
+        const start = new Date(nyInstant(t0, 9, 30)).toISOString();
+        const end = new Date(Math.max(sessionClose(t0), late)).toISOString();
+        const got = new Map<string, alpaca.Bar[]>();
+        for await (const page of alpaca.stockBars({ symbols: list, timeframe: "15Min", start, end })) {
+          for (const [sym, bars] of Object.entries(page)) got.set(sym, [...(got.get(sym) ?? []), ...bars]);
+        }
+        for (const sym of list) {
+          const bars = got.get(sym) ?? [];
+          out.set(`${sym}|${t0}`, { ten: barClose(bars, ten), late: barClose(bars, late) });
+        }
+      }
+    })
+  );
   return out;
 }
 
