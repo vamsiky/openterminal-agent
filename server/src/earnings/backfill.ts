@@ -32,8 +32,8 @@ const mark = earningsDb.prepare(
    ON CONFLICT (task, symbol) DO UPDATE SET status = excluded.status, detail = excluded.detail, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`
 );
 
-export type PhaseTotals = { symbols: number; skipped: number; errors: number; events: number; confirmed: number; shifted: number; unconfirmed: number; noBars: number; stockPaths: number };
-const zero = (): PhaseTotals => ({ symbols: 0, skipped: 0, errors: 0, events: 0, confirmed: 0, shifted: 0, unconfirmed: 0, noBars: 0, stockPaths: 0 });
+export type PhaseTotals = { symbols: number; skipped: number; errors: number; events: number; skippedEvents: number; confirmed: number; shifted: number; unconfirmed: number; noBars: number; stockPaths: number };
+const zero = (): PhaseTotals => ({ symbols: 0, skipped: 0, errors: 0, events: 0, skippedEvents: 0, confirmed: 0, shifted: 0, unconfirmed: 0, noBars: 0, stockPaths: 0 });
 
 const log = (line: string) => console.log(`${new Date().toISOString().slice(11, 19)} ${line}`);
 
@@ -54,6 +54,7 @@ export async function runEvents(symbols: string[], opts: { since: string; today:
         try {
           const r: SymbolResult = await processSymbol(symbol, opts);
           totals.events += r.events;
+          totals.skippedEvents += r.skipped;
           totals.confirmed += r.confirmed;
           totals.shifted += r.shifted;
           totals.unconfirmed += r.unconfirmed;
@@ -68,7 +69,7 @@ export async function runEvents(symbols: string[], opts: { since: string; today:
         finishedCount++;
         if (finishedCount % 100 === 0 || finishedCount === todo.length) {
           const rate = finishedCount / ((Date.now() - started) / 60_000);
-          log(`[events] ${finishedCount}/${todo.length} symbols (${totals.skipped} already done) events=${totals.events} confirmed=${totals.confirmed} shifted=${totals.shifted} unconfirmed=${totals.unconfirmed} errors=${totals.errors} ${rate.toFixed(0)}/min`);
+          log(`[events] ${finishedCount}/${todo.length} symbols (${totals.skipped} already done) events=${totals.events} confirmed=${totals.confirmed} shifted=${totals.shifted} unconfirmed=${totals.unconfirmed} skipped=${totals.skippedEvents} errors=${totals.errors} ${rate.toFixed(0)}/min`);
         }
       }
     })
