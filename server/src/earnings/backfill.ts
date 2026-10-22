@@ -6,6 +6,7 @@ import { isConfigured as fmpConfigured } from "../providers/fmp.js";
 import { earningsDb } from "./db.js";
 import { backfillOptions } from "./option-paths.js";
 import { rebuildStats } from "./stats.js";
+import { refreshAnalystActions, refreshUpcoming } from "./upcoming.js";
 import { processSymbol, universe, type StoredEvent, type SymbolResult } from "./events.js";
 import { ensureCalendarRange } from "./sessions.js";
 import { buildStockPaths } from "./stock-paths.js";
@@ -145,6 +146,12 @@ async function main(): Promise<void> {
   if (phase === "options" || phase === "all") {
     const r = await backfillOptions(symbols, { since });
     log(`[options] done: ${JSON.stringify(r)}`);
+  }
+  if (phase === "all") {
+    // A fresh store has no upcoming rows until the first nightly run; fill them now.
+    const up = await refreshUpcoming(today);
+    const an = await refreshAnalystActions(today);
+    log(`[upcoming] ${JSON.stringify(up)} analyst=${JSON.stringify(an)}`);
   }
   const stats = rebuildStats();
   log(`[stats] rebuilt: ${JSON.stringify(stats)}`);

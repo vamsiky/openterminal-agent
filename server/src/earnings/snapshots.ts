@@ -69,7 +69,8 @@ export function trackedNames(kind: "near" | "far", today: string): Tracked[] {
   const seen = new Set<string>();
   const out: Tracked[] = [];
   for (const r of rows) {
-    if (seen.has(r.symbol)) continue;
+    // Preferreds (ABR-PD) have no options and one of them makes Alpaca reject a whole 200-symbol snapshot batch.
+    if (seen.has(r.symbol) || r.symbol.includes("-")) continue;
     seen.add(r.symbol);
     out.push({ symbol: r.symbol, reportDate: r.report_date, t0: r.t0, r: r.r });
   }
