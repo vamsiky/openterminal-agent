@@ -298,6 +298,14 @@ Costs are capped by `AGENTS_DAILY_BUDGET_USD` (default $5). With `ANTHROPIC_API_
 
 <br/>
 
+## Earnings setups
+
+For each US stock that reports on a given day, the earnings store scores a call bought before the report and sold before the announcement, at three horizons: report day, a week ahead and a month ahead. It stores past report dates with stock and option price paths from about February 2024, and screens every name reporting in a window. The setups are candidates for your own review. Nothing places orders.
+
+- [Earnings setups](docs/earnings.md): the data sources, the definitions (report time, T0, R, anchors, horizons, legs), event confirmation, the tables in `data/earnings.db`, the backfill command, the nightly and snapshot jobs, the scoring rubric with a worked example, the routes, the MCP tools, the review agent and the Earnings tab.
+
+<br/>
+
 ## 🗺️ Roadmap
 
 - [ ] Chart drawing tools & multi‑asset comparison overlay
