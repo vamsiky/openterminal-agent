@@ -1,4 +1,5 @@
 import { mapWithConcurrency } from "../concurrency.js";
+import { earningsUniverseSet, lastEarningsUniverse } from "./universe.js";
 import { nyInstant } from "../live/session.js";
 import { midPrice } from "../options/black-scholes.js";
 import { parseSnapshots, type ParsedContract } from "../options/sweep.js";
@@ -59,7 +60,7 @@ const addDays = (day: string, n: number): string => new Date(Date.parse(`${day}T
 export type Tracked = { symbol: string; reportDate: string; t0: string; r: string };
 
 /** Names to snapshot: the next upcoming report of each, T0 within 10 sessions (near) or 11–45 (far). */
-export function trackedNames(kind: "near" | "far", today: string): Tracked[] {
+export function trackedNames(kind: "near" | "far", today: string, universe: Set<string> | null = null): Tracked[] {
   const nearEnd = addSessions(today, NEAR_SESSIONS);
   const lo = kind === "near" ? today : addDays(nearEnd, 1);
   const hi = kind === "near" ? nearEnd : addSessions(today, FAR_SESSIONS);
@@ -69,8 +70,8 @@ export function trackedNames(kind: "near" | "far", today: string): Tracked[] {
   const seen = new Set<string>();
   const out: Tracked[] = [];
   for (const r of rows) {
-    // Preferreds (ABR-PD) have no options and one of them makes Alpaca reject a whole 200-symbol snapshot batch.
-    if (seen.has(r.symbol) || r.symbol.includes("-")) continue;
+    // Only the shared earnings universe (common stock and ADRs): a preferred like ABR-PD makes Alpaca reject a whole batch.
+    if (seen.has(r.symbol) || (universe && !universe.has(r.symbol))) continue;
     seen.add(r.symbol);
     out.push({ symbol: r.symbol, reportDate: r.report_date, t0: r.t0, r: r.r });
   }
@@ -160,7 +161,8 @@ export async function runSnapshotCycle(kind: "near" | "far", slotMs: number): Pr
     noOptionsToday.day = day;
     noOptionsToday.symbols.clear();
   }
-  const names = trackedNames(kind, day).filter((t) => !noOptionsToday.symbols.has(t.symbol));
+  const universe = await earningsUniverseSet().catch(() => lastEarningsUniverse());
+  const names = trackedNames(kind, day, universe).filter((t) => !noOptionsToday.symbols.has(t.symbol));
   const result: CycleResult = { kind, names: names.length, rows: 0, noOptions: 0, errors: 0, requests: 0 };
   if (names.length === 0) return result;
   const ts = new Date(slotMs).toISOString();
