@@ -119,6 +119,14 @@ describe("backfill resume", () => {
   });
 });
 
+describe("options floor", () => {
+  it("raises an earlier --since to Alpaca's option history and leaves a later one alone", () => {
+    expect(backfill.optionsSince("2017-01-01")).toBe("2024-02-01");
+    expect(backfill.optionsSince("2024-01-31")).toBe("2024-02-01");
+    expect(backfill.optionsSince("2025-03-01")).toBe("2025-03-01");
+  });
+});
+
 describe("nightly job", () => {
   it("is due after 18:30 New York time on a trading day, once", () => {
     expect(jobs.isDue(new Date("2026-10-21T22:00:00Z"), null)).toBe(false); // 18:00 ET

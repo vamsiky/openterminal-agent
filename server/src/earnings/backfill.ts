@@ -13,6 +13,7 @@ import { buildStockPaths } from "./stock-paths.js";
 
 // Usage (from the repo root):
 //   npm run backfill-earnings -w server -- [--symbols A,B] [--phase events|stock|options|all] [--since 2017-01-01]
+// (the options phase never goes back past 2024-02-01, where Alpaca's option history starts)
 // events: FMP per-symbol earnings history, confirmed and stored in earnings.db.
 // stock:  anchors from daily_bars plus 15-minute SIP bars (one multi-symbol request per date).
 // options: historical option paths (option-paths.ts). After any completed run the pooled stats are rebuilt.
@@ -23,6 +24,10 @@ import { buildStockPaths } from "./stock-paths.js";
 
 export type Phase = "events" | "stock" | "options" | "all";
 export const DEFAULT_SINCE = "2017-01-01";
+export const OPTIONS_FLOOR = "2024-02-01";
+
+/** The options phase starts at --since, but never before Alpaca's option history. */
+export const optionsSince = (since: string): string => (since < OPTIONS_FLOOR ? OPTIONS_FLOOR : since);
 const WORKERS = 12;
 const STOCK_CHUNK = 1500; // symbols per stock pass: big enough that most dates batch many names per request
 
@@ -145,7 +150,9 @@ async function main(): Promise<void> {
     log(`[stock] done: ${JSON.stringify(totals)}`);
   }
   if (phase === "options" || phase === "all") {
-    const r = await backfillOptions(symbols, { since });
+    const optSince = optionsSince(since);
+    log(`[options] since ${optSince}${optSince !== since ? ` (floor: Alpaca option history starts ${OPTIONS_FLOOR}; --since ${since} applies to events and stock only)` : ""}`);
+    const r = await backfillOptions(symbols, { since: optSince });
     log(`[options] done: ${JSON.stringify(r)}`);
   }
   if (phase === "all") {
