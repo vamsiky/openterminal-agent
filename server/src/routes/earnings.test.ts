@@ -167,6 +167,17 @@ describe("other reads", () => {
   it("GET /status", async () => {
     const { body } = await get("/status");
     expect(body.backfill).toMatchObject({ eventsStored: 550, eventsConfirmed: 550 });
+    expect(body.backfill.phase).toBe("idle");
+    const mark = (task: string, n: number) => { for (let i = 0; i < n; i++) m.edb.prepare("INSERT OR REPLACE INTO backfill_progress (task, symbol, status, updated_at) VALUES (?,?,'done','2020-01-01T00:00:00Z')").run(task, `P${i}`); };
+    mark("events", 10);
+    expect((await get("/status")).body.backfill.phase).toBe("stock");
+    mark("stock", 10);
+    expect((await get("/status")).body.backfill.phase).toBe("options");
+    mark("options", 4);
+    expect((await get("/status")).body.backfill.phase).toBe("options");
+    mark("options", 10);
+    expect((await get("/status")).body.backfill.phase).toBe("done");
+    m.edb.prepare("DELETE FROM backfill_progress").run();
     expect(body.snapshots.namesTracked).toBe(127);
     expect(body.db.sizeBytes).toBeGreaterThan(0);
   });

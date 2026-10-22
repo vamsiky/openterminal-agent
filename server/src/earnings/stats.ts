@@ -18,7 +18,7 @@ import { earningsDb } from "./db.js";
 // - Call legs are the event-expiry legs tracked from that entry. For month the event expiry is the first expiry on or
 //   after R, which from T0-20 is always 25+ days out, so it is the leg the scoring section names.
 // - preDrift.t0OpenFrom10 is T0:open -> T0:10:00 (the first 30 minutes); preDrift.rCloseFromPrev is T0:close against the
-//   close before T0 (the full report-day move; the name predates the T0/R convention).
+//   T0-1 close (stock_paths.prev_close is the close before R, equal to T0:close for bmo/amc, so it is not used) (the full report-day move; the name predates the T0/R convention).
 // - reactions are T0:close -> R:close, i.e. the move through the announcement.
 // - impliedVsRealized: implied = 0.8 x the leg's IV at T0:close x sqrt(years from T0 to its expiry), in percent (a straddle
 //   approximation that includes the days after the event); realized = median |reaction|.
@@ -167,7 +167,7 @@ function load(): Columns {
   const rows = earningsDb
     .prepare(
       `SELECT e.symbol, e.report_date, e.time, e.t0, e.r,
-              p.t0_m20, p.t0_m10, p.t0_m5, p.t0_m2, p.t0_m1, p.t0_open, p.t0_1000, p.t0_1545, p.t0_close, p.r_open, p.r_close, p.prev_close
+              p.t0_m20, p.t0_m10, p.t0_m5, p.t0_m2, p.t0_m1, p.t0_open, p.t0_1000, p.t0_1545, p.t0_close, p.r_open, p.r_close
        FROM events e JOIN stock_paths p ON p.symbol = e.symbol AND p.report_date = e.report_date
        WHERE e.confirmed = 1 AND e.t0 IS NOT NULL ORDER BY e.symbol, e.report_date`
     )
@@ -215,13 +215,13 @@ function load(): Columns {
 
   for (let i = 0; i < n; i++) {
     const [symbol, reportDate, time, t0, rDay] = rows[i];
-    const p = rows[i].slice(5) as Array<number | null>; // t0_m20 .. prev_close in select order
-    const [m20, m10, m5, m2, m1, open, p1000, p1545, close, rOpen, rClose, prev] = p;
+    const p = rows[i].slice(5) as Array<number | null>; // t0_m20 .. r_close in select order
+    const [m20, m10, m5, m2, m1, open, p1000, p1545, close, rOpen, rClose] = p;
     const price = [m20, m10, m5, m2, m1, open, p1000, p1545, close, rOpen, rClose];
     c.symbol[i] = symbol;
     c.time[i] = time;
     c.open10[i] = pct(p1000, open);
-    c.dayMove[i] = pct(close, prev);
+    c.dayMove[i] = pct(close, m1);
     c.reaction[i] = pct(rClose, close);
     const entryPx = [p1000, m5, m20];
     for (let h = 0; h < 3; h++) {
