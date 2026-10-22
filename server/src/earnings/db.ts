@@ -165,6 +165,16 @@ CREATE TABLE IF NOT EXISTS snapshots (
   put_iv REAL,
   put_volume REAL,
   put_oi REAL,
+  otm_occ TEXT,
+  otm_strike REAL,
+  otm_bid REAL,
+  otm_ask REAL,
+  otm_iv REAL,
+  otm_volume REAL,
+  otm_oi REAL,
+  call_delta REAL,
+  otm_delta REAL,
+  put_delta REAL,
   implied_move_pct REAL,
   event_premium REAL,                 -- event-expiry IV over the next expiry's
   PRIMARY KEY (symbol, ts, expiry_kind)
