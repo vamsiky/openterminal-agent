@@ -6,6 +6,7 @@ import { chain as liveChain, expirations as liveExpirations } from "../providers
 import { isTradingDay, sessionClose } from "../providers/alpaca-calendar.js";
 import type { CapBucket, EarningsSetup, EventStats, Gate, Horizon, ReportTime, ScoreComponent } from "./contracts.js";
 import { earningsDb } from "./db.js";
+import { timeBasisOf } from "./upcoming.js";
 import { ALL_KEY, capBucket, capKey, median, poolKey, symKey } from "./stats.js";
 import { BANDS, EARNINGS_WEIGHTS_VERSION, GATES, LOW_VOLUME_PENALTY, SETUP, WEIGHTS, type HorizonWeights } from "./weights.js";
 
@@ -508,7 +509,7 @@ export function gather(rows: UpcomingRow[], horizon: Horizon, now = new Date()):
       sector: p?.sector ?? null,
       industry: p?.industry ?? null,
       marketCap: p?.marketCap ?? null,
-      upcoming: { reportDate: row.report_date, time: row.time, timeSource: row.time_source, fmpConfirmed: row.fmp_confirmed_flag === null ? null : row.fmp_confirmed_flag === 1, t0: row.t0 ?? row.report_date, epsEstimate: row.eps_estimate, revenueEstimate: row.revenue_estimate, fiscalPeriod: row.fiscal_period },
+      upcoming: { reportDate: row.report_date, time: row.time, timeSource: row.time_source, timeBasis: timeBasisOf(row.symbol, row.time, row.time_source), fmpConfirmed: row.fmp_confirmed_flag === null ? null : row.fmp_confirmed_flag === 1, t0: row.t0 ?? row.report_date, epsEstimate: row.eps_estimate, revenueEstimate: row.revenue_estimate, fiscalPeriod: row.fiscal_period },
       horizon,
       asOf,
       price: snap?.event?.spot ?? snap?.next?.spot ?? t.close,

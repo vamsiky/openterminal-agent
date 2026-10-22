@@ -18,7 +18,13 @@ export const earningsRouter = Router();
 // Earnings-event store, setups and screens (earnings/). Mounted at /api/earnings behind requireApiKey.
 
 const bad = (res: import("express").Response, e: z.ZodError) => res.status(400).json({ error: e.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") });
-const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD");
+const day = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD")
+  .refine((s) => {
+    const d = new Date(`${s}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  }, "not a calendar date");
 const symbol = z.string().transform((s) => s.toUpperCase()).pipe(z.string().regex(/^[A-Z][A-Z0-9.]{0,9}$/));
 const horizon = z.enum(["intraday", "week", "month"]);
 const time = z.enum(["bmo", "amc", "dmh"]);
@@ -52,7 +58,7 @@ earningsRouter.get("/calendar", (req, res) => {
     .filter(({ s }) => p.optionable === undefined || (s.contract !== null) === p.optionable)
     .map(({ i, s }) => ({
       symbol: i.symbol, name: i.name, sector: i.sector, industry: i.industry, marketCap: i.marketCap,
-      reportDate: i.upcoming.reportDate, time: i.upcoming.time, timeSource: i.upcoming.timeSource, fmpConfirmed: i.upcoming.fmpConfirmed, t0: i.upcoming.t0,
+      reportDate: i.upcoming.reportDate, time: i.upcoming.time, timeSource: i.upcoming.timeSource, timeBasis: i.upcoming.timeBasis ?? null, fmpConfirmed: i.upcoming.fmpConfirmed, t0: i.upcoming.t0,
       epsEstimate: i.upcoming.epsEstimate, revenueEstimate: i.upcoming.revenueEstimate, fiscalPeriod: i.upcoming.fiscalPeriod,
       lastReport: i.lastReport, lastReactionPct: i.lastReport?.reactionPct ?? null, impliedMovePct: i.impliedMovePct,
       optionable: s.contract !== null, tradable: s.gates.every((g) => g.passed),

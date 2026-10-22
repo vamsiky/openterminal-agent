@@ -38,11 +38,9 @@ describe("fmpTiming", () => {
     expect(fmpTiming([...past(["amc", "bmo"]), row("2026-10-22", null, false)], TODAY)).toBeNull();
   });
 
-  // KNOWN BUG (estimates/timing.ts:64): with the upcoming report's FMP time null, the majority of past FMP times is
-  // returned as the timing and labelled source "fmp". The spec allows press-release inference only as the fallback
-  // for a null FMP time, and timeSource is one of fmp | press_release | null, so a history guess must not say "fmp".
-  it.fails("does not label a time guessed from past reports as FMP's own time (known bug: timing.ts:64)", () => {
-    const t = fmpTiming([...past(["amc", "amc", "amc"]), row("2026-10-22", null, false)], TODAY);
-    expect(t?.source).not.toBe("fmp");
+  it("labels a time taken from past FMP reports as history, and the upcoming row's own time as upcoming", () => {
+    const guessed = fmpTiming([...past(["amc", "amc", "amc"]), row("2026-10-22", null, false)], TODAY);
+    expect(guessed).toMatchObject({ timing: "amc", source: "fmp", basis: "history" });
+    expect(fmpTiming([...past(["amc", "amc"]), row("2026-10-22", "bmo", false)], TODAY)?.basis).toBe("upcoming");
   });
 });

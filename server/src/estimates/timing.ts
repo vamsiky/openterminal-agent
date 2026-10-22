@@ -10,7 +10,7 @@ import { addDays } from "./store.js";
 // time), which is also the only source of "dmh".
 
 export type Timing = "bmo" | "amc" | "dmh";
-export type TimingRow = { timing: Timing | null; matched: number; total: number; source: "fmp" | "press_release" | null };
+export type TimingRow = { timing: Timing | null; matched: number; total: number; source: "fmp" | "press_release" | null; basis?: "upcoming" | "history" };
 
 export const RECENT_REPORTS = 4;
 export const STALE_DAYS = 30;
@@ -58,10 +58,10 @@ export function fmpTiming(rows: fmp.EarningsCalendarRow[], today: string): Timin
   const votes = new Map<Timing, number>();
   for (const r of past) if (r.time) votes.set(r.time, (votes.get(r.time) ?? 0) + 1);
   const timed = [...votes.values()].reduce((a, b) => a + b, 0);
-  if (upcoming?.time) return { timing: upcoming.time, matched: (votes.get(upcoming.time) ?? 0) + 1, total: timed + 1, source: "fmp" };
+  if (upcoming?.time) return { timing: upcoming.time, matched: (votes.get(upcoming.time) ?? 0) + 1, total: timed + 1, source: "fmp", basis: "upcoming" };
   const ranked = [...votes.entries()].sort((a, b) => b[1] - a[1]);
   if (ranked.length === 0 || (ranked.length > 1 && ranked[0][1] === ranked[1][1])) return null;
-  return { timing: ranked[0][0], matched: ranked[0][1], total: past.length, source: "fmp" };
+  return { timing: ranked[0][0], matched: ranked[0][1], total: past.length, source: "fmp", basis: "history" };
 }
 
 export function recordTiming(symbol: string, row: TimingRow, day: string): void {

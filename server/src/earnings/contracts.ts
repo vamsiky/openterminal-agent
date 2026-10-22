@@ -53,11 +53,14 @@ export type ScoreComponent = {
   value: Record<string, number | string | boolean | null>; // the inputs used
   reason: string;                                          // one plain-English sentence with the numbers
 };
+/** Where the report time came from: the upcoming row's own FMP time, the majority of the name's past FMP times, or press-release inference. */
+export type TimeBasis = "upcoming" | "history" | "press_release";
+
 export type Gate = { key: "spread" | "volume" | "no_options" | "unconfirmed_time" | "no_quote"; passed: boolean; reason: string };
 
 export type EarningsSetup = {
   symbol: string; name: string | null; sector: string | null; industry: string | null; marketCap: number | null;
-  upcoming: { reportDate: string; time: ReportTime | null; timeSource: "fmp" | "press_release" | null; fmpConfirmed: boolean | null;
+  upcoming: { reportDate: string; time: ReportTime | null; timeSource: "fmp" | "press_release" | null; timeBasis?: TimeBasis | null; fmpConfirmed: boolean | null;
               t0: string; epsEstimate: number | null; revenueEstimate: number | null; fiscalPeriod: string | null };
   horizon: Horizon; asOf: string;
   score: number; verdict: "candidate" | "conditional" | "pass"; // ≥70 candidate, 55–69 conditional, else or any failed gate → pass

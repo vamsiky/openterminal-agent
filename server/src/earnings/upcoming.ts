@@ -1,5 +1,6 @@
 import * as fmp from "../providers/fmp.js";
 import { windows } from "../estimates/capture.js";
+import type { TimeBasis } from "./contracts.js";
 import { timingsFor } from "../estimates/timing.js";
 import { addDays } from "../estimates/store.js";
 import { allWatchlistSymbols } from "../routes/watchlists.js";
@@ -132,4 +133,11 @@ export async function refreshAnalystActions(today: string): Promise<{ symbols: n
     })
   );
   return { symbols: todo.length, rows, failed };
+}
+
+/** How an upcoming row's time was obtained. "fmp" rows are the row's own time; a fallback is "history" when the cached time came from FMP's past reports, else "press_release". Null when there is no time. */
+export function timeBasisOf(symbol: string, time: string | null, timeSource: string | null): TimeBasis | null {
+  if (!time) return null;
+  if (timeSource === "fmp") return "upcoming";
+  return timingsFor([symbol]).get(symbol)?.source === "fmp" ? "history" : "press_release";
 }

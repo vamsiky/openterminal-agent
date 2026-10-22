@@ -113,10 +113,9 @@ describe("GET /screen at 500 names", () => {
     for (const q of bad) expect((await get(`/screen?${q}`)).status, q).toBe(400);
   });
 
-  // KNOWN BUG (routes/earnings.ts:20-21): the day schema is a regex only, so an impossible date passes validation and
-  // returns 200. Flip to `it` once the schema checks the calendar.
-  it.fails("rejects a date that does not exist in the calendar (2026-02-30) (known bug)", async () => {
-    expect((await get("/screen?from=2026-02-30")).status).toBe(400);
+  it("rejects a date that does not exist in the calendar", async () => {
+    for (const d of ["2026-02-30", "2026-13-01", "2026-00-10"]) expect((await get(`/screen?from=${d}`)).status, d).toBe(400);
+    expect((await get("/screen?from=2026-02-28")).status).toBe(200);
   });
 });
 

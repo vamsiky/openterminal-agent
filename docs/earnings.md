@@ -34,6 +34,7 @@ The stock side covers every US-listed common stock in `bulk_profiles` (NYSE, NAS
 
 - **Report time `time`:** `bmo` (before the open), `amc` (after the close), `dmh` (during market hours) or `null`.
 - **`timeSource`:** `fmp` when FMP gives the time, `press_release` when the time is inferred from a press release, `null` when neither is known.
+- **`timeBasis`** (optional, on `/calendar` and `EarningsSetup.upcoming`): how the time was obtained. `upcoming` is the upcoming row's own FMP time (`timeSource` `fmp`). `history` is the majority of the name's past FMP report times, used when the upcoming row's time is null; `timeSource` stays `press_release` for these rows, so the frozen union is unchanged. `press_release` is a time inferred from a press release. `null` when there is no time.
 - `dmh` comes only from press-release inference (a release time between 09:30 and 16:00 ET).
 - **T0**, the last full session before the announcement. **R**, the reaction session, the first session after the announcement.
 
