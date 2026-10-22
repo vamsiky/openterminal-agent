@@ -7,12 +7,13 @@ import { ago, contractLabel, GROUP_LABELS, strategyLabel, type Idea, type ScanRu
 import { useTerminal } from "../../store/terminal";
 import ErrorNote from "../ErrorNote";
 import { agentsLine, type AgentsStatus } from "../../lib/agents";
+import EarningsTab from "./EarningsTab";
 import BriefView from "./BriefView";
 import IdeasSettings from "./IdeasSettings";
 import ThesisView from "./ThesisView";
 
 type Kind = "stock" | "option";
-type Tab = Kind | "brief";
+type Tab = Kind | "brief" | "earnings";
 type IdeasResponse = { asOf: string | null; ideas: Idea[] };
 
 const REFRESH: Record<Kind, number> = { option: 60_000, stock: 300_000 };
@@ -92,7 +93,7 @@ export default function IdeasWidget() {
     queryKey: ["ideas", kind],
     queryFn: () => apiGet<IdeasResponse>(`/api/scan/ideas?kind=${kind}&status=active&limit=50`),
     refetchInterval: REFRESH[kind],
-    enabled: tab !== "brief",
+    enabled: tab === "stock" || tab === "option",
   });
   const agents = useQuery({ queryKey: ["agents-status"], queryFn: () => apiGet<AgentsStatus>("/api/agents/status"), refetchInterval: 30_000, retry: false });
   const status = useQuery({ queryKey: ["scan-status"], queryFn: () => apiGet<ScanStatus>("/api/scan/status"), refetchInterval: 60_000 });
@@ -112,12 +113,15 @@ export default function IdeasWidget() {
         <button className={`term-btn ${tab === "stock" ? "active" : ""}`} onClick={() => { setTab("stock"); setExpanded(null); }}>Stocks</button>
         <button className={`term-btn ${tab === "option" ? "active" : ""}`} onClick={() => { setTab("option"); setExpanded(null); }}>Options</button>
         <button className={`term-btn ${tab === "brief" ? "active" : ""}`} onClick={() => { setTab("brief"); setExpanded(null); }}>Brief</button>
+        <button className={`term-btn ${tab === "earnings" ? "active" : ""}`} onClick={() => { setTab("earnings"); setExpanded(null); }}>Earnings</button>
         <span className="dim ml-1 flex-1 truncate">Candidates only, not orders{ideas.data?.asOf ? ` · as of ${ago(ideas.data.asOf)}` : ""}</span>
         <button className={`term-btn ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen((o) => !o)} title="Universe and positions">Settings</button>
       </div>
       {settingsOpen && <IdeasSettings />}
       <div className="flex-1 overflow-auto">
-        {tab === "brief" ? (
+        {tab === "earnings" ? (
+          <EarningsTab agents={agents.data} />
+        ) : tab === "brief" ? (
           <BriefView />
         ) : ideas.isLoading ? (
           <div className="p-2 dim">Loading ideas…</div>
