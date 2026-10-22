@@ -215,7 +215,7 @@ describe("backfillOptions with mocked Alpaca", () => {
     return out;
   })();
   const occOf = (expiry: string, type: "C" | "P", strike: number) => `TST${expiry.slice(2, 4)}${expiry.slice(5, 7)}${expiry.slice(8)}${type}${String(Math.round(strike * 1000)).padStart(8, "0")}`;
-  const expiries = ["2026-07-24", "2026-07-31", "2026-08-21"];
+  const expiries = ["2026-07-24", "2026-07-31", "2026-08-21", "2026-09-04"];
   const strikes = [90, 92.5, 95, 97.5, 100, 102.5, 105, 107.5, 110];
   const calls: string[] = [];
 
@@ -237,6 +237,11 @@ describe("backfillOptions with mocked Alpaca", () => {
           ? expiries.flatMap((e) => strikes.flatMap((k) => (["C", "P"] as const).map((t) => ({ symbol: occOf(e, t, k), root_symbol: "TST", expiration_date: e, strike_price: String(k), type: t === "C" ? "call" : "put", status: "inactive" }))))
           : [];
         return new Response(JSON.stringify({ option_contracts: rows, next_page_token: null }), { status: 200 });
+      }
+      if (u.pathname === "/v2/stocks/bars") {
+        calls.push(`stock:${u.searchParams.get("adjustment")}`);
+        // A 10:1 split: the raw price is ten times the adjusted one stored in daily_bars (10).
+        return new Response(JSON.stringify({ bars: { TST: SESSIONS.map((d) => ({ t: `${d}T04:00:00Z`, o: 100, h: 101, l: 99, c: 100, v: 1 })) }, next_page_token: null }), { status: 200 });
       }
       if (u.pathname === "/v1beta1/options/bars") {
         const syms = (u.searchParams.get("symbols") ?? "").split(",").filter((s) => !(opts.noBarsFor ?? []).includes(s));
@@ -346,5 +351,23 @@ describe("backfillOptions with mocked Alpaca", () => {
     expect(e.prepare("SELECT COUNT(*) n FROM option_paths WHERE report_date = '2026-08-20'").get()).toMatchObject({ n: expect.any(Number) });
     expect((e.prepare("SELECT COUNT(*) n FROM option_paths WHERE report_date = '2026-08-20'").get() as any).n).toBeGreaterThan(0);
     expect(e.prepare("SELECT status FROM backfill_progress WHERE task='options' AND symbol='TST'").get()).toMatchObject({ status: "done" });
+  });
+
+  it("uses raw prices for the option side when the stock was split (10:1)", async () => {
+    const { db } = await import("../db.js");
+    await import("../history/store.js"); // creates daily_bars
+    const ins = db.prepare("INSERT OR REPLACE INTO daily_bars (symbol, day, open, high, low, close, volume) VALUES ('TST', ?, 10, 10.1, 9.9, 10, 1)");
+    for (const d of SESSIONS) ins.run(d);
+    const e = edb.earningsDb;
+    e.prepare("INSERT INTO events (symbol, report_date, time, t0, r, confirmed, reason) VALUES ('TST','2026-08-25','amc','2026-08-25','2026-08-26',1,'ok')").run();
+    e.prepare("INSERT INTO stock_paths (symbol, report_date, t0_m20, t0_m10, t0_m5, t0_m2, t0_m1, t0_open, t0_1000, t0_1545, t0_close, r_open, r_close) VALUES ('TST','2026-08-25', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(...Array<number>(11).fill(10.02));
+    mockAlpaca();
+    const res = await op.backfillOptions(["TST"], { since: "2026-08-25" });
+    expect(res.errors).toBe(0);
+    expect(res.legs).toBeGreaterThan(0);
+    expect(calls).toContain("stock:raw");
+    const row = e.prepare("SELECT strike, spot_at_entry, iv_at_entry FROM option_paths WHERE report_date='2026-08-25' AND entry='T0-5' AND expiry_kind='event' AND leg='atm_call'").get() as any;
+    expect(row.spot_at_entry).toBeCloseTo(100.2, 6); // 10.02 adjusted x 10
+    expect(row.strike).toBe(100); // not the 90 an adjusted 10.02 would pick
   });
 });

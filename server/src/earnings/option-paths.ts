@@ -5,6 +5,7 @@ import { nyInstant } from "../live/session.js";
 import { impliedVol, riskFreeRate } from "../options/black-scholes.js";
 import { daysBetween } from "../options/selection.js";
 import { ensureCalendar, isTradingDay, sessionClose } from "../providers/alpaca-calendar.js";
+import { stockBarsPage } from "../providers/alpaca.js";
 import { optionDailyBars, optionIntradayBars, type OptionDayBar } from "../providers/alpaca-options.js";
 import { listContracts, type OptionContract } from "../providers/alpaca-trading.js";
 import type { Anchor, ExpiryKind, Leg, OptionLegPath } from "./contracts.js";
@@ -268,25 +269,84 @@ async function ensureYears(...days: string[]): Promise<void> {
 // The trading API is the slowest endpoint (a few hundred requests a minute), so listings are per calendar year of R.
 const chunkOf = (day: string): string => day.slice(0, 4);
 
-/** Strike range for a stretch of days: daily_bars low/high with a wide margin, else the event spots. */
-function strikeBand(symbol: string, from: string, to: string, spots: number[]): [number, number] {
-  let row: { lo: number | null; hi: number | null } | undefined;
+/** Raw-over-adjusted price ratio for a day (1 when there was no split since). */
+export type FactorFn = (day: string) => number;
+const NO_SPLIT: FactorFn = () => 1;
+
+/**
+ * daily_bars and the stock paths are split-adjusted, but listed strikes and
+ * option prices are raw. This returns, for one symbol, factor(day) = raw
+ * close / adjusted close from Alpaca's raw daily bars (one request per symbol
+ * for the whole span). A day without both closes uses the nearest earlier
+ * known factor, else the first. Without adjusted bars to compare, it is 1.
+ */
+export async function rawPriceFactors(symbol: string, from: string, to: string, stats: Stats): Promise<FactorFn> {
+  let adjusted: Array<{ day: string; close: number }>;
   try {
-    row = db.prepare("SELECT MIN(low) lo, MAX(high) hi FROM daily_bars WHERE symbol = ? AND day >= ? AND day <= ?").get(symbol, from, to) as typeof row;
+    adjusted = db.prepare("SELECT day, close FROM daily_bars WHERE symbol = ? AND day >= ? AND day <= ? ORDER BY day").all(symbol, from, to) as typeof adjusted;
   } catch {
-    row = undefined; // no daily_bars table (a bare test database)
+    return NO_SPLIT; // no daily_bars table (a bare test database)
   }
-  const lo = Math.min(...spots) * 0.88;
-  const hi = Math.max(...spots) * 1.12;
-  if (row?.lo && row?.hi) return [Math.min(lo, row.lo * 0.85), Math.max(hi, row.hi * 1.15)];
+  if (adjusted.length === 0) return NO_SPLIT;
+  const raw = new Map<string, number>();
+  let pageToken: string | undefined;
+  do {
+    stats.requests++;
+    const page = await stockBarsPage({ symbols: [symbol], timeframe: "1Day", start: from, end: addDays(to, 1), adjustment: "raw", pageToken });
+    for (const b of page.bars[symbol] ?? []) raw.set(tradingDay(b.t), b.c);
+    pageToken = page.nextPageToken ?? undefined;
+  } while (pageToken);
+  const known: Array<[string, number]> = [];
+  for (const a of adjusted) {
+    const r = raw.get(a.day);
+    if (r && a.close > 0) {
+      const f = r / a.close;
+      known.push([a.day, Math.abs(f - 1) < 0.015 ? 1 : f]);
+    }
+  }
+  if (known.length === 0) return NO_SPLIT;
+  return (day) => {
+    let best = known[0][1];
+    for (const [d, f] of known) {
+      if (d > day) break;
+      best = f;
+    }
+    return best;
+  };
+}
+
+/** The event with its stock-path spots multiplied into raw (listed-strike) terms. */
+export function toRawSpots(ev: EventInput, factor: FactorFn): EventInput {
+  const spots: EventInput["spots"] = {};
+  for (const [anchor, v] of Object.entries(ev.spots)) {
+    spots[anchor as Anchor] = v == null ? v : v * factor(anchorDay(anchor as Anchor, ev.t0, ev.r).day);
+  }
+  return { ...ev, spots };
+}
+
+/** Strike range for a stretch of days: daily_bars low/high (made raw) with a wide margin, plus the event spots. */
+function strikeBand(symbol: string, from: string, to: string, spots: number[], factor: FactorFn): [number, number] {
+  let rows: Array<{ day: string; low: number; high: number }> = [];
+  try {
+    rows = db.prepare("SELECT day, low, high FROM daily_bars WHERE symbol = ? AND day >= ? AND day <= ?").all(symbol, from, to) as typeof rows;
+  } catch {
+    rows = []; // no daily_bars table (a bare test database)
+  }
+  let lo = Math.min(...spots) * 0.88;
+  let hi = Math.max(...spots) * 1.12;
+  for (const r of rows) {
+    const f = factor(r.day);
+    if (r.low > 0) lo = Math.min(lo, r.low * f * 0.85);
+    if (r.high > 0) hi = Math.max(hi, r.high * f * 1.15);
+  }
   return [lo, hi];
 }
 
 /** Contracts of a symbol for the events of one year: one listing (all pages) per status, not one per event. */
-async function listChunk(symbol: string, evs: EventInput[], stats: Stats): Promise<OptionContract[]> {
+async function listChunk(symbol: string, evs: EventInput[], factor: FactorFn, stats: Stats): Promise<OptionContract[]> {
   const spots = evs.flatMap(spotsOf);
   const own: Stats = { requests: 0 };
-  const [lo, hi] = strikeBand(symbol, addSessions(evs[0].t0, -25), addSessions(evs[evs.length - 1].r, 1), spots);
+  const [lo, hi] = strikeBand(symbol, addSessions(evs[0].t0, -25), addSessions(evs[evs.length - 1].r, 1), spots, factor);
   const base = {
     underlying: symbol,
     expiryGte: evs.reduce((m, e) => (e.r < m ? e.r : m), evs[0].r),
@@ -430,6 +490,16 @@ async function processSymbolEvents(symbol: string, evs: EventInput[], neighbors:
   const out: SymbolOutcome = { legs: new Map(), failed: new Set() };
   if (evs.length === 0) return out;
   await ensureYears(addDays(evs[0].t0, -45), addDays(evs[evs.length - 1].r, 3));
+  const sortedEvs = [...evs].sort((a, b) => a.r.localeCompare(b.r));
+  let factor: FactorFn;
+  try {
+    factor = await rawPriceFactors(symbol, addSessions(sortedEvs[0].t0, -25), addSessions(sortedEvs[sortedEvs.length - 1].r, 1), stats);
+  } catch (err) {
+    console.warn(`[option-paths] ${symbol} raw prices: ${err instanceof Error ? err.message : String(err)}`);
+    for (const ev of evs) out.failed.add(ev.reportDate);
+    return out;
+  }
+  evs = evs.map((ev) => toRawSpots(ev, factor));
   const chunks = new Map<string, EventInput[]>();
   for (const ev of [...evs].sort((a, b) => a.r.localeCompare(b.r))) {
     const q = chunkOf(ev.r);
@@ -439,7 +509,7 @@ async function processSymbolEvents(symbol: string, evs: EventInput[], neighbors:
   const plans: Plan[] = [];
   for (const group of chunks.values()) {
     try {
-      const listing = await listChunk(symbol, group, stats);
+      const listing = await listChunk(symbol, group, factor, stats);
       for (const ev of group) {
         const plan = planEvent(ev, listing, neighbors);
         if (plan) plans.push(plan);
