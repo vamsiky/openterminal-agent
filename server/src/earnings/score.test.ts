@@ -135,13 +135,15 @@ describe("gates and verdict bands", () => {
 
 describe("contract choice", () => {
   it("picks the lowest-spread call among ATM and OTM in the event expiry", () => {
-    const c = score.chooseContract([cand({ strike: 100, bid: 2, ask: 2.4 }), cand({ leg: "otm_call", strike: 105, bid: 1, ask: 1.05 }), cand({ kind: "swing", expiry: "2026-11-20", bid: 5, ask: 5.01 })], "intraday", "2026-10-21")!;
+    const c = score.chooseContract([cand({ strike: 100, bid: 2, ask: 2.4 }), cand({ leg: "otm_call", strike: 105, bid: 1, ask: 1.05 }), cand({ kind: "next", expiry: "2026-11-20", bid: 5, ask: 5.01 })], "intraday", "2026-10-21")!;
     expect(c.strike).toBe(105);
   });
-  it("month uses the event expiry only when it is 25+ days out, else the swing expiry", () => {
-    const list = [cand({ expiry: "2026-10-23" }), cand({ kind: "swing", expiry: "2026-11-20", strike: 101 })];
+  it("month takes the first expiry (event or next) 25+ days from entry", () => {
+    const list = [cand({ expiry: "2026-10-23" }), cand({ kind: "next", expiry: "2026-11-20", strike: 101 })];
     expect(score.chooseContract(list, "month", "2026-10-21")!.expiry).toBe("2026-11-20");
     expect(score.chooseContract([cand({ expiry: "2026-11-20" }), ...list.slice(1)], "month", "2026-10-21")!.kind).toBe("event");
+    // Neither qualifies: fall back to the event expiry.
+    expect(score.chooseContract([cand({ expiry: "2026-10-23" }), cand({ kind: "next", expiry: "2026-10-30" })], "month", "2026-10-21")!.expiry).toBe("2026-10-23");
     expect(score.chooseContract(list, "week", "2026-10-21")!.expiry).toBe("2026-10-23");
   });
 });

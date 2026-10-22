@@ -27,7 +27,7 @@ export function seedAdhoc(): void {
   const sp = earningsDb.prepare("INSERT OR REPLACE INTO stock_paths (symbol, report_date, t0_open, t0_1000, t0_1545, t0_close, r_close, prev_close) VALUES (?,?,?,?,?,?,?,?)");
   const op = earningsDb.prepare("INSERT OR REPLACE INTO option_paths (symbol, report_date, entry, expiry_kind, leg, contract, expiry, strike, spot_at_entry, prices, price_source) VALUES (?,?,'T0:10:00','event','atm_call',?,?,?,?,?,'trade')");
   const up = earningsDb.prepare("INSERT OR REPLACE INTO upcoming (symbol, report_date, time, time_source, t0, r, fiscal_period, eps_estimate, revenue_estimate, fmp_confirmed_flag) VALUES (?,?,?,?,?,?,?,?,?,?)");
-  const snap = earningsDb.prepare("INSERT OR REPLACE INTO snapshots (symbol, ts, expiry_kind, report_date, expiry, spot, call_occ, call_strike, call_bid, call_ask, call_iv, call_volume, call_oi) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  const snap = earningsDb.prepare("INSERT OR REPLACE INTO snapshots (symbol, ts, expiry_kind, report_date, expiry, spot, call_occ, call_strike, call_bid, call_ask, call_iv, call_volume, call_oi, otm_occ, otm_strike, otm_bid, otm_ask, otm_iv, otm_volume, otm_oi, otm_delta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   const an = earningsDb.prepare("INSERT OR REPLACE INTO analyst_actions (symbol, date, firm, action, price_target, prior_price_target) VALUES (?,?,?,?,?,?)");
   const card = db.prepare("INSERT OR REPLACE INTO scorecards_live (symbol, as_of, composite, groups, factors, coverage, weights_version) VALUES (?,?,?,?,?,?,?)");
   const bar = db.prepare("INSERT OR REPLACE INTO daily_bars (symbol, day, open, high, low, close, volume) VALUES (?,?,?,?,?,?,?)");
@@ -43,8 +43,10 @@ export function seedAdhoc(): void {
         if (e.call) op.run(s, e.date, e.call.occ, e.call.expiry, e.call.strike, e.s10 ?? e.open, JSON.stringify({ "T0:10:00": e.call.o10, "T0:15:45": e.call.o1545 }));
       });
       up.run(s, "2026-10-22", "amc", "fmp", "2026-10-22", "2026-10-23", "Q3", 1, 100, 1);
-      const c = n.contract;
-      snap.run(s, "2026-10-21T20:00:00Z", "event", "2026-10-22", c.expiry, n.px, c.occ, c.strike, c.bid, c.ask, c.iv, c.vol, 100);
+      // The snapshot holds the first strike at or above spot and the next one up, as the live chain does.
+      const ch = n.chains[0];
+      const o = ch.otm;
+      snap.run(s, "2026-10-21T20:00:00Z", "event", "2026-10-22", ch.expiry, n.px, ch.occ, ch.strike, ch.bid, ch.ask, ch.iv, ch.dayVol, 100, o?.occ ?? null, o?.strike ?? null, o?.bid ?? null, o?.ask ?? null, o?.iv ?? null, o?.vol ?? null, o ? 100 : null, o?.delta ?? null);
       for (const a of n.analyst) an.run(s, a.date, a.firm, a.action, a.pt, a.prior);
       card.run(s, "2026-10-21", 60, JSON.stringify({ momentum: n.momentum }), JSON.stringify({ vs_sma50: [n.vs50 / 100, 50, 0], vs_sma200: [n.vs200 / 100, 50, 0], rsi14: [n.rsi, 50, 0] }), 1, "stock-v2");
       // 40 days of bars: flat at B with the last close at px reproduces vs20; the daily range reproduces ATR.

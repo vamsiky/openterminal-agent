@@ -23,7 +23,7 @@ const signed = (x: number | null | undefined, digits = 1) => (x === null || x ==
 // ---- inputs ----
 
 export type Candidate = {
-  kind: "event" | "swing";
+  kind: "event" | "next";
   leg: "atm_call" | "otm_call";
   occ: string;
   expiry: string;
@@ -80,14 +80,13 @@ const daysBetween = (a: string, b: string) => (Date.parse(b + "T00:00:00Z") - Da
 
 /**
  * Intraday and week: the lowest-spread call among the event expiry's ATM and next-strike-up legs.
- * Month: the first expiry on or after R that is at least 25 days from entry, i.e. the event expiry when it is far
- * enough out, otherwise the swing expiry.
+ * Month: the first expiry (event, else next) at least 25 days from entry; the lowest-spread leg of that expiry.
  */
 export function chooseContract(candidates: Candidate[], horizon: Horizon, entryDate: string): Candidate | null {
   let pool = candidates.filter((c) => c.kind === "event");
-  if (horizon === "month" && !(pool.length > 0 && daysBetween(entryDate, pool[0].expiry) >= 25)) {
-    const swing = candidates.filter((c) => c.kind === "swing");
-    if (swing.length > 0) pool = swing;
+  if (horizon === "month" && candidates.length > 0) {
+    const far = candidates.filter((c) => daysBetween(entryDate, c.expiry) >= 25).sort((x, y) => (x.expiry < y.expiry ? -1 : x.expiry > y.expiry ? 1 : 0));
+    if (far.length > 0) pool = far.filter((c) => c.expiry === far[0].expiry);
   }
   if (pool.length === 0) pool = candidates;
   let best: Candidate | null = null;
@@ -356,8 +355,8 @@ function loadTech(symbols: string[], today: string): Map<string, Tech & { close:
 }
 
 type SnapRow = Record<string, any>;
-function loadSnapshots(symbols: string[], sinceIso: string): Map<string, { event?: SnapRow; swing?: SnapRow }> {
-  const out = new Map<string, { event?: SnapRow; swing?: SnapRow }>();
+function loadSnapshots(symbols: string[], sinceIso: string): Map<string, { event?: SnapRow; next?: SnapRow }> {
+  const out = new Map<string, { event?: SnapRow; next?: SnapRow }>();
   const rows = earningsDb
     .prepare(
       `SELECT s.* FROM snapshots s JOIN (
@@ -369,20 +368,30 @@ function loadSnapshots(symbols: string[], sinceIso: string): Map<string, { event
     let slot = out.get(r.symbol);
     if (!slot) out.set(r.symbol, (slot = {}));
     if (r.expiry_kind === "event") slot.event = r;
-    else slot.swing = r;
+    else if (r.expiry_kind === "next") slot.next = r;
   }
   return out;
 }
 
-function snapCandidate(r: SnapRow, kind: "event" | "swing", nowMs: number): Candidate | null {
-  if (!r.call_occ || !r.expiry) return null;
-  let delta: number | null = null;
-  if (r.call_iv && r.spot && r.call_strike) {
+/** Calls of one snapshot row: the ATM call and the next strike up, with stored deltas (Black-Scholes only where null). */
+function snapCandidates(r: SnapRow, kind: "event" | "next", nowMs: number): Candidate[] {
+  const out: Candidate[] = [];
+  const delta = (stored: number | null, iv: number | null, strike: number): number | null => {
+    if (stored !== null && stored !== undefined) return stored;
+    if (!iv || !r.spot || !strike || !r.expiry) return null;
     try {
-      delta = greeks({ right: "call", spot: r.spot, strike: r.call_strike, t: yearsToExpiry(r.expiry, nowMs, sessionClose), rate: riskFreeRate(), vol: r.call_iv }).delta;
-    } catch { /* leave null */ }
+      return greeks({ right: "call", spot: r.spot, strike, t: yearsToExpiry(r.expiry, nowMs, sessionClose), rate: riskFreeRate(), vol: iv }).delta;
+    } catch {
+      return null;
+    }
+  };
+  if (r.call_occ && r.expiry) {
+    out.push({ kind, leg: "atm_call", occ: r.call_occ, expiry: r.expiry, strike: r.call_strike, bid: r.call_bid, ask: r.call_ask, iv: r.call_iv, delta: delta(r.call_delta, r.call_iv, r.call_strike), volume: r.call_volume, openInterest: r.call_oi });
   }
-  return { kind, leg: "atm_call", occ: r.call_occ, expiry: r.expiry, strike: r.call_strike, bid: r.call_bid, ask: r.call_ask, iv: r.call_iv, delta, volume: r.call_volume, openInterest: r.call_oi };
+  if (r.otm_occ && r.expiry) {
+    out.push({ kind, leg: "otm_call", occ: r.otm_occ, expiry: r.expiry, strike: r.otm_strike, bid: r.otm_bid, ask: r.otm_ask, iv: r.otm_iv, delta: delta(r.otm_delta, r.otm_iv, r.otm_strike), volume: r.otm_volume, openInterest: r.otm_oi });
+  }
+  return out;
 }
 
 function loadStats(keys: string[], horizon: Horizon): Map<string, EventStats> {
@@ -478,21 +487,15 @@ export function gather(rows: UpcomingRow[], horizon: Horizon, now = new Date()):
     if (!pooled) pooled = pick(ALL_KEY, row.time, 20);
 
     const candidates: Candidate[] = [];
-    if (snap?.event) {
-      const c = snapCandidate(snap.event, "event", now.getTime());
-      if (c) candidates.push(c);
-    }
-    if (snap?.swing) {
-      const c = snapCandidate(snap.swing, "swing", now.getTime());
-      if (c) candidates.push(c);
-    }
+    if (snap?.event) candidates.push(...snapCandidates(snap.event, "event", now.getTime()));
+    if (snap?.next) candidates.push(...snapCandidates(snap.next, "next", now.getTime()));
     const last = lastStmt.get(row.symbol, row.report_date) as any;
     const lastReport = last
       ? { date: last.d, epsActual: last.eps_actual, epsEstimate: last.eps_estimate, revenueActual: last.revenue_actual, revenueEstimate: last.revenue_estimate, reactionPct: last.t0_close && last.r_close ? Math.round((last.r_close / last.t0_close - 1) * 1e4) / 100 : null }
       : null;
     const rv = hist.get(`${row.symbol}|${row.report_date}`);
     const revs = rv ? computeRevisions(rv, today) : null;
-    const asOf = snap?.event?.ts ?? snap?.swing?.ts ?? now.toISOString();
+    const asOf = snap?.event?.ts ?? snap?.next?.ts ?? now.toISOString();
     return {
       symbol: row.symbol,
       name: p?.name ?? null,
@@ -502,7 +505,7 @@ export function gather(rows: UpcomingRow[], horizon: Horizon, now = new Date()):
       upcoming: { reportDate: row.report_date, time: row.time, timeSource: row.time_source, fmpConfirmed: row.fmp_confirmed_flag === null ? null : row.fmp_confirmed_flag === 1, t0: row.t0 ?? row.report_date, epsEstimate: row.eps_estimate, revenueEstimate: row.revenue_estimate, fiscalPeriod: row.fiscal_period },
       horizon,
       asOf,
-      price: snap?.event?.spot ?? snap?.swing?.spot ?? t.close,
+      price: snap?.event?.spot ?? snap?.next?.spot ?? t.close,
       tech: t,
       candidates,
       impliedMovePct: snap?.event?.implied_move_pct ?? null,
@@ -595,7 +598,7 @@ export function screen(params: ScreenParams, now = new Date()): EarningsSetup[] 
 
 /**
  * The setup for a symbol's next report. Reads the latest stored snapshot; with none (and only here, never in screen)
- * asks Alpaca for the live chain of the event and swing expiries.
+ * asks Alpaca for the live chain of the event and next expiries.
  */
 export async function setupFor(symbol: string, horizon: Horizon, opts: EnrichOptions = {}): Promise<EarningsSetup | null> {
   const now = opts.now ?? new Date();
@@ -621,15 +624,15 @@ export async function setupFor(symbol: string, horizon: Horizon, opts: EnrichOpt
   return scoreSetup(input);
 }
 
-/** Live fallback: ATM and next-strike-up calls of the event expiry (first on or after R) and the swing expiry (21+ days after R). */
+/** Live fallback: ATM and next-strike-up calls of the event expiry (first on or after R) and the next expiry after it. */
 async function liveCandidates(symbol: string, row: UpcomingRow): Promise<{ price: number | null; candidates: Candidate[] } | null> {
   const r = row.r ?? row.report_date;
   const expiries = await liveExpirations(symbol);
   const event = expiries.find((e) => e >= r);
-  const swing = expiries.find((e) => e >= addDays(r, 21));
+  const next = event ? expiries.find((e) => e > event) : undefined;
   const out: Candidate[] = [];
   let price: number | null = null;
-  for (const [kind, expiry] of [["event", event], ["swing", swing]] as const) {
+  for (const [kind, expiry] of [["event", event], ["next", next]] as const) {
     if (!expiry) continue;
     const ch = await liveChain(symbol, { expiry });
     price = ch.underlyingPrice ?? price;

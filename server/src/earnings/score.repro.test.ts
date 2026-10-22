@@ -38,4 +38,21 @@ describe("reproduction of the 2026-10-22 intraday run", () => {
     }
     console.log(rows.join("\n"));
   });
+
+  it("picks WDC's $380 OTM call from the snapshot and uses the stored delta", async () => {
+    const [wdc] = mods.score.screen({ from: "2026-10-22", symbols: ["WDC"] }, mods.seed.NOW);
+    expect(wdc.contract).toMatchObject({ occ: "WDC261023C00380000", strike: 380, delta: 0.4693 });
+  });
+
+  it("month takes the first expiry 25+ days out from the event or next row", async () => {
+    const { earningsDb } = await import("./db.js");
+    earningsDb
+      .prepare("INSERT INTO snapshots (symbol, ts, expiry_kind, report_date, expiry, spot, call_occ, call_strike, call_bid, call_ask, call_iv, call_volume, call_oi, call_delta) VALUES ('WDC','2026-10-21T20:00:00Z','next','2026-10-22','2026-11-20',378.5,'WDC261120C00380000',380,30,31,0.9,200,500,0.5)")
+      .run();
+    const [m] = mods.score.screen({ from: "2026-10-22", symbols: ["WDC"], horizon: "month" }, mods.seed.NOW);
+    expect(m.contract).toMatchObject({ expiry: "2026-11-20", delta: 0.5 });
+    const [w] = mods.score.screen({ from: "2026-10-22", symbols: ["WDC"], horizon: "week" }, mods.seed.NOW);
+    expect(w.contract!.expiry).toBe("2026-10-23");
+    earningsDb.prepare("DELETE FROM snapshots WHERE expiry_kind = 'next'").run();
+  });
 });
