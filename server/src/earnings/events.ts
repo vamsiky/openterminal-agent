@@ -1,7 +1,5 @@
 import * as fmp from "../providers/fmp.js";
 import { EARNINGS_TITLE, classify } from "../estimates/timing.js";
-import { db } from "../db.js";
-import { isForeignSymbol } from "../history/universe.js";
 import { earningsDb } from "./db.js";
 import type { ReportTime } from "./contracts.js";
 import { addSessions, sessionsFor } from "./sessions.js";
@@ -25,17 +23,6 @@ const iso = (unixSeconds: number) => new Date(unixSeconds * 1000).toISOString().
 const calendarDays = (a: string, b: string) => Math.round((Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`)) / 86_400_000);
 const dayBefore = (d: string) => new Date(Date.parse(`${d}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 
-/** The US-listed common stocks the earnings store covers. */
-export function universe(): string[] {
-  const rows = db
-    .prepare(
-      `SELECT symbol FROM bulk_profiles
-       WHERE exchange IN ('NYSE','NASDAQ','AMEX') AND COALESCE(is_etf,0) = 0 AND COALESCE(is_fund,0) = 0 AND is_actively_trading = 1
-       ORDER BY symbol`
-    )
-    .all() as Array<{ symbol: string }>;
-  return rows.map((r) => r.symbol).filter((s) => !isForeignSymbol(s));
-}
 const upsert = earningsDb.prepare(
   `INSERT INTO events (symbol, report_date, original_date, time, time_source, t0, r, fiscal_period, fiscal_year, period_ending,
      eps_actual, eps_estimate, revenue_actual, revenue_estimate, confirmed, check_fmp, check_transcript, check_press_release, check_volume,

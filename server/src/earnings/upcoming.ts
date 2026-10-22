@@ -4,7 +4,7 @@ import { timingsFor } from "../estimates/timing.js";
 import { addDays } from "../estimates/store.js";
 import { allWatchlistSymbols } from "../routes/watchlists.js";
 import { earningsDb } from "./db.js";
-import { universe } from "./events.js";
+import { earningsUniverseSet } from "./universe.js";
 import { sessionsFor } from "./sessions.js";
 
 // The next 120 days of the FMP calendar with report times, refreshed nightly, and
@@ -23,7 +23,8 @@ const insertUpcoming = earningsDb.prepare(
 );
 
 /** Replaces `upcoming` with the next 120 days (US-listed names only). A failed window keeps the old rows and upserts what arrived. */
-export async function refreshUpcoming(today: string, listed: Set<string> = new Set(universe())): Promise<{ rows: number; failed: number }> {
+export async function refreshUpcoming(today: string, listed?: Set<string>): Promise<{ rows: number; failed: number }> {
+  const inUniverse = listed ?? (await earningsUniverseSet());
   const seen: fmp.EarningsCalendarRow[] = [];
   let failed = 0;
   for (const [from, to] of windows(today)) {
@@ -34,7 +35,7 @@ export async function refreshUpcoming(today: string, listed: Set<string> = new S
       console.error(`[earnings] upcoming ${from}..${to} failed:`, err instanceof Error ? err.message : err);
     }
   }
-  const rows = seen.filter((r) => listed.has(r.symbol) && r.epsActual === null);
+  const rows = seen.filter((r) => inUniverse.has(r.symbol) && r.epsActual === null);
   // A null FMP time falls back to the press-release inference, when the app has one for the name.
   const inferred = timingsFor([...new Set(rows.filter((r) => !r.time).map((r) => r.symbol))]);
   earningsDb.transaction(() => {

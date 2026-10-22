@@ -5,7 +5,8 @@ import { ensureCalendar, isTradingDay } from "../providers/alpaca-calendar.js";
 import { addDays } from "../estimates/store.js";
 import { earningsDb } from "./db.js";
 import { runEvents, runStock } from "./backfill.js";
-import { universe, type StoredEvent } from "./events.js";
+import { type StoredEvent } from "./events.js";
+import { earningsUniverseSet } from "./universe.js";
 import { refreshAnalystActions, refreshUpcoming } from "./upcoming.js";
 
 // Nightly at 18:30 New York time on trading days: reports since the last run (events, then
@@ -53,7 +54,7 @@ export async function runNightly(today: string, hooks: Hooks = {}): Promise<Nigh
     }
   };
   await step("calendar", () => ensureCalendar(Number(today.slice(0, 4))));
-  const listed = new Set(universe());
+  const listed = await earningsUniverseSet();
   const symbols = (await step("reported", () => reportedSince(today, listed))) ?? [];
   s.symbols = symbols.length;
   let fresh: StoredEvent[] = [];

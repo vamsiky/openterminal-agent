@@ -9,6 +9,8 @@ const grades = vi.fn<(symbol: string) => Promise<Grade[]>>();
 const priceTargetNews = vi.fn<(symbol: string) => Promise<PriceTargetNews[]>>();
 vi.mock("../providers/fmp.js", () => ({ earningsCalendar, grades, priceTargetNews, pressReleases: vi.fn(async () => []), earningsReports: vi.fn(async () => []), isConfigured: () => true }));
 
+vi.mock("../providers/alpaca-assets.js", () => ({ allAssets: async () => ["AMC","BMO","NOTIME","INFER","SPY","OTC1"].map((symbol) => ({ symbol, name: `${symbol} Common Stock`, exchange: "", type: "stock" })) }));
+
 let tmpDir: string;
 let up: typeof import("./upcoming.js");
 let timing: typeof import("../estimates/timing.js");

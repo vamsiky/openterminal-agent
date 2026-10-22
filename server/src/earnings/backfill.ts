@@ -7,7 +7,8 @@ import { earningsDb } from "./db.js";
 import { backfillOptions } from "./option-paths.js";
 import { rebuildStats } from "./stats.js";
 import { refreshAnalystActions, refreshUpcoming } from "./upcoming.js";
-import { processSymbol, universe, type StoredEvent, type SymbolResult } from "./events.js";
+import { processSymbol, type StoredEvent, type SymbolResult } from "./events.js";
+import { earningsUniverse } from "./universe.js";
 import { ensureCalendarRange } from "./sessions.js";
 import { buildStockPaths } from "./stock-paths.js";
 
@@ -135,7 +136,7 @@ async function main(): Promise<void> {
   if (!["events", "stock", "options", "all"].includes(phase)) throw new Error("--phase must be events, stock, options or all");
   const since = arg("since") ?? DEFAULT_SINCE;
   const explicit = arg("symbols");
-  const symbols = explicit ? explicit.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) : universe();
+  const symbols = explicit ? explicit.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) : await earningsUniverse();
   const today = tradingDay(new Date().toISOString());
   const force = Boolean(explicit);
   log(`earnings backfill: phase=${phase} since=${since} symbols=${symbols.length}${explicit ? " (explicit, redone)" : ""} alpaca=${process.env.ALPACA_MAX_REQ_PER_MIN}/min fmp=${process.env.FMP_MAX_REQ_PER_MIN}/min`);

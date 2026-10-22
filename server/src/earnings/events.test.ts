@@ -247,19 +247,3 @@ describe("confirmation", () => {
     expect(stored("X", "2026-11-27")).toMatchObject({ t0: "2026-11-25", r: "2026-11-27", confirmed: 1 });
   });
 });
-
-describe("universe", () => {
-  it("keeps listed common stocks only", () => {
-    const ins = db.prepare("INSERT INTO bulk_profiles (symbol, exchange, is_etf, is_fund, is_actively_trading, data, updated_at) VALUES (?, ?, ?, ?, ?, '{}', 'x')");
-    ins.run("OKA", "NASDAQ", 0, 0, 1);
-    ins.run("OKB", "NYSE", 0, 0, 1);
-    ins.run("OKC", "AMEX", 0, 0, 1);
-    ins.run("ETFX", "NYSE", 1, 0, 1);
-    ins.run("FUNDX", "NASDAQ", 0, 1, 1);
-    ins.run("DEADX", "NASDAQ", 0, 0, 0);
-    ins.run("OTCX", "OTC", 0, 0, 1);
-    ins.run("SHOP.TO", "NYSE", 0, 0, 1);
-    ins.run("BRK.B", "NYSE", 0, 0, 1);
-    expect(events.universe()).toEqual(["BRK.B", "OKA", "OKB", "OKC"]);
-  });
-});

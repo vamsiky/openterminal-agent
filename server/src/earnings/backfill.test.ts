@@ -22,6 +22,8 @@ vi.mock("../providers/alpaca.js", async (orig) => ({
   },
 }));
 
+vi.mock("../providers/alpaca-assets.js", () => ({ allAssets: async () => ["AAA","BBB"].map((symbol) => ({ symbol, name: `${symbol} Common Stock`, exchange: "", type: "stock" })) }));
+
 let tmpDir: string;
 let backfill: typeof import("./backfill.js");
 let jobs: typeof import("./jobs.js");
