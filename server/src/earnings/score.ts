@@ -433,7 +433,7 @@ export function gather(rows: UpcomingRow[], horizon: Horizon, now = new Date()):
   const lastStmt = earningsDb.prepare(
     `SELECT e.report_date AS d, e.eps_actual, e.eps_estimate, e.revenue_actual, e.revenue_estimate, p.t0_close, p.r_close
      FROM events e LEFT JOIN stock_paths p ON p.symbol = e.symbol AND p.report_date = e.report_date
-     WHERE e.symbol = ? AND e.report_date < ? AND e.confirmed = 1 ORDER BY e.report_date DESC LIMIT 1`
+     WHERE e.symbol = ? AND e.report_date < ? AND e.confirmed = 1 AND e.t0 IS NOT NULL ORDER BY e.report_date DESC LIMIT 1`
   );
 
   // Analyst actions in the last 30 days.

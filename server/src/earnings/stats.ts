@@ -169,7 +169,7 @@ function load(): Columns {
       `SELECT e.symbol, e.report_date, e.time, e.t0, e.r,
               p.t0_m20, p.t0_m10, p.t0_m5, p.t0_m2, p.t0_m1, p.t0_open, p.t0_1000, p.t0_1545, p.t0_close, p.r_open, p.r_close, p.prev_close
        FROM events e JOIN stock_paths p ON p.symbol = e.symbol AND p.report_date = e.report_date
-       WHERE e.confirmed = 1 ORDER BY e.symbol, e.report_date`
+       WHERE e.confirmed = 1 AND e.t0 IS NOT NULL ORDER BY e.symbol, e.report_date`
     )
     .raw(true)
     .all() as Array<[string, string, ReportTime | null, string | null, string | null, ...Array<number | null>]>;

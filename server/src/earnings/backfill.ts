@@ -4,6 +4,8 @@ import { tradingDay } from "../history/time.js";
 import { isConfigured as alpacaConfigured } from "../providers/alpaca.js";
 import { isConfigured as fmpConfigured } from "../providers/fmp.js";
 import { earningsDb } from "./db.js";
+import { backfillOptions } from "./option-paths.js";
+import { rebuildStats } from "./stats.js";
 import { processSymbol, universe, type StoredEvent, type SymbolResult } from "./events.js";
 import { ensureCalendarRange } from "./sessions.js";
 import { buildStockPaths } from "./stock-paths.js";
@@ -12,7 +14,7 @@ import { buildStockPaths } from "./stock-paths.js";
 //   npm run backfill-earnings -w server -- [--symbols A,B] [--phase events|stock|options|all] [--since 2017-01-01]
 // events: FMP per-symbol earnings history, confirmed and stored in earnings.db.
 // stock:  anchors from daily_bars plus 15-minute SIP bars (one multi-symbol request per date).
-// options: the option side (not wired here yet).
+// options: historical option paths (option-paths.ts). After any completed run the pooled stats are rebuilt.
 // Resumable: a symbol finished in a phase is recorded in backfill_progress and skipped next
 // time (naming symbols with --symbols always redoes them). Safe to re-run: every write is an upsert.
 // Request caps: EARNINGS_BACKFILL_ALPACA_PER_MIN (default 2500) and EARNINGS_BACKFILL_FMP_PER_MIN
@@ -141,10 +143,11 @@ async function main(): Promise<void> {
     log(`[stock] done: ${JSON.stringify(totals)}`);
   }
   if (phase === "options" || phase === "all") {
-    // OPS-1: wire backfillOptions here (import { backfillOptions } from "./option-paths.js";
-    //   const r = await backfillOptions(symbols, { since }); log(`[options] ${JSON.stringify(r)}`);)
-    log("[options] not wired yet: the option phase lands with option-paths.ts");
+    const r = await backfillOptions(symbols, { since });
+    log(`[options] done: ${JSON.stringify(r)}`);
   }
+  const stats = rebuildStats();
+  log(`[stats] rebuilt: ${JSON.stringify(stats)}`);
 }
 
 // Run only when started as the CLI, not when jobs.ts or a test imports the phases.

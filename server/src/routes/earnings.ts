@@ -10,6 +10,7 @@ import type { CapBucket, EarningsEvent, EarningsStatus, EventStats, OptionLegPat
 import { earningsDb } from "../earnings/db.js";
 import { drainReviews, fitsToday, listReviews, queueReviews } from "../earnings/review.js";
 import { gather, scoreSetup, SCREEN_SORTS, screen, setupFor, upcomingRows, type ScreenParams } from "../earnings/score.js";
+import { lastNightly } from "../earnings/jobs.js";
 import { ALL_KEY, capKey, getStats, poolKey, symKey } from "../earnings/stats.js";
 
 export const earningsRouter = Router();
@@ -128,7 +129,7 @@ earningsRouter.get("/stats", (req, res) => {
 
 earningsRouter.get("/status", (_req, res) => {
   const one = <T,>(sql: string, ...args: unknown[]) => earningsDb.prepare(sql).get(...args) as T;
-  const prog = earningsDb.prepare("SELECT task, COUNT(*) AS n, MIN(updated_at) AS first, MAX(updated_at) AS last, SUM(status = 'error') AS errors FROM backfill_progress GROUP BY task").all() as Array<{ task: string; n: number; first: string; last: string; errors: number }>;
+  const prog = earningsDb.prepare("SELECT task, COUNT(*) AS n, MIN(updated_at) AS first, MAX(updated_at) AS last, SUM(status = 'error') AS errors, SUM(status = 'done') AS done FROM backfill_progress WHERE task IN ('events','stock','options','analyst') GROUP BY task").all() as Array<{ task: string; n: number; first: string; last: string; errors: number; done: number }>;
   const byTask = new Map(prog.map((p) => [p.task, p]));
   const phase: EarningsStatus["backfill"]["phase"] = byTask.has("options") ? "options" : byTask.has("stock") ? "stock" : byTask.has("events") ? "events" : "idle";
   const current = byTask.get(phase);
@@ -145,11 +146,11 @@ earningsRouter.get("/status", (_req, res) => {
   }
   const status: EarningsStatus = {
     backfill: {
-      phase, symbolsDone: current?.n ?? 0, symbolsTotal: Math.max(total, current?.n ?? 0), eventsStored: ev.stored, eventsConfirmed: ev.confirmed,
+      phase, symbolsDone: current?.done ?? 0, symbolsTotal: Math.max(total, current?.n ?? 0), eventsStored: ev.stored, eventsConfirmed: ev.confirmed,
       optionEvents: one<{ n: number }>("SELECT COUNT(DISTINCT symbol || report_date) AS n FROM option_paths").n,
       startedAt: current?.first ?? null, updatedAt: current?.last ?? null, errors: [...byTask.values()].reduce((a, p) => a + (p.errors ?? 0), 0),
     },
-    nightly: { lastRun: ev.last, newEvents: one<{ n: number }>("SELECT COUNT(*) AS n FROM events WHERE updated_at >= ?", addDays(today, -1) + "T00:00:00Z").n },
+    nightly: lastNightly() ?? { lastRun: null, newEvents: 0 },
     snapshots: { lastRun: snap.last, namesTracked: tracked, rowsToday: snap.rows },
     db: { sizeBytes: size },
   };
