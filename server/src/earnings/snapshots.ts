@@ -71,7 +71,7 @@ export function trackedNames(kind: "near" | "far", today: string, universe: Set<
   const out: Tracked[] = [];
   for (const r of rows) {
     // Only the shared earnings universe (common stock and ADRs): a preferred like ABR-PD makes Alpaca reject a whole batch.
-    if (seen.has(r.symbol) || (universe && !universe.has(r.symbol))) continue;
+    if (seen.has(r.symbol) || (universe && universe.size > 0 && !universe.has(r.symbol))) continue;
     seen.add(r.symbol);
     out.push({ symbol: r.symbol, reportDate: r.report_date, t0: r.t0, r: r.r });
   }
