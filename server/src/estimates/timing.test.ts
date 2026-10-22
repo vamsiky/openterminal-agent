@@ -5,8 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { PressRelease } from "../providers/fmp.js";
 
 const pressReleases = vi.fn<(symbol: string, limit?: number) => Promise<PressRelease[]>>();
-const earnings = vi.fn(async () => [] as unknown[]);
-vi.mock("../providers/fmp.js", () => ({ pressReleases, earnings, isConfigured: () => true }));
+const earningsReports = vi.fn<(symbol: string, limit?: number, opts?: unknown) => Promise<unknown[]>>(async () => []);
+vi.mock("../providers/fmp.js", () => ({ pressReleases, earningsReports, isConfigured: () => true }));
 
 let tmpDir: string;
 let timing: typeof import("./timing.js");
@@ -77,7 +77,8 @@ describe("refreshTimings", () => {
   beforeEach(() => {
     db.exec("DELETE FROM earnings_timing; DELETE FROM earnings_calendar; DELETE FROM watchlist_items; DELETE FROM watchlists;");
     pressReleases.mockReset();
-    earnings.mockClear();
+    earningsReports.mockReset();
+    earningsReports.mockResolvedValue([]);
     const row = (symbol: string, reportDate: string, actual: number | null) => ({ symbol, reportDate, epsEstimate: 1, revenueEstimate: 1, epsActual: actual, revenueActual: null });
     store.recordCalendar(
       [
@@ -103,14 +104,14 @@ describe("refreshTimings", () => {
     expect(r).toEqual({ symbols: 2, timed: 2, unknown: 0, failed: 0 });
     expect([...new Set(pressReleases.mock.calls.map((c) => c[0]))].sort()).toEqual(["SOON", "WL"]);
     expect(pressReleases).toHaveBeenCalledWith("WL", 100, { from: dayAgo(5), to: dayAgo(5) });
-    expect(timing.timingsFor(["WL", "FAR"]).get("WL")).toEqual({ timing: "amc", matched: 2, total: 4 });
+    expect(timing.timingsFor(["WL", "FAR"]).get("WL")).toEqual({ timing: "amc", matched: 2, total: 4, source: "press_release" });
     expect(timing.timingsFor(["FAR"]).size).toBe(0);
-    expect(earnings).not.toHaveBeenCalled();
+    expect(earningsReports).toHaveBeenCalledWith("WL", 8, { includeReportTimes: true });
   });
 
   it("refreshes only entries older than 30 days", async () => {
-    timing.recordTiming("WL", { timing: "bmo", matched: 4, total: 4 }, dayAgo(29));
-    timing.recordTiming("SOON", { timing: "bmo", matched: 4, total: 4 }, dayAgo(31));
+    timing.recordTiming("WL", { timing: "bmo", matched: 4, total: 4, source: "press_release" }, dayAgo(29));
+    timing.recordTiming("SOON", { timing: "bmo", matched: 4, total: 4, source: "press_release" }, dayAgo(31));
     const r = await timing.refreshTimings(today);
     expect(r.symbols).toBe(1);
     expect([...new Set(pressReleases.mock.calls.map((c) => c[0]))]).toEqual(["SOON"]);
@@ -120,7 +121,7 @@ describe("refreshTimings", () => {
 
   it("tops up report dates from FMP when the captured calendar has fewer than four, and counts failures", async () => {
     db.prepare("DELETE FROM earnings_calendar WHERE symbol = 'WL' AND report_date < ?").run(dayAgo(50));
-    earnings.mockResolvedValueOnce([{ upcoming: false, dateReported: Date.parse(dayAgo(185) + "T00:00:00Z") / 1000 }]);
+    earningsReports.mockResolvedValueOnce([{ date: Date.parse(dayAgo(185) + "T00:00:00Z") / 1000, epsActual: 1, time: null }]);
     pressReleases.mockImplementation(async (symbol) => {
       if (symbol === "SOON") throw new Error("boom");
       return [];
@@ -128,8 +129,29 @@ describe("refreshTimings", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await timing.refreshTimings(today);
     spy.mockRestore();
-    expect(earnings).toHaveBeenCalledWith("WL", 8, expect.any(Date));
     expect(r).toEqual({ symbols: 2, timed: 0, unknown: 1, failed: 1 });
-    expect(timing.timingsFor(["WL"]).get("WL")).toEqual({ timing: null, matched: 0, total: 2 });
+    expect(timing.timingsFor(["WL"]).get("WL")).toEqual({ timing: null, matched: 0, total: 2, source: null });
+  });
+
+  const fmpRow = (daysAgo: number, time: "bmo" | "amc" | null, actual: number | null = 1) => ({ date: Date.parse(dayAgo(daysAgo) + "T00:00:00Z") / 1000, epsActual: actual, time });
+
+  it("prefers FMP's time (the upcoming report's own, else the majority) and skips the press-release inference", async () => {
+    earningsReports.mockImplementation(async (symbol: unknown) =>
+      symbol === "WL"
+        ? [fmpRow(-10, "bmo", null), fmpRow(5, "amc"), fmpRow(95, "amc"), fmpRow(185, "bmo")] // the upcoming report says bmo
+        : [fmpRow(5, "amc"), fmpRow(95, "amc"), fmpRow(185, "bmo"), fmpRow(275, null)] // no upcoming time: majority amc
+    );
+    const r = await timing.refreshTimings(today);
+    expect(r).toEqual({ symbols: 2, timed: 2, unknown: 0, failed: 0 });
+    expect(pressReleases).not.toHaveBeenCalled();
+    expect(timing.timingsFor(["WL", "SOON"]).get("WL")).toEqual({ timing: "bmo", matched: 2, total: 4, source: "fmp" });
+    expect(timing.timingsFor(["SOON"]).get("SOON")).toEqual({ timing: "amc", matched: 2, total: 4, source: "fmp" });
+  });
+
+  it("infers from press releases only when FMP has no time, and a tie falls through to the inference", async () => {
+    earningsReports.mockImplementation(async (symbol: unknown) => (symbol === "WL" ? [fmpRow(5, null), fmpRow(95, null)] : [fmpRow(5, "amc"), fmpRow(95, "bmo")]));
+    await timing.refreshTimings(today);
+    expect(timing.timingsFor(["WL"]).get("WL")).toMatchObject({ timing: "amc", source: "press_release" });
+    expect(timing.timingsFor(["SOON"]).get("SOON")).toMatchObject({ timing: "amc", source: "press_release" });
   });
 });

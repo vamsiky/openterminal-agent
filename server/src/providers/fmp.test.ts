@@ -4,6 +4,10 @@ import {
   FmpNotConfigured,
   earnings,
   earningsCalendar,
+  earningsReports,
+  grades,
+  priceTargetNews,
+  transcriptDates,
   fmpSymbol,
   earningsInfo,
   economicCalendar,
@@ -364,5 +368,67 @@ describe("fmp provider", () => {
     resetState();
     vi.stubGlobal("fetch", vi.fn(async () => fail(500)));
     await expect(pressReleases("AAPL")).rejects.toBeInstanceOf(FmpError);
+  });
+});
+
+describe("fmp report times, transcripts and analyst feeds", () => {
+  beforeEach(() => {
+    process.env.FMP_API_KEY = "test-key";
+    resetState();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.FMP_API_KEY;
+  });
+
+  const wdc = { symbol: "WDC", date: "2026-08-05", epsActual: 3.56, epsEstimated: 3.31, revenueActual: 3.747e9, revenueEstimated: 3.7e9, time: "amc", periodEnding: "2026-07-03", fiscalPeriod: "Q4", fiscalYear: 2026, confirmed: true };
+
+  it("asks for report times and maps epsEstimated/revenueEstimated and the time fields; nothing extra without the flag", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok([wdc, { ...wdc, symbol: "NOTIME", time: null, confirmed: false }, { ...wdc, symbol: "ODD", time: "dmh" }]));
+    vi.stubGlobal("fetch", fetchMock);
+    const rows = await earningsCalendar("2026-08-01", "2026-08-07", { includeReportTimes: true });
+    expect(new URL(fetchMock.mock.calls[0][0]).searchParams.get("includeReportTimes")).toBe("true");
+    expect(rows[0]).toMatchObject({ symbol: "WDC", epsEstimated: 3.31, revenueEstimated: 3.7e9, time: "amc", confirmed: true, fiscalPeriod: "Q4", fiscalYear: 2026, periodEnding: "2026-07-03" });
+    expect(rows[1]).toMatchObject({ time: null, confirmed: false });
+    expect(rows[2].time).toBeNull(); // FMP never says dmh; anything but bmo/amc is unknown
+    const plain = await earningsCalendar("2026-08-08", "2026-08-14");
+    expect(new URL(fetchMock.mock.calls[1][0]).searchParams.has("includeReportTimes")).toBe(false);
+    expect("time" in plain[0]).toBe(false);
+  });
+
+  it("returns per-symbol rows newest first with times, and earnings() can carry them", async () => {
+    const older = { ...wdc, date: "2026-05-01", time: "bmo" };
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => (new URL(url).pathname.endsWith("/income-statement") ? ok([]) : ok([older, wdc])) as never));
+    const rows = await earningsReports("WDC", 60, { includeReportTimes: true });
+    expect(rows.map((r) => r.time)).toEqual(["amc", "bmo"]);
+    const history = await earnings("WDC", 12, new Date("2026-10-20T12:00:00Z"), { includeReportTimes: true });
+    expect(history[0]).toMatchObject({ time: "amc", confirmed: true });
+  });
+
+  it("maps transcript dates, grades and price-target news, and yields [] on a plan without them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const path = new URL(url).pathname;
+        if (path.endsWith("/earning-call-transcript-dates")) return ok([{ quarter: 3, fiscalYear: 2026, date: "2026-04-30" }, { quarter: 4, fiscalYear: 2026, date: "2026-08-05" }]) as never;
+        if (path.endsWith("/grades")) return ok([{ symbol: "WDC", date: "2026-10-21", gradingCompany: "B of A Securities", previousGrade: "Buy", newGrade: "Buy", action: "maintain" }]) as never;
+        return ok([
+          { symbol: "WDC", publishedDate: "2026-10-20T10:46:43.000Z", newsTitle: "Western Digital price target lowered to $643 from $1,676 at Morgan Stanley", priceTarget: 643, analystCompany: "Morgan Stanley" },
+          { symbol: "WDC", publishedDate: "2026-10-19T10:00:00.000Z", newsTitle: "Initiated at Buy", priceTarget: 700, analystCompany: null },
+        ]) as never;
+      })
+    );
+    expect(await transcriptDates("WDC")).toEqual(["2026-08-05", "2026-04-30"]);
+    expect(await grades("WDC")).toEqual([{ date: "2026-10-21", firm: "B of A Securities", action: "maintain", previousGrade: "Buy", newGrade: "Buy" }]);
+    expect(await priceTargetNews("WDC")).toEqual([
+      { date: "2026-10-20", firm: "Morgan Stanley", priceTarget: 643, priorPriceTarget: 1676, title: expect.any(String) },
+      { date: "2026-10-19", firm: null, priceTarget: 700, priorPriceTarget: null, title: "Initiated at Buy" },
+    ]);
+
+    resetState();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(fail(402)));
+    expect(await transcriptDates("WDC")).toEqual([]);
+    expect(await grades("WDC")).toEqual([]);
+    expect(await priceTargetNews("WDC")).toEqual([]);
   });
 });
