@@ -122,14 +122,32 @@ describe("confirmation", () => {
     expect(stored("X", "2026-05-06")).toMatchObject({ confirmed: 0, reason: "unconfirmed", check_fmp: 1, check_volume: 0 });
   });
 
-  it("corrects a date one session off when volume peaks there (WDC 08-04 vs 08-05)", async () => {
+  it("corrects an amc date one session off when volume peaks there and a release backs the adjacent session (WDC 08-04 vs 08-05)", async () => {
     bars("X", { "2026-08-06": 6000 }); // R of the real 08-05 amc report
     earningsReports.mockResolvedValue([row("2026-08-04", "amc")]);
-    transcriptDates.mockResolvedValue(["2026-08-05"]); // would pass the ±1 amc rule on the wrong date too
+    transcriptDates.mockResolvedValue(["2026-08-05"]); // passes the ±1 amc rule on the wrong date too, so it cannot decide
+    pressReleases.mockImplementation(async (_s, _l, range) => (range?.to === "2026-08-05" ? [rel("2026-08-05 16:05:00")] : []));
     const r = await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
     expect(r).toMatchObject({ confirmed: 1, shifted: 1 });
     expect(stored("X", "2026-08-04")).toBeUndefined();
-    expect(stored("X", "2026-08-05")).toMatchObject({ original_date: "2026-08-04", reason: "date_shifted", confirmed: 1, check_volume: 1, t0: "2026-08-05", r: "2026-08-06" });
+    expect(stored("X", "2026-08-05")).toMatchObject({ original_date: "2026-08-04", reason: "date_shifted", confirmed: 1, check_volume: 1, check_press_release: 1, t0: "2026-08-05", r: "2026-08-06" });
+  });
+
+  it("does not move an amc date on a transcript alone (the next-morning call explains it)", async () => {
+    bars("X", { "2026-08-06": 6000 });
+    earningsReports.mockResolvedValue([row("2026-08-04", "amc")]);
+    transcriptDates.mockResolvedValue(["2026-08-05"]);
+    await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
+    expect(stored("X", "2026-08-05")).toBeUndefined();
+    expect(stored("X", "2026-08-04")).toMatchObject({ reason: "ok", confirmed: 1, check_transcript: 1, check_volume: 0 });
+  });
+
+  it("moves a bmo date when a transcript is dated exactly on the adjacent session", async () => {
+    bars("X", { "2026-08-05": 6000 });
+    earningsReports.mockResolvedValue([row("2026-08-04", "bmo")]);
+    transcriptDates.mockResolvedValue(["2026-08-05"]);
+    await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
+    expect(stored("X", "2026-08-05")).toMatchObject({ original_date: "2026-08-04", reason: "date_shifted", confirmed: 1, t0: "2026-08-04", r: "2026-08-05" });
   });
 
   it("keeps FMP's date when a transcript is dated exactly on it, even if volume is lukewarm there", async () => {
@@ -139,6 +157,42 @@ describe("confirmation", () => {
     const r = await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
     expect(r).toMatchObject({ confirmed: 1, shifted: 0 });
     expect(stored("X", "2026-08-04")).toMatchObject({ reason: "ok", check_transcript: 1, check_volume: 0 });
+  });
+
+  it("does not shift on volume alone: no transcript or release on the adjacent session leaves the event unconfirmed", async () => {
+    bars("X", { "2026-08-06": 6000 });
+    earningsReports.mockResolvedValue([row("2026-08-04", "amc")]);
+    await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
+    expect(stored("X", "2026-08-04")).toMatchObject({ reason: "unconfirmed", confirmed: 0 });
+    expect(stored("X", "2026-08-05")).toBeUndefined();
+  });
+
+  it("keeps FMP's date when an earnings release is dated on it, and confirms through that release", async () => {
+    bars("X", { "2026-08-06": 6000 });
+    earningsReports.mockResolvedValue([row("2026-08-04", "amc")]);
+    pressReleases.mockResolvedValue([rel("2026-08-04 16:05:00")]);
+    await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
+    expect(stored("X", "2026-08-04")).toMatchObject({ reason: "ok", confirmed: 1, check_press_release: 1, check_volume: 0 });
+  });
+
+  it("shifts when an earnings release backs the adjacent session instead of a transcript", async () => {
+    bars("X", { "2026-08-06": 6000 });
+    earningsReports.mockResolvedValue([row("2026-08-04", "amc")]);
+    pressReleases.mockImplementation(async (_s, _l, range) => (range?.to === "2026-08-05" ? [rel("2026-08-05 16:10:00")] : []));
+    await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
+    expect(stored("X", "2026-08-05")).toMatchObject({ reason: "date_shifted", confirmed: 1, check_press_release: 1, check_volume: 1 });
+  });
+
+  it("does not store reports dated today or later, before the first daily bar, or for a symbol with no bars", async () => {
+    bars("X", { "2026-05-07": 5000 });
+    db.prepare("DELETE FROM daily_bars WHERE symbol = 'X' AND day < '2026-03-01'").run();
+    earningsReports.mockResolvedValue([row("2026-05-06", "amc"), row("2026-10-21", "amc"), row("2026-02-05", "amc")]);
+    const r = await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
+    expect(r).toMatchObject({ events: 1, skipped: 1, noBars: 0 });
+    expect(edb.prepare("SELECT report_date FROM events").all()).toEqual([{ report_date: "2026-05-06" }]);
+    earningsReports.mockResolvedValue([row("2026-05-06", "amc")]);
+    const none = await events.processSymbol("NOBARS", { since: "2026-01-01", today: "2026-10-21" });
+    expect(none).toMatchObject({ events: 0, skipped: 1 });
   });
 
   it("does not shift on a gap alone", async () => {
@@ -154,6 +208,7 @@ describe("confirmation", () => {
   it("also finds a shift to the earlier session, and a re-run is idempotent", async () => {
     bars("X", { "2026-08-04": 6000 }); // real R is 08-04 (bmo on 08-04); FMP says 08-05
     earningsReports.mockResolvedValue([row("2026-08-05", "bmo")]);
+    transcriptDates.mockResolvedValue(["2026-08-04"]);
     await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
     const again = await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
     expect(stored("X", "2026-08-04")).toMatchObject({ original_date: "2026-08-05", reason: "date_shifted", confirmed: 1, t0: "2026-08-03", r: "2026-08-04" });
@@ -190,21 +245,5 @@ describe("confirmation", () => {
     earningsReports.mockResolvedValue([row("2026-11-27", "bmo")]);
     await events.processSymbol("X", { since: "2026-01-01", today: "2026-12-31" });
     expect(stored("X", "2026-11-27")).toMatchObject({ t0: "2026-11-25", r: "2026-11-27", confirmed: 1 });
-  });
-});
-
-describe("universe", () => {
-  it("keeps listed common stocks only", () => {
-    const ins = db.prepare("INSERT INTO bulk_profiles (symbol, exchange, is_etf, is_fund, is_actively_trading, data, updated_at) VALUES (?, ?, ?, ?, ?, '{}', 'x')");
-    ins.run("OKA", "NASDAQ", 0, 0, 1);
-    ins.run("OKB", "NYSE", 0, 0, 1);
-    ins.run("OKC", "AMEX", 0, 0, 1);
-    ins.run("ETFX", "NYSE", 1, 0, 1);
-    ins.run("FUNDX", "NASDAQ", 0, 1, 1);
-    ins.run("DEADX", "NASDAQ", 0, 0, 0);
-    ins.run("OTCX", "OTC", 0, 0, 1);
-    ins.run("SHOP.TO", "NYSE", 0, 0, 1);
-    ins.run("BRK.B", "NYSE", 0, 0, 1);
-    expect(events.universe()).toEqual(["BRK.B", "OKA", "OKB", "OKC"]);
   });
 });

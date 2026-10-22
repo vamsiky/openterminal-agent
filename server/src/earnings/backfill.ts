@@ -7,12 +7,14 @@ import { earningsDb } from "./db.js";
 import { backfillOptions } from "./option-paths.js";
 import { rebuildStats } from "./stats.js";
 import { refreshAnalystActions, refreshUpcoming } from "./upcoming.js";
-import { processSymbol, universe, type StoredEvent, type SymbolResult } from "./events.js";
+import { processSymbol, type StoredEvent, type SymbolResult } from "./events.js";
+import { earningsUniverse } from "./universe.js";
 import { ensureCalendarRange } from "./sessions.js";
 import { buildStockPaths } from "./stock-paths.js";
 
 // Usage (from the repo root):
 //   npm run backfill-earnings -w server -- [--symbols A,B] [--phase events|stock|options|all] [--since 2017-01-01]
+// (the options phase never goes back past 2024-02-01, where Alpaca's option history starts)
 // events: FMP per-symbol earnings history, confirmed and stored in earnings.db.
 // stock:  anchors from daily_bars plus 15-minute SIP bars (one multi-symbol request per date).
 // options: historical option paths (option-paths.ts). After any completed run the pooled stats are rebuilt.
@@ -23,6 +25,10 @@ import { buildStockPaths } from "./stock-paths.js";
 
 export type Phase = "events" | "stock" | "options" | "all";
 export const DEFAULT_SINCE = "2017-01-01";
+export const OPTIONS_FLOOR = "2024-02-01";
+
+/** The options phase starts at --since, but never before Alpaca's option history. */
+export const optionsSince = (since: string): string => (since < OPTIONS_FLOOR ? OPTIONS_FLOOR : since);
 const WORKERS = 12;
 const STOCK_CHUNK = 1500; // symbols per stock pass: big enough that most dates batch many names per request
 
@@ -32,8 +38,8 @@ const mark = earningsDb.prepare(
    ON CONFLICT (task, symbol) DO UPDATE SET status = excluded.status, detail = excluded.detail, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`
 );
 
-export type PhaseTotals = { symbols: number; skipped: number; errors: number; events: number; confirmed: number; shifted: number; unconfirmed: number; noBars: number; stockPaths: number };
-const zero = (): PhaseTotals => ({ symbols: 0, skipped: 0, errors: 0, events: 0, confirmed: 0, shifted: 0, unconfirmed: 0, noBars: 0, stockPaths: 0 });
+export type PhaseTotals = { symbols: number; skipped: number; errors: number; events: number; skippedEvents: number; confirmed: number; shifted: number; unconfirmed: number; noBars: number; stockPaths: number };
+const zero = (): PhaseTotals => ({ symbols: 0, skipped: 0, errors: 0, events: 0, skippedEvents: 0, confirmed: 0, shifted: 0, unconfirmed: 0, noBars: 0, stockPaths: 0 });
 
 const log = (line: string) => console.log(`${new Date().toISOString().slice(11, 19)} ${line}`);
 
@@ -54,6 +60,7 @@ export async function runEvents(symbols: string[], opts: { since: string; today:
         try {
           const r: SymbolResult = await processSymbol(symbol, opts);
           totals.events += r.events;
+          totals.skippedEvents += r.skipped;
           totals.confirmed += r.confirmed;
           totals.shifted += r.shifted;
           totals.unconfirmed += r.unconfirmed;
@@ -68,7 +75,7 @@ export async function runEvents(symbols: string[], opts: { since: string; today:
         finishedCount++;
         if (finishedCount % 100 === 0 || finishedCount === todo.length) {
           const rate = finishedCount / ((Date.now() - started) / 60_000);
-          log(`[events] ${finishedCount}/${todo.length} symbols (${totals.skipped} already done) events=${totals.events} confirmed=${totals.confirmed} shifted=${totals.shifted} unconfirmed=${totals.unconfirmed} errors=${totals.errors} ${rate.toFixed(0)}/min`);
+          log(`[events] ${finishedCount}/${todo.length} symbols (${totals.skipped} already done) events=${totals.events} confirmed=${totals.confirmed} shifted=${totals.shifted} unconfirmed=${totals.unconfirmed} skipped=${totals.skippedEvents} errors=${totals.errors} ${rate.toFixed(0)}/min`);
         }
       }
     })
@@ -129,7 +136,7 @@ async function main(): Promise<void> {
   if (!["events", "stock", "options", "all"].includes(phase)) throw new Error("--phase must be events, stock, options or all");
   const since = arg("since") ?? DEFAULT_SINCE;
   const explicit = arg("symbols");
-  const symbols = explicit ? explicit.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) : universe();
+  const symbols = explicit ? explicit.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) : await earningsUniverse();
   const today = tradingDay(new Date().toISOString());
   const force = Boolean(explicit);
   log(`earnings backfill: phase=${phase} since=${since} symbols=${symbols.length}${explicit ? " (explicit, redone)" : ""} alpaca=${process.env.ALPACA_MAX_REQ_PER_MIN}/min fmp=${process.env.FMP_MAX_REQ_PER_MIN}/min`);
@@ -144,7 +151,9 @@ async function main(): Promise<void> {
     log(`[stock] done: ${JSON.stringify(totals)}`);
   }
   if (phase === "options" || phase === "all") {
-    const r = await backfillOptions(symbols, { since });
+    const optSince = optionsSince(since);
+    log(`[options] since ${optSince}${optSince !== since ? ` (floor: Alpaca option history starts ${OPTIONS_FLOOR}; --since ${since} applies to events and stock only)` : ""}`);
+    const r = await backfillOptions(symbols, { since: optSince });
     log(`[options] done: ${JSON.stringify(r)}`);
   }
   if (phase === "all") {

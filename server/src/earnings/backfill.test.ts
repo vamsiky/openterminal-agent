@@ -22,6 +22,8 @@ vi.mock("../providers/alpaca.js", async (orig) => ({
   },
 }));
 
+vi.mock("../providers/alpaca-assets.js", () => ({ allAssets: async () => ["AAA","BBB"].map((symbol) => ({ symbol, name: `${symbol} Common Stock`, exchange: "", type: "stock" })) }));
+
 let tmpDir: string;
 let backfill: typeof import("./backfill.js");
 let jobs: typeof import("./jobs.js");
@@ -116,6 +118,14 @@ describe("backfill resume", () => {
     delete process.env.EARNINGS_BACKFILL_ALPACA_PER_MIN;
     delete process.env.ALPACA_MAX_REQ_PER_MIN;
     delete process.env.FMP_MAX_REQ_PER_MIN;
+  });
+});
+
+describe("options floor", () => {
+  it("raises an earlier --since to Alpaca's option history and leaves a later one alone", () => {
+    expect(backfill.optionsSince("2017-01-01")).toBe("2024-02-01");
+    expect(backfill.optionsSince("2024-01-31")).toBe("2024-02-01");
+    expect(backfill.optionsSince("2025-03-01")).toBe("2025-03-01");
   });
 });
 

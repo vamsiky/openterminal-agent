@@ -1,7 +1,5 @@
 import * as fmp from "../providers/fmp.js";
 import { EARNINGS_TITLE, classify } from "../estimates/timing.js";
-import { db } from "../db.js";
-import { isForeignSymbol } from "../history/universe.js";
 import { earningsDb } from "./db.js";
 import type { ReportTime } from "./contracts.js";
 import { addSessions, sessionsFor } from "./sessions.js";
@@ -19,23 +17,12 @@ import { loadDaily, reaction, type Daily } from "./stock-paths.js";
 // fail (or the report time is unknown and a release is the only way to infer it).
 
 export type StoredEvent = { symbol: string; reportDate: string };
-export type SymbolResult = { events: number; confirmed: number; shifted: number; unconfirmed: number; noBars: number; fresh: StoredEvent[] };
+export type SymbolResult = { events: number; skipped: number; confirmed: number; shifted: number; unconfirmed: number; noBars: number; fresh: StoredEvent[] };
 
 const iso = (unixSeconds: number) => new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 const calendarDays = (a: string, b: string) => Math.round((Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`)) / 86_400_000);
 const dayBefore = (d: string) => new Date(Date.parse(`${d}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 
-/** The US-listed common stocks the earnings store covers. */
-export function universe(): string[] {
-  const rows = db
-    .prepare(
-      `SELECT symbol FROM bulk_profiles
-       WHERE exchange IN ('NYSE','NASDAQ','AMEX') AND COALESCE(is_etf,0) = 0 AND COALESCE(is_fund,0) = 0 AND is_actively_trading = 1
-       ORDER BY symbol`
-    )
-    .all() as Array<{ symbol: string }>;
-  return rows.map((r) => r.symbol).filter((s) => !isForeignSymbol(s));
-}
 const upsert = earningsDb.prepare(
   `INSERT INTO events (symbol, report_date, original_date, time, time_source, t0, r, fiscal_period, fiscal_year, period_ending,
      eps_actual, eps_estimate, revenue_actual, revenue_estimate, confirmed, check_fmp, check_transcript, check_press_release, check_volume,
@@ -115,26 +102,43 @@ export async function evaluate(symbol: string, row: fmp.EarningsCalendarRow, tra
   let reportDate = date;
   let shifted = false;
   let rx = reactionOn(date);
-  // A call transcript dated exactly on FMP's date vouches for it: large caps often react by under
-  // 1.5x, which must not move a date a transcript backs (JPM, XOM, AAPL did in the pilot).
+  // An earnings release dated the report date (bmo: or the evening before).
+  const releaseAt = async (d: string): Promise<boolean> => {
+    const found = earningsRelease(await releases(time === "bmo" ? dayBefore(d) : d, d));
+    return found.some((x) => x.publishedAt.startsWith(d) || (time === "bmo" && x.publishedAt.startsWith(dayBefore(d)) && (classify(x.publishedAt) ?? "amc") === "amc"));
+  };
+  let shiftPress = false;
+  // Volume alone is weak (small banks and large caps both react under 1.5x on the right day: the first
+  // audit moved 118 dates a press release backed). A date moves only when nothing else supports FMP's
+  // date (no transcript exactly on it, no earnings release for it), volume is clear on the adjacent
+  // session, and something independent supports that session: a transcript dated exactly on it (bmo only), or an
+  // earnings release for it.
   if (rx && !rx.pass && !transcripts.includes(date)) {
-    // Volume says nothing happened on FMP's date: maybe the adjacent session, if volume (not a mere gap) is clear there.
     const scored = [addSessions(date, -1), addSessions(date, 1)]
       .map((d) => ({ d, rx: reactionOn(d) }))
       .filter((c): c is { d: string; rx: NonNullable<typeof rx> } => c.rx !== null && (c.rx.volumeRatio ?? 0) >= 1.5 && (c.rx.volumeRatio ?? 0) > (rx?.volumeRatio ?? 0))
       .sort((a, b) => (b.rx.volumeRatio ?? 0) - (a.rx.volumeRatio ?? 0));
-    if (scored.length > 0) {
-      reportDate = scored[0].d;
-      rx = scored[0].rx;
-      shifted = true;
+    if (scored.length > 0 && !(await releaseAt(date))) {
+      for (const c of scored) {
+        // An amc call is held that evening or the next morning, so a transcript a day either side of FMP's
+        // date supports both dates equally: only a release can back an amc move. A bmo call is same-day.
+        const byTranscript = time !== "amc" && transcripts.includes(c.d);
+        const press = byTranscript ? false : await releaseAt(c.d);
+        if (byTranscript || press) {
+          reportDate = c.d;
+          rx = c.rx;
+          shifted = true;
+          shiftPress = press;
+          break;
+        }
+      }
     }
   }
   const { t0, r } = sessionsFor(reportDate, time);
-  const checks = { ...base, transcript: transcriptAt(reportDate, time), volume: rx?.pass === true, pressRelease: pressDated && reportDate === date };
+  const checks = { ...base, transcript: transcriptAt(reportDate, time), volume: rx?.pass === true, pressRelease: (pressDated && reportDate === date) || shiftPress };
   if (rx !== null && !checks.transcript && !checks.volume && !checks.pressRelease) {
-    // Last resort: an earnings release dated the report date (bmo: or the evening before).
-    const found = earningsRelease(await releases(time === "bmo" ? dayBefore(reportDate) : reportDate, reportDate));
-    checks.pressRelease = found.some((x) => x.publishedAt.startsWith(reportDate) || (time === "bmo" && x.publishedAt.startsWith(dayBefore(reportDate)) && (classify(x.publishedAt) ?? "amc") === "amc"));
+    // Last resort: an earnings release dated the report date.
+    checks.pressRelease = await releaseAt(reportDate);
   }
   return finish({
     reportDate,
@@ -154,10 +158,17 @@ export async function evaluate(symbol: string, row: fmp.EarningsCalendarRow, tra
  * Idempotent: rerunning updates rows in place. `fresh` lists the (symbol, reportDate) not stored before.
  */
 export async function processSymbol(symbol: string, opts: { since: string; today: string }): Promise<SymbolResult> {
-  const out: SymbolResult = { events: 0, confirmed: 0, shifted: 0, unconfirmed: 0, noBars: 0, fresh: [] };
-  const rows = (await fmp.earningsReports(symbol, 80, { includeReportTimes: true })).filter((r) => r.epsActual !== null && iso(r.date) >= opts.since && iso(r.date) <= opts.today);
+  const out: SymbolResult = { events: 0, skipped: 0, confirmed: 0, shifted: 0, unconfirmed: 0, noBars: 0, fresh: [] };
+  // Reports dated today or later are not settled events yet (the nightly run picks them up the next day).
+  const all = (await fmp.earningsReports(symbol, 80, { includeReportTimes: true })).filter((r) => r.epsActual !== null && iso(r.date) >= opts.since && iso(r.date) < opts.today);
+  if (all.length === 0) return out;
+  const daily = loadDaily(symbol);
+  // No daily bars at all (preferreds, notes, delisted names) or a report before the first bar: nothing to measure, so not an event.
+  const first = [...daily.byDay.keys()].sort()[0];
+  const rows = all.filter((r) => first !== undefined && iso(r.date) > first);
+  out.skipped = all.length - rows.length;
   if (rows.length === 0) return out;
-  const [transcripts, daily] = [await fmp.transcriptDates(symbol), loadDaily(symbol)];
+  const transcripts = await fmp.transcriptDates(symbol);
   for (const row of rows) {
     const ev = await evaluate(symbol, row, transcripts, daily);
     const wasThere = exists.get(symbol, ev.reportDate) !== undefined || exists.get(symbol, ev.originalDate) !== undefined;
