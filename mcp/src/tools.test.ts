@@ -46,6 +46,7 @@ describe("tool list", () => {
       "research_summary", "fundamentals", "ownership", "transcripts", "search_transcripts", "content",
       "quote", "price_history", "earnings_calendar", "estimate_revisions", "economic_calendar", "market", "screen",
       "ideas", "scorecard", "universe", "option_metrics", "macro", "market_news", "thesis", "brief",
+      "earnings_screen", "earnings_setup", "earnings_events", "earnings_stats", "earnings_reviews",
     ]);
     for (const t of list.tools) {
       expect(t.annotations?.readOnlyHint).toBe(true);
@@ -66,6 +67,26 @@ describe("tool list", () => {
       expect(c.init.method).toBe("GET");
       expect((c.init.headers as Record<string, string>)["x-api-key"]).toBe("k3y");
     }
+  });
+});
+
+describe("earnings tools", () => {
+  it("map to /api/earnings routes", async () => {
+    await call("earnings_screen", { from: "2026-10-22", horizon: "week", tradable: true, symbols: ["WDC", "RNG"], minScore: 55 });
+    expect(last().pathname).toBe("/api/earnings/screen");
+    expect(Object.fromEntries(last().searchParams)).toEqual({ from: "2026-10-22", horizon: "week", minScore: "55", tradable: "true", symbols: "WDC,RNG" });
+    await call("earnings_screen", {});
+    expect(last().search).toBe("");
+    await call("earnings_setup", { symbol: "WDC", horizon: "month" });
+    expect(last().pathname + last().search).toBe("/api/earnings/setup/WDC?horizon=month");
+    await call("earnings_events", { symbol: "WDC", from: "2025-01-01", confirmed: true });
+    expect(last().pathname + last().search).toBe("/api/earnings/events/WDC?from=2025-01-01&confirmed=true");
+    await call("earnings_stats", { symbol: "WDC", horizon: "intraday", time: "amc" });
+    expect(last().pathname + last().search).toBe("/api/earnings/stats?horizon=intraday&symbol=WDC&time=amc");
+    await call("earnings_stats", { sector: "Technology", capBucket: "mid" });
+    expect(last().search).toBe("?sector=Technology&capBucket=mid");
+    await call("earnings_reviews", { reportDate: "2026-10-22", horizon: "intraday", symbol: "RNG" });
+    expect(last().pathname + last().search).toBe("/api/earnings/reviews?reportDate=2026-10-22&horizon=intraday&symbol=RNG");
   });
 });
 
@@ -115,6 +136,12 @@ describe("URLs", () => {
     expect(last().search).toBe("?range=5Y");
     await call("earnings_calendar", { symbols: ["AAPL", "MSFT"] });
     expect(last().pathname + last().search).toBe("/api/calendar?symbols=AAPL%2CMSFT");
+    await call("earnings_calendar", { from: "2026-10-22", to: "2026-10-23", time: "amc", minCap: 1e9, optionable: true });
+    expect(last().pathname + last().search).toBe("/api/earnings/calendar?from=2026-10-22&to=2026-10-23&time=amc&minCap=1000000000&optionable=true");
+    await call("earnings_calendar", { symbols: ["AAPL"], time: "bmo" });
+    expect(last().pathname + last().search).toBe("/api/earnings/calendar?time=bmo&symbols=AAPL");
+    const bare = await call("earnings_calendar", {});
+    expect(bare.res.isError).toBe(true);
     await call("estimate_revisions", { symbol: "AAPL" });
     expect(last().pathname).toBe("/api/estimates/AAPL");
     await call("economic_calendar", {});
