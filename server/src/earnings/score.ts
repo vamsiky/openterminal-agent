@@ -81,8 +81,10 @@ const spreadOf = (c: Candidate): number | null => {
 const daysBetween = (a: string, b: string) => (Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86_400_000;
 
 /**
- * Intraday and week: the lowest-spread call among the event expiry's ATM and next-strike-up legs.
- * Month: the first expiry (event, else next) at least 25 days from entry; the lowest-spread leg of that expiry.
+ * Intraday and week: the pool is the event expiry's ATM and next-strike-up legs.
+ * Month: the pool is the first expiry (event, else next) at least 25 days from entry.
+ * From the pool, prefer legs that pass both the spread and volume gates; the lowest spread wins, ties to higher volume.
+ * If none pass both, the lowest spread wins (ties to higher volume) regardless of volume.
  */
 export function chooseContract(candidates: Candidate[], horizon: Horizon, entryDate: string): Candidate | null {
   let pool = candidates.filter((c) => c.kind === "event");
@@ -91,16 +93,19 @@ export function chooseContract(candidates: Candidate[], horizon: Horizon, entryD
     if (far.length > 0) pool = far.filter((c) => c.expiry === far[0].expiry);
   }
   if (pool.length === 0) pool = candidates;
-  let best: Candidate | null = null;
-  let bestSpread = Infinity;
-  for (const c of pool) {
-    const s = spreadOf(c) ?? 1e9;
-    if (s < bestSpread || (s === bestSpread && (c.volume ?? 0) > (best?.volume ?? 0))) {
-      best = c;
-      bestSpread = s;
+  const pick = (list: Candidate[]): Candidate | null => {
+    let best: Candidate | null = null;
+    let bestSpread = Infinity;
+    for (const c of list) {
+      const sp = spreadOf(c) ?? 1e9;
+      if (sp < bestSpread || (sp === bestSpread && (c.volume ?? 0) > (best?.volume ?? 0))) {
+        best = c;
+        bestSpread = sp;
+      }
     }
-  }
-  return best;
+    return best;
+  };
+  return pick(pool.filter((c) => (spreadOf(c) ?? Infinity) <= GATES.maxSpreadPct && (c.volume ?? 0) >= GATES.minVolume)) ?? pick(pool);
 }
 
 // ---- history blend ----
@@ -161,12 +166,16 @@ export function scoreSetup(i: ScoreInputs): EarningsSetup {
   const scale = w.max.setup / 20;
   let setupPts = 0;
   const above: string[] = [];
+  const below: string[] = [];
   [t.vs20, t.vs50, t.vs200].forEach((v, idx) => {
-    if (v !== null && v > 0) {
+    if (v === null) return;
+    if (v > 0) {
       setupPts += SETUP.sma[idx] * scale;
       above.push(["20", "50", "200"][idx]);
-    }
+    } else below.push(["20", "50", "200"][idx]);
   });
+  const avgs = (l: string[]) => `${l.join("/")}-day average${l.length > 1 ? "s" : ""}`;
+  const maPos = [above.length ? `Above its ${avgs(above)}` : "", below.length ? `${above.length ? "below" : "Below"} its ${avgs(below)}` : ""].filter(Boolean).join(", ") || "Moving averages unavailable";
   const mom = t.momentum === null ? 0 : (t.momentum / SETUP.momentumDiv) * scale;
   setupPts += mom;
   let rsiNote = "";
@@ -180,7 +189,7 @@ export function scoreSetup(i: ScoreInputs): EarningsSetup {
       rsiNote = ` RSI ${fmt(t.rsi, 0)} is a falling knife (-${SETUP.rsiColdPenalty}).`;
     }
   }
-  const setup = comp("setup", setupPts, w.max.setup, { vs20: t.vs20, vs50: t.vs50, vs200: t.vs200, rsi: t.rsi, momentum: t.momentum }, `Above its ${above.length ? above.join("/") + "-day average" + (above.length > 1 ? "s" : "") : "no key moving average"} (20d ${signed(t.vs20)}%, 50d ${signed(t.vs50)}%, 200d ${signed(t.vs200)}%), momentum score ${fmt(t.momentum, 0)}.${rsiNote}`);
+  const setup = comp("setup", setupPts, w.max.setup, { vs20: t.vs20, vs50: t.vs50, vs200: t.vs200, rsi: t.rsi, momentum: t.momentum }, `${maPos} (20d ${signed(t.vs20)}%, 50d ${signed(t.vs50)}%, 200d ${signed(t.vs200)}%), momentum score ${fmt(t.momentum, 0)}.${rsiNote}`);
 
   // demand
   const last4 = i.own?.reactions.last4 ?? [];

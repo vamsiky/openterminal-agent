@@ -155,6 +155,21 @@ describe("contract choice", () => {
     const c = score.chooseContract([cand({ strike: 100, bid: 2, ask: 2.4 }), cand({ leg: "otm_call", strike: 105, bid: 1, ask: 1.05 }), cand({ kind: "next", expiry: "2026-11-20", bid: 5, ask: 5.01 })], "intraday", "2026-10-21")!;
     expect(c.strike).toBe(105);
   });
+  it("prefers a leg that passes both the spread and volume gates (FLEX 2026-10-22)", () => {
+    const atm = cand({ strike: 75, bid: 8.5, ask: 9.1, volume: 1, expiry: "2026-11-20" });
+    const up = cand({ leg: "otm_call", strike: 80, bid: 6.1, ask: 6.7, volume: 425, expiry: "2026-11-20" });
+    expect(score.chooseContract([atm, up], "week", "2026-10-22")!.strike).toBe(80);
+    const s = score.scoreSetup(inputs({ candidates: [atm, up], asOf: "2026-10-22T19:15:00Z" }));
+    expect(s.gates.find((g) => g.key === "volume")!.passed).toBe(true);
+    expect(s.gates.find((g) => g.key === "spread")!.passed).toBe(true);
+  });
+  it("falls back to the lowest spread when no leg passes both gates", () => {
+    const a = cand({ strike: 75, bid: 8.5, ask: 9.1, volume: 1 });
+    const b = cand({ leg: "otm_call", strike: 80, bid: 6.1, ask: 6.7, volume: 10 });
+    expect(score.chooseContract([a, b], "intraday", "2026-10-21")!.strike).toBe(75);
+    const wide = cand({ strike: 70, bid: 1, ask: 2, volume: 500 });
+    expect(score.chooseContract([wide, a], "intraday", "2026-10-21")!.strike).toBe(75);
+  });
   it("month takes the first expiry (event or next) 25+ days from entry", () => {
     const list = [cand({ expiry: "2026-10-23" }), cand({ kind: "next", expiry: "2026-11-20", strike: 101 })];
     expect(score.chooseContract(list, "month", "2026-10-21")!.expiry).toBe("2026-11-20");
@@ -162,6 +177,16 @@ describe("contract choice", () => {
     // Neither qualifies: fall back to the event expiry.
     expect(score.chooseContract([cand({ expiry: "2026-10-23" }), cand({ kind: "next", expiry: "2026-10-30" })], "month", "2026-10-21")!.expiry).toBe("2026-10-23");
     expect(score.chooseContract(list, "week", "2026-10-21")!.expiry).toBe("2026-10-23");
+  });
+});
+
+describe("setup reason text", () => {
+  const reason = (tech: Partial<import("./score.js").ScoreInputs["tech"]>) => score.scoreSetup(inputs({ tech: { vs20: 2, vs50: 3, vs200: 4, rsi: 60, atrPct: 4, momentum: 80, ...tech } })).components[2].reason;
+  it("names the averages above and below", () => {
+    expect(reason({})).toMatch(/^Above its 20\/50\/200-day averages \(/);
+    expect(reason({ vs50: -1, vs200: -2 })).toMatch(/^Above its 20-day average, below its 50\/200-day averages \(/);
+    expect(reason({ vs20: -1, vs50: -1, vs200: -2 })).toMatch(/^Below its 20\/50\/200-day averages \(/);
+    expect(reason({ vs200: null })).toMatch(/^Above its 20\/50-day averages \(/);
   });
 });
 
