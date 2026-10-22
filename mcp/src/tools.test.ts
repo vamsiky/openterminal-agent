@@ -90,6 +90,61 @@ describe("earnings tools", () => {
   });
 });
 
+describe("earnings tools, argument mapping edge cases", () => {
+  const query = () => Object.fromEntries(last().searchParams);
+
+  it("earnings_screen passes every filter, the symbols list and the sort through", async () => {
+    await call("earnings_screen", {
+      from: "2026-10-22", to: "2026-10-23", horizon: "month", time: "dmh", sector: "Technology", industry: "Software", minCap: 1e9, maxCap: 5e10,
+      minScore: 70, verdict: "candidate", tradable: false, symbols: ["WDC"], sort: "spread", limit: 3,
+    });
+    expect(last().pathname).toBe("/api/earnings/screen");
+    expect(query()).toEqual({
+      from: "2026-10-22", to: "2026-10-23", horizon: "month", time: "dmh", sector: "Technology", industry: "Software", minCap: "1000000000", maxCap: "50000000000",
+      minScore: "70", verdict: "candidate", tradable: "false", symbols: "WDC", sort: "spread", limit: "3",
+    });
+  });
+
+  it("earnings_screen rejects a limit of 0 and a minScore above 100 before any request", async () => {
+    expect((await call("earnings_screen", { limit: 0 })).res.isError).toBe(true);
+    expect((await call("earnings_screen", { minScore: 150 })).res.isError).toBe(true);
+    expect((await call("earnings_screen", { verdict: "buy" })).res.isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("earnings_setup sends no horizon when none is given, and the symbol in the path", async () => {
+    await call("earnings_setup", { symbol: "RNG" });
+    expect(last().pathname + last().search).toBe("/api/earnings/setup/RNG");
+  });
+
+  it("earnings_events passes confirmed=false through and leaves from out when unset", async () => {
+    await call("earnings_events", { symbol: "RNG", confirmed: false });
+    expect(last().pathname + last().search).toBe("/api/earnings/events/RNG?confirmed=false");
+  });
+
+  it("earnings_stats with a cap bucket alone, or a horizon and time only, sends just those", async () => {
+    await call("earnings_stats", { capBucket: "micro" });
+    expect(last().pathname + last().search).toBe("/api/earnings/stats?capBucket=micro");
+    await call("earnings_stats", { horizon: "week", time: "bmo" });
+    expect(last().pathname + last().search).toBe("/api/earnings/stats?horizon=week&time=bmo");
+    await call("earnings_stats", {});
+    expect(last().search).toBe("");
+  });
+
+  it("earnings_reviews sends the limit and every filter", async () => {
+    await call("earnings_reviews", { from: "2026-10-01", to: "2026-10-31", limit: 25, symbol: "WDC" });
+    expect(last().pathname).toBe("/api/earnings/reviews");
+    expect(query()).toEqual({ from: "2026-10-01", to: "2026-10-31", symbol: "WDC", limit: "25" });
+  });
+
+  it("a 400 from the API comes back as a tool error, not a crash", async () => {
+    respond = () => ({ status: 400, body: { error: "sector needs capBucket" } });
+    const { res, text } = await call("earnings_stats", { sector: "Technology" });
+    expect(res.isError).toBe(true);
+    expect(text).toMatch(/sector needs capBucket/);
+  });
+});
+
 describe("URLs", () => {
   it("fundamentals", async () => {
     await call("fundamentals", { symbol: "BRK.B", section: "statements", type: "cashflow", period: "annual", limit: 4 });

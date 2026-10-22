@@ -129,6 +129,39 @@ describe("options floor", () => {
   });
 });
 
+describe("resume after a failure mid-symbol", () => {
+  it("a symbol that fails part-way keeps its finished events, stores no partial one, and the retry completes it", async () => {
+    earningsReports.mockImplementation(async () => [
+      row("AAA", "2026-05-06"), // amc, volume spike on 05-07 confirms it without any press release
+      { ...row("AAA", "2026-06-10"), time: "bmo" }, // no volume spike: the press-release check runs, and fails here
+    ]);
+    const pr = vi.mocked((await import("../providers/fmp.js")).pressReleases);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      pr.mockImplementation(() => {
+        throw new Error("FMP timed out");
+      });
+      const first = await backfill.runEvents(["AAA"], opts);
+      expect(first.totals).toMatchObject({ symbols: 1, errors: 1, events: 0 });
+      expect(edb.prepare("SELECT report_date, confirmed, t0, r, check_volume FROM events ORDER BY report_date").all()).toEqual([
+        { report_date: "2026-05-06", confirmed: 1, t0: "2026-05-06", r: "2026-05-07", check_volume: 1 },
+      ]);
+      expect(edb.prepare("SELECT status FROM backfill_progress WHERE task = 'events' AND symbol = 'AAA'").get()).toEqual({ status: "error" });
+
+      pr.mockImplementation(async () => []);
+      const second = await backfill.runEvents(["AAA"], opts);
+      expect(second.totals).toMatchObject({ symbols: 1, errors: 0, events: 2 });
+      expect(edb.prepare("SELECT report_date, confirmed, reason FROM events ORDER BY report_date").all()).toEqual([
+        { report_date: "2026-05-06", confirmed: 1, reason: "ok" },
+        { report_date: "2026-06-10", confirmed: 0, reason: "unconfirmed" },
+      ]);
+    } finally {
+      pr.mockImplementation(async () => []);
+      spy.mockRestore();
+    }
+  });
+});
+
 describe("nightly job", () => {
   it("is due after 18:30 New York time on a trading day, once", () => {
     expect(jobs.isDue(new Date("2026-10-21T22:00:00Z"), null)).toBe(false); // 18:00 ET

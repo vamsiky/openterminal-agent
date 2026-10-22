@@ -70,3 +70,22 @@ describe("earningsUniverse", () => {
     expect((await u.earningsUniverseSet()).has("OKA")).toBe(true);
   });
 });
+
+describe("universe rule edge cases", () => {
+  it("keeps a common stock whose name is 'Trust Inc. Common Stock', and an ADS", () => {
+    expect(u.isCommonOrAdr("TRUS", "Trust Inc. Common Stock")).toBe(true);
+    expect(u.isCommonOrAdr("ADSX", "Quux plc American Depositary Shares")).toBe(true);
+    expect(u.isCommonOrAdr("GOOGL", "Alphabet Inc. Class A Common Stock")).toBe(true);
+  });
+
+  it("drops the other non-common names the directories list under a common parent", () => {
+    const cases: Array<[string, string]> = [
+      ["PFDX", "Example Bancorp Depositary Shares Each Representing a 1/400th Interest in a Share of Preferred Stock"],
+      ["NOTX", "Example Corp 4.125% Senior Notes due 2029"],
+      ["WRTX", "Example Acquisition Corp. Warrants"],
+      ["RGTX", "Example Therapeutics Inc. Rights"],
+      ["UNTX", "Example Acquisition Corp. Units, each consisting of one Class A ordinary share and one right"],
+    ];
+    for (const [s, name] of cases) expect(u.isCommonOrAdr(s, name), name).toBe(false);
+  });
+});

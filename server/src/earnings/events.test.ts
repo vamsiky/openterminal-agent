@@ -246,4 +246,38 @@ describe("confirmation", () => {
     await events.processSymbol("X", { since: "2026-01-01", today: "2026-12-31" });
     expect(stored("X", "2026-11-27")).toMatchObject({ t0: "2026-11-25", r: "2026-11-27", confirmed: 1 });
   });
+
+  it("confirms a Monday bmo report by volume on the Monday: T0 is the previous Friday", async () => {
+    bars("X", { "2026-05-04": 5000 });
+    earningsReports.mockResolvedValue([row("2026-05-04", "bmo")]);
+    await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
+    expect(stored("X", "2026-05-04")).toMatchObject({ time: "bmo", t0: "2026-05-01", r: "2026-05-04", confirmed: 1, check_volume: 1, reason: "ok" });
+  });
+
+  it("confirms an amc report the day before a holiday: R is the session after the holiday", async () => {
+    bars("X", { "2026-07-06": 5000 }); // 2026-07-03 is a holiday
+    earningsReports.mockResolvedValue([row("2026-07-02", "amc")]);
+    await events.processSymbol("X", { since: "2026-01-01", today: "2026-10-21" });
+    expect(stored("X", "2026-07-02")).toMatchObject({ t0: "2026-07-02", r: "2026-07-06", confirmed: 1, check_volume: 1 });
+  });
+});
+
+describe("T0 and R around holidays and weekends", () => {
+  it("a Monday bmo report: T0 is the previous Friday, R the Monday", () => {
+    expect(sessions.sessionsFor("2026-05-04", "bmo")).toEqual({ t0: "2026-05-01", r: "2026-05-04" });
+  });
+
+  it("a report the day before a holiday: amc R skips the holiday, bmo T0 skips it too", () => {
+    expect(sessions.sessionsFor("2026-07-02", "amc")).toEqual({ t0: "2026-07-02", r: "2026-07-06" }); // Friday 07-03 is a holiday
+    expect(sessions.sessionsFor("2026-07-06", "bmo")).toEqual({ t0: "2026-07-02", r: "2026-07-06" });
+  });
+
+  it("an amc report on the Friday before a 3-day weekend: R is the Tuesday", () => {
+    expect(sessions.sessionsFor("2026-05-22", "amc")).toEqual({ t0: "2026-05-22", r: "2026-05-26" }); // Memorial Day Monday
+    expect(sessions.sessionsFor("2026-01-16", "amc")).toEqual({ t0: "2026-01-16", r: "2026-01-20" }); // MLK Monday
+  });
+
+  it("a bmo report on the Tuesday after Labor Day: T0 is the Friday before the holiday weekend", () => {
+    expect(sessions.sessionsFor("2026-09-08", "bmo")).toEqual({ t0: "2026-09-04", r: "2026-09-08" });
+  });
 });
