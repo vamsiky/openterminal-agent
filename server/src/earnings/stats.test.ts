@@ -56,7 +56,7 @@ const ev = (symbol: string, date: string, over: Record<string, unknown> = {}) =>
   edb.prepare("INSERT OR REPLACE INTO events (symbol, report_date, time, t0, r, confirmed, check_fmp, reason) VALUES (?,?,?,?,?,?,1,'ok')").run(symbol, date, o.time, date, date, o.confirmed);
 };
 const path = (symbol: string, date: string, v: { s10: number; s1545: number; open?: number; close?: number; prev?: number; rClose?: number }) =>
-  edb.prepare("INSERT OR REPLACE INTO stock_paths (symbol, report_date, t0_open, t0_1000, t0_1545, t0_close, r_close, prev_close) VALUES (?,?,?,?,?,?,?,?)").run(symbol, date, v.open ?? v.s10, v.s10, v.s1545, v.close ?? v.s1545, v.rClose ?? (v.close ?? v.s1545), v.prev ?? v.s10);
+  edb.prepare("INSERT OR REPLACE INTO stock_paths (symbol, report_date, t0_open, t0_1000, t0_1545, t0_close, r_close, prev_close, t0_m1) VALUES (?,?,?,?,?,?,?,?,?)").run(symbol, date, v.open ?? v.s10, v.s10, v.s1545, v.close ?? v.s1545, v.rClose ?? (v.close ?? v.s1545), v.close ?? v.s1545, v.prev ?? v.s10);
 const leg = (symbol: string, date: string, leg: string, o10: number, o1545: number) =>
   edb.prepare("INSERT OR REPLACE INTO option_paths (symbol, report_date, entry, expiry_kind, leg, contract, expiry, strike, spot_at_entry, prices, price_source) VALUES (?,?,'T0:10:00','event',?,'X',?,100,100,?,'trade')").run(symbol, date, leg, date, JSON.stringify({ "T0:10:00": o10, "T0:15:45": o1545 }));
 
@@ -70,7 +70,7 @@ describe("rebuildStats", () => {
       const d = `2025-0${i + 1}-15`;
       ev("AAA", d);
       // call% = 3 + 6 * stock%, so beta 6, alpha 3; reaction (close -> R close) alternates +10 / -5.
-      path("AAA", d, { s10: 100, s1545: 100 * (1 + x / 100), close: 100, rClose: i % 2 === 0 ? 110 : 95 });
+      path("AAA", d, { s10: 100, s1545: 100 * (1 + x / 100), close: 100, prev: i % 2 === 0 ? 99 : 101, rClose: i % 2 === 0 ? 110 : 95 });
       leg("AAA", d, "atm_call", 2, 2 * (1 + (3 + 6 * x) / 100));
       leg("AAA", d, "otm_call", 1, 1 * (1 + (3 + 6 * x) / 100) );
     });
@@ -97,6 +97,8 @@ describe("rebuildStats", () => {
     expect(a.reactions.last4).toEqual([10, -5, 10, -5]);
     expect(a.reactions.medianAbs).toBeCloseTo(7.5, 3);
     expect(a.preDrift.rCloseFromPrev.n).toBe(6);
+    // T0:close against the T0-1 close (99 / 101 alternating), not against stock_paths.prev_close.
+    expect(a.preDrift.rCloseFromPrev.winRate).toBeCloseTo(0.5, 3);
 
     // The unconfirmed event is excluded from every scope.
     const b = stats.getStats("sym:BBB", "intraday")!;

@@ -59,6 +59,8 @@ export type ScoreInputs = {
   price: number | null;
   tech: Tech;
   candidates: Candidate[];
+  /** Whether the symbol has listed options at all (any snapshot row ever, or option paths). */
+  hasOptions: boolean;
   impliedMovePct: number | null;
   eventPremium: number | null;
   /** Median IV at this entry anchor over the name's past events (for ivVsTypicalAtAnchor). */
@@ -130,7 +132,7 @@ export function scoreSetup(i: ScoreInputs): EarningsSetup {
   // tradability
   let tradPts = 0;
   let tradReason: string;
-  if (!c) tradReason = "No listed option snapshot for this name, so there is nothing to trade.";
+  if (!c) tradReason = i.hasOptions ? "No live quote in the last 4 days, so there is nothing to trade." : "No listed options for this name, so there is nothing to trade.";
   else if (spread === null) tradReason = `The ${c.expiry} ${c.strike} call has no usable two-sided quote.`;
   else {
     tradPts = w.max.tradability * (1 - spread / 30);
@@ -183,8 +185,10 @@ export function scoreSetup(i: ScoreInputs): EarningsSetup {
   // demand
   const last4 = i.own?.reactions.last4 ?? [];
   const ups = last4.filter((x) => x > 0).length;
-  const raised = i.analyst.some((a) => a.priceTarget !== null && /raise|up|increase|higher/i.test(a.action));
-  const cut = i.analyst.some((a) => /cut|down|lower|reduce/i.test(a.action));
+  const cutoff = addDays(entryDate, -w.analystDays);
+  const analyst = i.analyst.filter((a) => a.date >= cutoff);
+  const raised = analyst.some((a) => a.priceTarget !== null && /raise|up|increase|higher/i.test(a.action));
+  const cut = analyst.some((a) => /cut|down|lower|reduce/i.test(a.action));
   const lr = i.lastReport;
   const epsBeat = lr && lr.epsActual !== null && lr.epsEstimate !== null ? lr.epsActual > lr.epsEstimate : null;
   const revBeat = lr && lr.revenueActual !== null && lr.revenueEstimate !== null ? lr.revenueActual > lr.revenueEstimate : null;
@@ -251,9 +255,9 @@ export function scoreSetup(i: ScoreInputs): EarningsSetup {
       passed: c !== null && (c.volume ?? 0) >= GATES.minVolume,
       reason: !c ? "No contract to measure." : `${c.volume ?? 0} contracts traded today (minimum ${GATES.minVolume}).`,
     },
-    { key: "no_options", passed: c !== null, reason: c ? "Listed options found." : "No listed options snapshot for this name." },
+    { key: "no_options", passed: i.hasOptions || c !== null, reason: i.hasOptions || c ? "Listed options found." : "No listed options for this name (no snapshots or option history)." },
     { key: "unconfirmed_time", passed: i.upcoming.time !== null, reason: i.upcoming.time ? `Report time is ${i.upcoming.time.toUpperCase()} (${i.upcoming.timeSource ?? "unknown source"}).` : "Report time is unknown, so the last full session before the print is a guess." },
-    { key: "no_quote", passed: c !== null && mid !== null, reason: c && mid !== null ? "Two-sided quote present." : "No live two-sided quote." },
+    { key: "no_quote", passed: c !== null && mid !== null, reason: c && mid !== null ? "Two-sided quote present." : c ? "No two-sided quote on the chosen contract." : "No live quote in the last 4 days." },
   ];
   const failed = gates.some((g) => !g.passed);
   const verdict: EarningsSetup["verdict"] = failed ? "pass" : score >= BANDS.candidate ? "candidate" : score >= BANDS.conditional ? "conditional" : "pass";
@@ -472,6 +476,8 @@ export function gather(rows: UpcomingRow[], horizon: Horizon, now = new Date()):
     l.push(r.iv);
   }
 
+  const everSnap = earningsDb.prepare("SELECT 1 FROM snapshots WHERE symbol = ? LIMIT 1");
+  const anyPath = earningsDb.prepare("SELECT 1 FROM option_paths WHERE symbol = ? LIMIT 1");
   return rows.map((row) => {
     const p = profiles.get(row.symbol);
     const cap = capBucket(p?.marketCap);
@@ -508,6 +514,7 @@ export function gather(rows: UpcomingRow[], horizon: Horizon, now = new Date()):
       price: snap?.event?.spot ?? snap?.next?.spot ?? t.close,
       tech: t,
       candidates,
+      hasOptions: candidates.length > 0 || everSnap.get(row.symbol) !== undefined || anyPath.get(row.symbol) !== undefined,
       impliedMovePct: snap?.event?.implied_move_pct ?? null,
       eventPremium: snap?.event?.event_premium ?? null,
       typicalIv: median(ivs.get(row.symbol) ?? []),

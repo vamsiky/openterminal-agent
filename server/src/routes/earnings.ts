@@ -131,8 +131,18 @@ earningsRouter.get("/status", (_req, res) => {
   const one = <T,>(sql: string, ...args: unknown[]) => earningsDb.prepare(sql).get(...args) as T;
   const prog = earningsDb.prepare("SELECT task, COUNT(*) AS n, MIN(updated_at) AS first, MAX(updated_at) AS last, SUM(status = 'error') AS errors, SUM(status = 'done') AS done FROM backfill_progress WHERE task IN ('events','stock','options','analyst') GROUP BY task").all() as Array<{ task: string; n: number; first: string; last: string; errors: number; done: number }>;
   const byTask = new Map(prog.map((p) => [p.task, p]));
-  const phase: EarningsStatus["backfill"]["phase"] = byTask.has("options") ? "options" : byTask.has("stock") ? "stock" : byTask.has("events") ? "events" : "idle";
-  const current = byTask.get(phase);
+  // events -> stock -> options -> done: the first task whose finished-symbol count is short of the largest count.
+  const phases = ["events", "stock", "options"] as const;
+  const target = Math.max(0, ...phases.map((t) => byTask.get(t)?.done ?? 0));
+  let phase: EarningsStatus["backfill"]["phase"] = "idle";
+  if (target > 0) {
+    const open = phases.find((t) => (byTask.get(t)?.done ?? 0) < target);
+    phase = open ?? "done";
+    const ev = byTask.get("events");
+    // The events pass sets the target itself, so it looks finished while it runs: treat a pass still writing as running.
+    if (phase !== "events" && ev && !byTask.has("stock") && Date.now() - Date.parse(ev.last) < 120_000) phase = "events";
+  }
+  const current = byTask.get(phase === "idle" || phase === "done" ? "options" : (phase as string));
   const total = one<{ n: number }>("SELECT COUNT(DISTINCT symbol) AS n FROM events").n;
   const ev = one<{ stored: number; confirmed: number; last: string | null }>("SELECT COUNT(*) AS stored, COALESCE(SUM(confirmed), 0) AS confirmed, MAX(updated_at) AS last FROM events");
   const today = nyClock(new Date()).date;

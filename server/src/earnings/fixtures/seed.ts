@@ -24,7 +24,7 @@ const nextDay = (d: string) => new Date(Date.parse(d + "T00:00:00Z") + 86_400_00
 
 export function seedAdhoc(): void {
   const ev = earningsDb.prepare("INSERT OR REPLACE INTO events (symbol, report_date, time, time_source, t0, r, eps_actual, eps_estimate, revenue_actual, revenue_estimate, confirmed, check_fmp, reason) VALUES (?,?,?,?,?,?,?,?,?,?,1,1,'ok')");
-  const sp = earningsDb.prepare("INSERT OR REPLACE INTO stock_paths (symbol, report_date, t0_open, t0_1000, t0_1545, t0_close, r_close, prev_close) VALUES (?,?,?,?,?,?,?,?)");
+  const sp = earningsDb.prepare("INSERT OR REPLACE INTO stock_paths (symbol, report_date, t0_open, t0_1000, t0_1545, t0_close, r_close, prev_close, t0_m1) VALUES (?,?,?,?,?,?,?,?,?)");
   const op = earningsDb.prepare("INSERT OR REPLACE INTO option_paths (symbol, report_date, entry, expiry_kind, leg, contract, expiry, strike, spot_at_entry, prices, price_source) VALUES (?,?,'T0:10:00','event','atm_call',?,?,?,?,?,'trade')");
   const up = earningsDb.prepare("INSERT OR REPLACE INTO upcoming (symbol, report_date, time, time_source, t0, r, fiscal_period, eps_estimate, revenue_estimate, fmp_confirmed_flag) VALUES (?,?,?,?,?,?,?,?,?,?)");
   const snap = earningsDb.prepare("INSERT OR REPLACE INTO snapshots (symbol, ts, expiry_kind, report_date, expiry, spot, call_occ, call_strike, call_bid, call_ask, call_iv, call_volume, call_oi, otm_occ, otm_strike, otm_bid, otm_ask, otm_iv, otm_volume, otm_oi, otm_delta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
@@ -39,7 +39,7 @@ export function seedAdhoc(): void {
         const beatEps = last ? (n.beats >= 1 ? 1.1 : 1.0) : 1;
         const beatRev = last ? (n.beats >= 2 ? 101 : 99) : 100;
         ev.run(s, e.date, "amc", "fmp", e.date, nextDay(e.date), beatEps, 1.0, beatRev, 100);
-        sp.run(s, e.date, e.open, e.s10, e.s1545, e.close, e.nextClose, e.prevClose);
+        sp.run(s, e.date, e.open, e.s10, e.s1545, e.close, e.nextClose, e.close, e.prevClose);
         if (e.call) op.run(s, e.date, e.call.occ, e.call.expiry, e.call.strike, e.s10 ?? e.open, JSON.stringify({ "T0:10:00": e.call.o10, "T0:15:45": e.call.o1545 }));
       });
       up.run(s, "2026-10-22", "amc", "fmp", "2026-10-22", "2026-10-23", "Q3", 1, 100, 1);

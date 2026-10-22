@@ -34,7 +34,7 @@ const inputs = (over: Partial<import("./score.js").ScoreInputs> = {}): import(".
   upcoming: { reportDate: "2026-10-22", time: "amc", timeSource: "fmp", fmpConfirmed: true, t0: "2026-10-22", epsEstimate: 1, revenueEstimate: 100, fiscalPeriod: "Q3" },
   horizon: "intraday", asOf: "2026-10-21T20:00:00Z", price: 100,
   tech: { vs20: 2, vs50: 3, vs200: 4, rsi: 60, atrPct: 4, momentum: 80 },
-  candidates: [cand()], impliedMovePct: 7, eventPremium: 1.2, typicalIv: null,
+  candidates: [cand()], hasOptions: true, impliedMovePct: 7, eventPremium: 1.2, typicalIv: null,
   own: stats(), pooled: null,
   lastReport: { date: "2026-07-22", epsActual: 1.1, epsEstimate: 1, revenueActual: 101, revenueEstimate: 100, reactionPct: 4 },
   revisions: { eps30d: null, eps90d: null, revenue30d: null },
@@ -111,7 +111,8 @@ describe("gates and verdict bands", () => {
     const cases: Array<[string, Partial<import("./score.js").ScoreInputs>]> = [
       ["spread", { candidates: [cand({ bid: 2.0, ask: 2.5 })] }], // 22%
       ["volume", { candidates: [cand({ volume: 49 })] }],
-      ["no_options", { candidates: [] }],
+      ["no_options", { candidates: [], hasOptions: false }],
+      ["no_quote", { candidates: [], hasOptions: true }], // options exist but no snapshot in the last 4 days
       ["unconfirmed_time", { upcoming: { ...inputs().upcoming, time: null, timeSource: null } }],
       ["no_quote", { candidates: [cand({ bid: null, ask: null })] }],
     ];
@@ -123,6 +124,22 @@ describe("gates and verdict bands", () => {
     // The base score is a candidate, so the pass above is the gate's doing.
     expect(score.scoreSetup(inputs()).verdict).toBe("candidate");
     expect(score.scoreSetup(inputs({ candidates: [cand({ volume: 49 })] })).score).toBeGreaterThanOrEqual(70);
+  });
+  it("no snapshot: no_options only when the name has no options at all, otherwise no_quote", () => {
+    const stale = score.scoreSetup(inputs({ candidates: [], hasOptions: true }));
+    expect(gate(stale, "no_options").passed).toBe(true);
+    expect(gate(stale, "no_quote")).toMatchObject({ passed: false, reason: "No live quote in the last 4 days." });
+    const none = score.scoreSetup(inputs({ candidates: [], hasOptions: false }));
+    expect(gate(none, "no_options").passed).toBe(false);
+  });
+  it("analyst actions count only inside the horizon's window (10 days intraday, 30 week and month)", () => {
+    const old = [{ date: "2026-10-05", firm: "F", action: "target raise", priceTarget: 120 }]; // 16 days before asOf
+    expect(pts(score.scoreSetup(inputs({ analyst: old }))).demand).toBeCloseTo(pts(score.scoreSetup(inputs({ analyst: [] }))).demand, 5);
+    expect(score.scoreSetup(inputs({ analyst: old })).analyst).toHaveLength(1); // still listed (30 days), just not scored
+    const wk = score.scoreSetup(inputs({ horizon: "week", analyst: old }));
+    expect(wk.analyst).toHaveLength(1);
+    expect(wk.components[3].reason).toMatch(/raised in 30 days/);
+    expect(score.scoreSetup(inputs()).components[3].reason).toMatch(/raised in 10 days/);
   });
   it("bands: 70+ candidate, 55-69 conditional, below pass", () => {
     const weak = { tech: { vs20: 2, vs50: 3, vs200: 4, rsi: 90, atrPct: 4, momentum: 0 } };
