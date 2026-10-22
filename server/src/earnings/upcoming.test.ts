@@ -67,7 +67,7 @@ describe("refreshUpcoming", () => {
     expect(r).toEqual({ rows: 2, failed: 0 });
     const rows = edb.prepare("SELECT * FROM upcoming ORDER BY symbol").all();
     expect(rows).toMatchObject([
-      { symbol: "AMC", report_date: "2026-10-22", time: "amc", time_source: "fmp", t0: "2026-10-22", r: "2026-10-23", fmp_confirmed_flag: 1, fiscal_period: "Q3", eps_estimate: 1.5, revenue_estimate: 100 },
+      { symbol: "AMC", report_date: "2026-10-22", time: "amc", time_source: "fmp", time_basis: "upcoming", t0: "2026-10-22", r: "2026-10-23", fmp_confirmed_flag: 1, fiscal_period: "Q3", eps_estimate: 1.5, revenue_estimate: 100 },
       { symbol: "BMO", time: "bmo", t0: "2026-10-21", r: "2026-10-22", fmp_confirmed_flag: 0 },
     ]);
     expect(earningsCalendar).toHaveBeenCalledWith(today, expect.any(String), { includeReportTimes: true });
@@ -79,9 +79,24 @@ describe("refreshUpcoming", () => {
     earningsCalendar.mockImplementation(async (from) => (from !== today ? [] : [cal("INFER", "2026-10-22", null), cal("NOTIME", "2026-10-22", null), cal("AMC", "2026-10-22", "amc")]));
     await up.refreshUpcoming(today);
     const by = Object.fromEntries((edb.prepare("SELECT * FROM upcoming").all() as Array<Record<string, unknown>>).map((r) => [r.symbol, r]));
-    expect(by.INFER).toMatchObject({ time: "dmh", time_source: "press_release", t0: "2026-10-22", r: "2026-10-22" });
-    expect(by.NOTIME).toMatchObject({ time: null, time_source: null, t0: null, r: null });
-    expect(by.AMC).toMatchObject({ time: "amc", time_source: "fmp" });
+    expect(by.INFER).toMatchObject({ time: "dmh", time_source: "press_release", time_basis: "press_release", t0: "2026-10-22", r: "2026-10-22" });
+    expect(by.NOTIME).toMatchObject({ time: null, time_source: null, time_basis: null, t0: null, r: null });
+    expect(by.AMC).toMatchObject({ time: "amc", time_source: "fmp", time_basis: "upcoming" });
+  });
+
+  it("labels a null upcoming time resolved from past FMP times as fmp/history, not press_release", async () => {
+    timing.recordTiming("BMO", { timing: "bmo", matched: 3, total: 4, source: "fmp" }, today);
+    earningsCalendar.mockImplementation(async (from) => (from !== today ? [] : [cal("BMO", "2026-10-22", null)]));
+    await up.refreshUpcoming(today);
+    expect(edb.prepare("SELECT time, time_source, time_basis FROM upcoming WHERE symbol = 'BMO'").get()).toEqual({ time: "bmo", time_source: "fmp", time_basis: "history" });
+  });
+
+  it("timeLabel covers the three cases and an unknown time", () => {
+    expect(up.timeLabel("amc", null)).toEqual({ source: "fmp", basis: "upcoming" });
+    expect(up.timeLabel(null, { timing: "amc", matched: 3, total: 4, source: "fmp" })).toEqual({ source: "fmp", basis: "history" });
+    expect(up.timeLabel(null, { timing: "dmh", matched: 3, total: 4, source: "press_release" })).toEqual({ source: "press_release", basis: "press_release" });
+    expect(up.timeLabel(null, { timing: null, matched: 0, total: 4, source: null })).toEqual({ source: null, basis: null });
+    expect(up.timeLabel(null, undefined)).toEqual({ source: null, basis: null });
   });
 
   it("replaces yesterday's rows on a clean refresh, but keeps them when a window failed", async () => {
@@ -99,6 +114,20 @@ describe("refreshUpcoming", () => {
     spy.mockRestore();
     expect(r.failed).toBeGreaterThan(0);
     expect((edb.prepare("SELECT symbol FROM upcoming ORDER BY symbol").all() as Array<{ symbol: string }>).map((x) => x.symbol)).toEqual(["AMC", "BMO"]);
+  });
+});
+
+describe("time_basis migration", () => {
+  it("adds the column to an upcoming table that lacks it, keeps rows, and is idempotent", async () => {
+    const Database = (await import("better-sqlite3")).default;
+    const old = new Database(":memory:");
+    old.exec("CREATE TABLE upcoming (symbol TEXT NOT NULL, report_date TEXT NOT NULL, time TEXT, time_source TEXT, PRIMARY KEY (symbol, report_date)); INSERT INTO upcoming VALUES ('X','2026-10-22','amc','fmp')");
+    const { migrateEarningsDb } = await import("./db.js");
+    migrateEarningsDb(old);
+    migrateEarningsDb(old);
+    expect((old.prepare("PRAGMA table_info(upcoming)").all() as Array<{ name: string }>).filter((c) => c.name === "time_basis")).toHaveLength(1);
+    expect(old.prepare("SELECT symbol, time_basis FROM upcoming").get()).toEqual({ symbol: "X", time_basis: null });
+    old.close();
   });
 });
 

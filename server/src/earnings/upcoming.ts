@@ -1,7 +1,7 @@
 import * as fmp from "../providers/fmp.js";
 import { windows } from "../estimates/capture.js";
 import type { TimeBasis } from "./contracts.js";
-import { timingsFor } from "../estimates/timing.js";
+import { timingsFor, type TimingRow } from "../estimates/timing.js";
 import { addDays } from "../estimates/store.js";
 import { allWatchlistSymbols } from "../routes/watchlists.js";
 import { earningsDb } from "./db.js";
@@ -15,10 +15,21 @@ const ANALYST_DAYS = 60;
 const ANALYST_KEEP_DAYS = 90;
 const iso = (unixSeconds: number) => new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 
+/**
+ * Where an upcoming row's time came from. FMP's own time on the row is "fmp"/"upcoming". Otherwise the
+ * cached timing decides: a majority of past FMP times is still FMP's ("fmp"/"history"); only a press-release
+ * inference is "press_release"/"press_release".
+ */
+export function timeLabel(fmpTime: string | null, cached: TimingRow | null | undefined): { source: "fmp" | "press_release" | null; basis: TimeBasis | null } {
+  if (fmpTime) return { source: "fmp", basis: "upcoming" };
+  if (!cached?.timing) return { source: null, basis: null };
+  return cached.source === "fmp" ? { source: "fmp", basis: "history" } : { source: "press_release", basis: "press_release" };
+}
+
 const insertUpcoming = earningsDb.prepare(
-  `INSERT INTO upcoming (symbol, report_date, time, time_source, t0, r, fiscal_period, fiscal_year, period_ending, eps_estimate, revenue_estimate, fmp_confirmed_flag, updated_at)
-   VALUES (@symbol, @report_date, @time, @time_source, @t0, @r, @fiscal_period, @fiscal_year, @period_ending, @eps_estimate, @revenue_estimate, @fmp_confirmed_flag, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-   ON CONFLICT (symbol, report_date) DO UPDATE SET time = excluded.time, time_source = excluded.time_source, t0 = excluded.t0, r = excluded.r,
+  `INSERT INTO upcoming (symbol, report_date, time, time_source, time_basis, t0, r, fiscal_period, fiscal_year, period_ending, eps_estimate, revenue_estimate, fmp_confirmed_flag, updated_at)
+   VALUES (@symbol, @report_date, @time, @time_source, @time_basis, @t0, @r, @fiscal_period, @fiscal_year, @period_ending, @eps_estimate, @revenue_estimate, @fmp_confirmed_flag, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+   ON CONFLICT (symbol, report_date) DO UPDATE SET time = excluded.time, time_source = excluded.time_source, time_basis = excluded.time_basis, t0 = excluded.t0, r = excluded.r,
      fiscal_period = excluded.fiscal_period, fiscal_year = excluded.fiscal_year, period_ending = excluded.period_ending,
      eps_estimate = excluded.eps_estimate, revenue_estimate = excluded.revenue_estimate, fmp_confirmed_flag = excluded.fmp_confirmed_flag, updated_at = excluded.updated_at`
 );
@@ -44,12 +55,14 @@ export async function refreshUpcoming(today: string, listed?: Set<string>): Prom
     for (const r of rows) {
       const fallback = r.time ? null : inferred.get(r.symbol);
       const time = r.time ?? fallback?.timing ?? null;
+      const { source, basis } = timeLabel(r.time ?? null, fallback);
       const { t0, r: react } = sessionsFor(iso(r.date), time);
       insertUpcoming.run({
         symbol: r.symbol,
         report_date: iso(r.date),
         time,
-        time_source: r.time ? "fmp" : time ? "press_release" : null,
+        time_source: source,
+        time_basis: basis,
         t0,
         r: react,
         fiscal_period: r.fiscalPeriod ?? null,
@@ -133,11 +146,4 @@ export async function refreshAnalystActions(today: string): Promise<{ symbols: n
     })
   );
   return { symbols: todo.length, rows, failed };
-}
-
-/** How an upcoming row's time was obtained. "fmp" rows are the row's own time; a fallback is "history" when the cached time came from FMP's past reports, else "press_release". Null when there is no time. */
-export function timeBasisOf(symbol: string, time: string | null, timeSource: string | null): TimeBasis | null {
-  if (!time) return null;
-  if (timeSource === "fmp") return "upcoming";
-  return timingsFor([symbol]).get(symbol)?.source === "fmp" ? "history" : "press_release";
 }

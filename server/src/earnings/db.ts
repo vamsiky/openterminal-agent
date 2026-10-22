@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS upcoming (
   report_date TEXT NOT NULL,
   time TEXT,
   time_source TEXT,
+  time_basis TEXT,                    -- upcoming | history | press_release (see TimeBasis)
   t0 TEXT,
   r TEXT,
   fiscal_period TEXT,
@@ -225,3 +226,11 @@ CREATE TABLE IF NOT EXISTS backfill_progress (
   PRIMARY KEY (task, symbol)
 ) WITHOUT ROWID;
 `);
+
+/** Additive migration: earnings.db files from before time_basis existed. The next refreshUpcoming fills it. */
+export function migrateEarningsDb(d: Database.Database = earningsDb): void {
+  if (!(d.prepare("PRAGMA table_info(upcoming)").all() as Array<{ name: string }>).some((c) => c.name === "time_basis")) {
+    d.exec("ALTER TABLE upcoming ADD COLUMN time_basis TEXT");
+  }
+}
+migrateEarningsDb();

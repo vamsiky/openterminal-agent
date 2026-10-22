@@ -11,6 +11,7 @@ import { earningsDb } from "../earnings/db.js";
 import { drainReviews, fitsToday, listReviews, queueReviews } from "../earnings/review.js";
 import { gather, scoreSetup, SCREEN_SORTS, screen, setupFor, upcomingRows, type ScreenParams } from "../earnings/score.js";
 import { lastNightly } from "../earnings/jobs.js";
+import { backfillState } from "../earnings/progress.js";
 import { ALL_KEY, capKey, getStats, poolKey, symKey } from "../earnings/stats.js";
 
 export const earningsRouter = Router();
@@ -137,17 +138,8 @@ earningsRouter.get("/status", (_req, res) => {
   const one = <T,>(sql: string, ...args: unknown[]) => earningsDb.prepare(sql).get(...args) as T;
   const prog = earningsDb.prepare("SELECT task, COUNT(*) AS n, MIN(updated_at) AS first, MAX(updated_at) AS last, SUM(status = 'error') AS errors, SUM(status = 'done') AS done FROM backfill_progress WHERE task IN ('events','stock','options','analyst') GROUP BY task").all() as Array<{ task: string; n: number; first: string; last: string; errors: number; done: number }>;
   const byTask = new Map(prog.map((p) => [p.task, p]));
-  // events -> stock -> options -> done: the first task whose finished-symbol count is short of the largest count.
-  const phases = ["events", "stock", "options"] as const;
-  const target = Math.max(0, ...phases.map((t) => byTask.get(t)?.done ?? 0));
-  let phase: EarningsStatus["backfill"]["phase"] = "idle";
-  if (target > 0) {
-    const open = phases.find((t) => (byTask.get(t)?.done ?? 0) < target);
-    phase = open ?? "done";
-    const ev = byTask.get("events");
-    // The events pass sets the target itself, so it looks finished while it runs: treat a pass still writing as running.
-    if (phase !== "events" && ev && !byTask.has("stock") && Date.now() - Date.parse(ev.last) < 120_000) phase = "events";
-  }
+  // Phase from the backfill CLI's completion markers (progress.ts); count logic only for databases without markers.
+  const { phase, phases } = backfillState(earningsDb);
   const current = byTask.get(phase === "idle" || phase === "done" ? "options" : (phase as string));
   const total = one<{ n: number }>("SELECT COUNT(DISTINCT symbol) AS n FROM events").n;
   const ev = one<{ stored: number; confirmed: number; last: string | null }>("SELECT COUNT(*) AS stored, COALESCE(SUM(confirmed), 0) AS confirmed, MAX(updated_at) AS last FROM events");
@@ -162,7 +154,7 @@ earningsRouter.get("/status", (_req, res) => {
   }
   const status: EarningsStatus = {
     backfill: {
-      phase, symbolsDone: current?.done ?? 0, symbolsTotal: Math.max(total, current?.n ?? 0), eventsStored: ev.stored, eventsConfirmed: ev.confirmed,
+      phase, phases, symbolsDone: current?.done ?? 0, symbolsTotal: Math.max(total, current?.n ?? 0), eventsStored: ev.stored, eventsConfirmed: ev.confirmed,
       optionEvents: one<{ n: number }>("SELECT COUNT(DISTINCT symbol || report_date) AS n FROM option_paths").n,
       startedAt: current?.first ?? null, updatedAt: current?.last ?? null, errors: [...byTask.values()].reduce((a, p) => a + (p.errors ?? 0), 0),
     },

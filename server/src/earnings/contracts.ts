@@ -87,7 +87,7 @@ export type EarningsReview = {
 };
 
 export type EarningsStatus = {
-  backfill: { phase: "idle" | "events" | "stock" | "options" | "done"; symbolsDone: number; symbolsTotal: number; eventsStored: number; eventsConfirmed: number; optionEvents: number; startedAt: string | null; updatedAt: string | null; errors: number };
+  backfill: { phase: "idle" | "events" | "stock" | "options" | "done"; phases: Record<"events" | "stock" | "options", { done: number; total: number; finishedAt: string | null }>; symbolsDone: number; symbolsTotal: number; eventsStored: number; eventsConfirmed: number; optionEvents: number; startedAt: string | null; updatedAt: string | null; errors: number };
   nightly: { lastRun: string | null; newEvents: number };
   snapshots: { lastRun: string | null; namesTracked: number; rowsToday: number };
   db: { sizeBytes: number };
