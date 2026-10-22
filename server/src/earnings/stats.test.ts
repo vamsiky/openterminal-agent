@@ -87,7 +87,7 @@ describe("rebuildStats", () => {
     expect(a.n).toBe(6);
     expect(a.nOptions).toBe(6);
     expect(a.stock.median).toBeCloseTo(0.4, 3); // (0.3 + 0.5) / 2
-    expect(a.stock.winRate).toBeCloseTo(0.5, 3);
+    expect(a.stock.winRate).toBeCloseTo(4 / 6, 3);
     expect(a.call!.n).toBe(6);
     expect(a.callBeta).toBeCloseTo(6, 2);
     expect(a.callAlpha).toBeCloseTo(3, 2);

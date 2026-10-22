@@ -129,13 +129,14 @@ earningsRouter.get("/stats", (req, res) => {
 
 earningsRouter.get("/status", (_req, res) => {
   const one = <T,>(sql: string, ...args: unknown[]) => earningsDb.prepare(sql).get(...args) as T;
-  const prog = earningsDb.prepare("SELECT task, COUNT(*) AS n, MIN(updated_at) AS first, MAX(updated_at) AS last, SUM(status = 'error') AS errors FROM backfill_progress WHERE task IN ('events','stock','options') GROUP BY task").all() as Array<{ task: string; n: number; first: string; last: string; errors: number }>;
+  const prog = earningsDb.prepare("SELECT task, COUNT(*) AS n, MIN(updated_at) AS first, MAX(updated_at) AS last, SUM(status = 'error') AS errors, SUM(status = 'done') AS done FROM backfill_progress WHERE task IN ('events','stock','options','analyst') GROUP BY task").all() as Array<{ task: string; n: number; first: string; last: string; errors: number; done: number }>;
   const byTask = new Map(prog.map((p) => [p.task, p]));
   // events -> stock -> options -> done: the first task whose finished-symbol count is short of the largest count.
-  const target = Math.max(0, ...prog.map((p) => p.n));
+  const phases = ["events", "stock", "options"] as const;
+  const target = Math.max(0, ...phases.map((t) => byTask.get(t)?.done ?? 0));
   let phase: EarningsStatus["backfill"]["phase"] = "idle";
   if (target > 0) {
-    const open = (["events", "stock", "options"] as const).find((t) => (byTask.get(t)?.n ?? 0) < target);
+    const open = phases.find((t) => (byTask.get(t)?.done ?? 0) < target);
     phase = open ?? "done";
     const ev = byTask.get("events");
     // The events pass sets the target itself, so it looks finished while it runs: treat a pass still writing as running.
