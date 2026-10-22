@@ -17,6 +17,7 @@ beforeAll(async () => {
   process.env.ALPACA_API_KEY_ID = "test";
   process.env.ALPACA_API_SECRET_KEY = "test";
   process.env.ALPACA_MAX_REQ_PER_MIN = "1000000";
+  process.env.TRADING_MAX_REQ_PER_MIN = "1000000";
   op = await import("./option-paths.js");
   trading = await import("../providers/alpaca-trading.js");
   bs = await import("../options/black-scholes.js");
@@ -207,29 +208,40 @@ describe("paths from bars (pure)", () => {
 describe("backfillOptions with mocked Alpaca", () => {
   const SESSIONS = (() => {
     const out: string[] = [];
-    for (let d = Date.parse("2026-06-10T00:00:00Z"); d <= Date.parse("2026-07-30T00:00:00Z"); d += 86_400_000) {
+    for (let d = Date.parse("2026-06-10T00:00:00Z"); d <= Date.parse("2026-08-28T00:00:00Z"); d += 86_400_000) {
       const dow = new Date(d).getUTCDay();
       if (dow !== 0 && dow !== 6) out.push(new Date(d).toISOString().slice(0, 10));
     }
     return out;
   })();
   const occOf = (expiry: string, type: "C" | "P", strike: number) => `TST${expiry.slice(2, 4)}${expiry.slice(5, 7)}${expiry.slice(8)}${type}${String(Math.round(strike * 1000)).padStart(8, "0")}`;
-  const expiries = ["2026-07-24", "2026-07-31", "2026-08-21"];
+  const expiries = ["2026-07-24", "2026-07-31", "2026-08-21", "2026-09-04"];
   const strikes = [90, 92.5, 95, 97.5, 100, 102.5, 105, 107.5, 110];
   const calls: string[] = [];
 
-  function mockAlpaca(opts: { noBarsFor?: string[] } = {}) {
+  function mockAlpaca(opts: { noBarsFor?: string[]; failBars?: boolean; rate429?: number } = {}) {
+    let limited = opts.rate429 ?? 0;
     calls.length = 0;
     vi.stubGlobal("fetch", async (input: string) => {
       const u = new URL(input);
       calls.push(`${u.pathname}?${u.searchParams.get("timeframe") ?? u.searchParams.get("status") ?? ""}`);
       if (u.pathname === "/v2/calendar") return new Response("nope", { status: 500 });
+      if (limited > 0 && u.pathname === "/v2/options/contracts") {
+        limited--;
+        return new Response("slow down", { status: 429, headers: { "retry-after": "0" } });
+      }
+      if (opts.failBars && u.pathname === "/v1beta1/options/bars") return new Response("boom", { status: 500 });
       if (u.pathname === "/v2/options/contracts") {
         const inactive = u.searchParams.get("status") === "inactive";
         const rows = inactive
           ? expiries.flatMap((e) => strikes.flatMap((k) => (["C", "P"] as const).map((t) => ({ symbol: occOf(e, t, k), root_symbol: "TST", expiration_date: e, strike_price: String(k), type: t === "C" ? "call" : "put", status: "inactive" }))))
           : [];
         return new Response(JSON.stringify({ option_contracts: rows, next_page_token: null }), { status: 200 });
+      }
+      if (u.pathname === "/v2/stocks/bars") {
+        calls.push(`stock:${u.searchParams.get("adjustment")}`);
+        // A 10:1 split: the raw price is ten times the adjusted one stored in daily_bars (10).
+        return new Response(JSON.stringify({ bars: { TST: SESSIONS.map((d) => ({ t: `${d}T04:00:00Z`, o: 100, h: 101, l: 99, c: 100, v: 1 })) }, next_page_token: null }), { status: 200 });
       }
       if (u.pathname === "/v1beta1/options/bars") {
         const syms = (u.searchParams.get("symbols") ?? "").split(",").filter((s) => !(opts.noBarsFor ?? []).includes(s));
@@ -242,9 +254,13 @@ describe("backfillOptions with mocked Alpaca", () => {
           if (tf === "1Day") {
             bars[s] = SESSIONS.map((d, i) => ({ t: `${d}T04:00:00Z`, o: base + 0.01 * i, h: base, l: base, c: base + 0.02 * i, v: 50 }));
           } else {
-            const day = new Date(u.searchParams.get("start")!).toISOString().slice(0, 10);
-            // sparse: only the 09:45 and 15:30 bars (start times; EDT = UTC-4)
-            bars[s] = [{ t: `${day}T13:45:00Z`, o: base, h: base, l: base, c: base + 0.5, v: 4 }, { t: `${day}T19:30:00Z`, o: base, h: base, l: base, c: base + 1, v: 2 }];
+            const from = new Date(u.searchParams.get("start")!).toISOString().slice(0, 10);
+            const to = new Date(u.searchParams.get("end")!).toISOString().slice(0, 10);
+            // sparse: only the 09:45 and 15:30 bars of each session in the range (start times; EDT = UTC-4)
+            bars[s] = SESSIONS.filter((d) => d >= from && d <= to).flatMap((day) => [
+              { t: `${day}T13:45:00Z`, o: base, h: base, l: base, c: base + 0.5, v: 4 },
+              { t: `${day}T19:30:00Z`, o: base, h: base, l: base, c: base + 1, v: 2 },
+            ]);
           }
         }
         return new Response(JSON.stringify({ bars, next_page_token: null }), { status: 200 });
@@ -267,7 +283,7 @@ describe("backfillOptions with mocked Alpaca", () => {
     expect(res.errors).toBe(0);
     expect(res.events).toBe(1); // unconfirmed and pre-cutoff events are skipped
     expect(res.legs).toBeGreaterThan(20);
-    expect(res.requests).toBeGreaterThan(3);
+    expect(res.requests).toBe(3); // one listing, one ladder request, one intraday request
     const e = edb.earningsDb;
     expect((e.prepare("SELECT COUNT(*) n FROM option_ladder_bars").get() as any).n).toBeGreaterThan(100);
     expect((e.prepare("SELECT COUNT(*) n FROM option_intraday_bars").get() as any).n).toBeGreaterThan(10);
@@ -303,5 +319,55 @@ describe("backfillOptions with mocked Alpaca", () => {
     const before = count();
     await op.buildOptionPathsFor([{ symbol: "TST", reportDate: "2026-07-23" }]);
     expect(count()).toBe(before);
+  });
+
+  it("shares listings and ladder bars across a symbol's events, retries 429s, and never finishes an event after a failed request", async () => {
+    const e = edb.earningsDb;
+    const addEvent = (d: string, t0: string, r: string, spot: number) => {
+      e.prepare("INSERT INTO events (symbol, report_date, time, t0, r, confirmed, reason) VALUES ('TST', ?, 'amc', ?, ?, 1, 'ok')").run(d, t0, r);
+      e.prepare("INSERT INTO stock_paths (symbol, report_date, t0_m20, t0_m10, t0_m5, t0_m2, t0_m1, t0_open, t0_1000, t0_1545, t0_close, r_open, r_close) VALUES ('TST', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(d, ...Array<number>(11).fill(spot));
+    };
+    addEvent("2026-08-06", "2026-08-06", "2026-08-07", 100.2);
+    addEvent("2026-08-13", "2026-08-13", "2026-08-14", 99.6);
+    mockAlpaca({ rate429: 2 });
+    const res = await op.backfillOptions(["TST"], { since: "2026-08-01" });
+    expect(res.errors).toBe(0);
+    expect(res.events).toBe(2);
+    // The same quarter: inactive and active listings once (R + 80 days reaches today), one shared ladder request, one intraday request each. The 429s are retried, not counted.
+    expect(res.requests).toBe(5);
+    expect(calls.filter((c) => c.startsWith("/v2/options/contracts")).length).toBe(4); // inactive + 2 retried 429s + active
+
+    // A failing bars request leaves the event unwritten and the symbol retryable.
+    addEvent("2026-08-20", "2026-08-20", "2026-08-21", 100.1);
+    mockAlpaca({ failBars: true });
+    const bad = await op.backfillOptions(["TST"], { since: "2026-08-01" });
+    expect(bad.errors).toBe(1);
+    expect(bad.legs).toBe(0);
+    expect(e.prepare("SELECT COUNT(*) n FROM option_paths WHERE report_date = '2026-08-20'").get()).toMatchObject({ n: 0 });
+    expect(e.prepare("SELECT status FROM backfill_progress WHERE task='options' AND symbol='TST'").get()).toMatchObject({ status: "error" });
+    mockAlpaca();
+    const ok = await op.backfillOptions(["TST"], { since: "2026-08-01" });
+    expect(ok).toMatchObject({ errors: 0, events: 1 });
+    expect(e.prepare("SELECT COUNT(*) n FROM option_paths WHERE report_date = '2026-08-20'").get()).toMatchObject({ n: expect.any(Number) });
+    expect((e.prepare("SELECT COUNT(*) n FROM option_paths WHERE report_date = '2026-08-20'").get() as any).n).toBeGreaterThan(0);
+    expect(e.prepare("SELECT status FROM backfill_progress WHERE task='options' AND symbol='TST'").get()).toMatchObject({ status: "done" });
+  });
+
+  it("uses raw prices for the option side when the stock was split (10:1)", async () => {
+    const { db } = await import("../db.js");
+    await import("../history/store.js"); // creates daily_bars
+    const ins = db.prepare("INSERT OR REPLACE INTO daily_bars (symbol, day, open, high, low, close, volume) VALUES ('TST', ?, 10, 10.1, 9.9, 10, 1)");
+    for (const d of SESSIONS) ins.run(d);
+    const e = edb.earningsDb;
+    e.prepare("INSERT INTO events (symbol, report_date, time, t0, r, confirmed, reason) VALUES ('TST','2026-08-25','amc','2026-08-25','2026-08-26',1,'ok')").run();
+    e.prepare("INSERT INTO stock_paths (symbol, report_date, t0_m20, t0_m10, t0_m5, t0_m2, t0_m1, t0_open, t0_1000, t0_1545, t0_close, r_open, r_close) VALUES ('TST','2026-08-25', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(...Array<number>(11).fill(10.02));
+    mockAlpaca();
+    const res = await op.backfillOptions(["TST"], { since: "2026-08-25" });
+    expect(res.errors).toBe(0);
+    expect(res.legs).toBeGreaterThan(0);
+    expect(calls).toContain("stock:raw");
+    const row = e.prepare("SELECT strike, spot_at_entry, iv_at_entry FROM option_paths WHERE report_date='2026-08-25' AND entry='T0-5' AND expiry_kind='event' AND leg='atm_call'").get() as any;
+    expect(row.spot_at_entry).toBeCloseTo(100.2, 6); // 10.02 adjusted x 10
+    expect(row.strike).toBe(100); // not the 90 an adjusted 10.02 would pick
   });
 });

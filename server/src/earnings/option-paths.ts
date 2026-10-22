@@ -1,8 +1,11 @@
 import { mapWithConcurrency } from "../concurrency.js";
+import { db } from "../db.js";
 import { tradingDay } from "../history/time.js";
 import { nyInstant } from "../live/session.js";
 import { impliedVol, riskFreeRate } from "../options/black-scholes.js";
+import { daysBetween } from "../options/selection.js";
 import { ensureCalendar, isTradingDay, sessionClose } from "../providers/alpaca-calendar.js";
+import { stockBarsPage } from "../providers/alpaca.js";
 import { optionDailyBars, optionIntradayBars, type OptionDayBar } from "../providers/alpaca-options.js";
 import { listContracts, type OptionContract } from "../providers/alpaca-trading.js";
 import type { Anchor, ExpiryKind, Leg, OptionLegPath } from "./contracts.js";
@@ -31,17 +34,17 @@ export const EXPIRY_KINDS: ExpiryKind[] = ["event", "swing"];
 const SWING_MIN_DAYS = 21;
 const LISTING_DAYS = 80; // from R: covers the swing expiry on monthly-only names
 const LADDER_NEIGHBORS = 3; // strikes each side of every entry spot that get daily bars
-const BAR_BATCH = 150;
+const BAR_BATCH = 200;
 const SPARSE_MINUTES = 45;
 const BAR_MINUTES = 15;
-const SYMBOL_CONCURRENCY = 6;
+const SYMBOL_CONCURRENCY = 32; // the shared throttle, not latency, should be the limit
 const TASK = "options";
 
 const SPOT_COLUMN: Record<string, string> = {
   "T0-20": "t0_m20", "T0-10": "t0_m10", "T0-5": "t0_m5", "T0-2": "t0_m2", "T0-1": "t0_m1", "T0:10:00": "t0_1000", "T0:open": "t0_open", "T0:close": "t0_close",
 };
 
-export type Stats = { requests: number };
+export type Stats = { requests: number; listing?: number };
 export type EventRef = { symbol: string; reportDate: string };
 type EventRow = { symbol: string; report_date: string; t0: string; r: string };
 type Bar = OptionDayBar;
@@ -209,13 +212,14 @@ const upsertPath = earningsDb.prepare(`INSERT OR REPLACE INTO option_paths
   (symbol, report_date, entry, expiry_kind, leg, contract, expiry, strike, spot_at_entry, prices, iv_at_entry, price_source, volume_at_entry_day, updated_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`);
 
-function saveLadder(bars: Record<string, Bar[]>, lastDay: string): number {
+function saveLadder(bars: Record<string, Bar[]>, window: Map<string, [string, string]>): number {
   let n = 0;
   earningsDb.transaction(() => {
     for (const [occ, list] of Object.entries(bars)) {
+      const w = window.get(occ);
       for (const b of list) {
         const day = tradingDay(b.t);
-        if (day > lastDay) continue;
+        if (w && (day < w[0] || day > w[1])) continue; // outside every event window that owns this contract
         upsertLadder.run(occ, day, b.o, b.h, b.l, b.c, b.v, b.vw ?? null, b.n ?? null);
         n++;
       }
@@ -262,45 +266,128 @@ async function ensureYears(...days: string[]): Promise<void> {
   for (const y of new Set(days.map((d) => Number(d.slice(0, 4))))) await ensureCalendar(y);
 }
 
-async function contractsFor(symbol: string, r: string, lo: number, hi: number, stats: Stats): Promise<OptionContract[]> {
-  const base = { underlying: symbol, expiryGte: r, expiryLte: addDays(r, LISTING_DAYS), strikeGte: Math.floor(lo), strikeLte: Math.ceil(hi) };
+// The trading API is the slowest endpoint (a few hundred requests a minute), so listings are per calendar year of R.
+const chunkOf = (day: string): string => day.slice(0, 4);
+
+/** Raw-over-adjusted price ratio for a day (1 when there was no split since). */
+export type FactorFn = (day: string) => number;
+const NO_SPLIT: FactorFn = () => 1;
+
+/**
+ * daily_bars and the stock paths are split-adjusted, but listed strikes and
+ * option prices are raw. This returns, for one symbol, factor(day) = raw
+ * close / adjusted close from Alpaca's raw daily bars (one request per symbol
+ * for the whole span). A day without both closes uses the nearest earlier
+ * known factor, else the first. Without adjusted bars to compare, it is 1.
+ */
+export async function rawPriceFactors(symbol: string, from: string, to: string, stats: Stats): Promise<FactorFn> {
+  let adjusted: Array<{ day: string; close: number }>;
+  try {
+    adjusted = db.prepare("SELECT day, close FROM daily_bars WHERE symbol = ? AND day >= ? AND day <= ? ORDER BY day").all(symbol, from, to) as typeof adjusted;
+  } catch {
+    return NO_SPLIT; // no daily_bars table (a bare test database)
+  }
+  if (adjusted.length === 0) return NO_SPLIT;
+  const raw = new Map<string, number>();
+  let pageToken: string | undefined;
+  do {
+    stats.requests++;
+    const page = await stockBarsPage({ symbols: [symbol], timeframe: "1Day", start: from, end: addDays(to, 1), adjustment: "raw", pageToken });
+    for (const b of page.bars[symbol] ?? []) raw.set(tradingDay(b.t), b.c);
+    pageToken = page.nextPageToken ?? undefined;
+  } while (pageToken);
+  const known: Array<[string, number]> = [];
+  for (const a of adjusted) {
+    const r = raw.get(a.day);
+    if (r && a.close > 0) {
+      const f = r / a.close;
+      known.push([a.day, Math.abs(f - 1) < 0.015 ? 1 : f]);
+    }
+  }
+  if (known.length === 0) return NO_SPLIT;
+  return (day) => {
+    let best = known[0][1];
+    for (const [d, f] of known) {
+      if (d > day) break;
+      best = f;
+    }
+    return best;
+  };
+}
+
+/** The event with its stock-path spots multiplied into raw (listed-strike) terms. */
+export function toRawSpots(ev: EventInput, factor: FactorFn): EventInput {
+  const spots: EventInput["spots"] = {};
+  for (const [anchor, v] of Object.entries(ev.spots)) {
+    spots[anchor as Anchor] = v == null ? v : v * factor(anchorDay(anchor as Anchor, ev.t0, ev.r).day);
+  }
+  return { ...ev, spots };
+}
+
+/** Strike range for a stretch of days: daily_bars low/high (made raw) with a wide margin, plus the event spots. */
+function strikeBand(symbol: string, from: string, to: string, spots: number[], factor: FactorFn): [number, number] {
+  let rows: Array<{ day: string; low: number; high: number }> = [];
+  try {
+    rows = db.prepare("SELECT day, low, high FROM daily_bars WHERE symbol = ? AND day >= ? AND day <= ?").all(symbol, from, to) as typeof rows;
+  } catch {
+    rows = []; // no daily_bars table (a bare test database)
+  }
+  let lo = Math.min(...spots) * 0.88;
+  let hi = Math.max(...spots) * 1.12;
+  for (const r of rows) {
+    const f = factor(r.day);
+    if (r.low > 0) lo = Math.min(lo, r.low * f * 0.85);
+    if (r.high > 0) hi = Math.max(hi, r.high * f * 1.15);
+  }
+  return [lo, hi];
+}
+
+/** Contracts of a symbol for the events of one year: one listing (all pages) per status, not one per event. */
+async function listChunk(symbol: string, evs: EventInput[], factor: FactorFn, stats: Stats): Promise<OptionContract[]> {
+  const spots = evs.flatMap(spotsOf);
+  const own: Stats = { requests: 0 };
+  const [lo, hi] = strikeBand(symbol, addSessions(evs[0].t0, -25), addSessions(evs[evs.length - 1].r, 1), spots, factor);
+  const base = {
+    underlying: symbol,
+    expiryGte: evs.reduce((m, e) => (e.r < m ? e.r : m), evs[0].r),
+    expiryLte: addDays(evs.reduce((m, e) => (e.r > m ? e.r : m), evs[0].r), LISTING_DAYS),
+    strikeGte: Math.floor(lo),
+    strikeLte: Math.ceil(hi),
+  };
   const today = new Date().toISOString().slice(0, 10);
-  const inactive = await listContracts({ ...base, status: "inactive" }, stats);
-  const active = base.expiryLte >= today ? await listContracts({ ...base, status: "active" }, stats) : [];
+  const inactive = await listContracts({ ...base, status: "inactive" }, own, 30, false);
+  const active = base.expiryLte >= today ? await listContracts({ ...base, status: "active" }, own, 30, false) : [];
   const seen = new Map<string, OptionContract>();
   for (const c of [...inactive, ...active]) seen.set(c.occ, c);
+  stats.requests += own.requests;
+  stats.listing = (stats.listing ?? 0) + own.requests;
   return [...seen.values()];
 }
 
-async function fetchDaily(occs: string[], start: string, endDay: string, stats: Stats): Promise<void> {
-  const end = addDays(endDay, 1); // Alpaca's end is exclusive of that date's midnight bar
-  const batches: string[][] = [];
-  for (let i = 0; i < occs.length; i += BAR_BATCH) batches.push(occs.slice(i, i + BAR_BATCH));
-  for (const batch of batches) saveLadder(await optionDailyBars(batch, start, end, stats), endDay);
-}
+const spotsOf = (ev: EventInput): number[] =>
+  ENTRIES.map((e) => ev.spots[e]).concat(ev.spots["T0:close"]).filter((v): v is number => typeof v === "number" && v > 0);
 
-async function fetchIntraday(occs: string[], days: string[], stats: Stats): Promise<void> {
-  for (const day of days) {
-    for (let i = 0; i < occs.length; i += BAR_BATCH) saveIntraday(await optionIntradayBars(occs.slice(i, i + BAR_BATCH), day, "15Min", stats));
-  }
-}
+type Plan = {
+  ev: EventInput;
+  contracts: OptionContract[];
+  chain: Chain;
+  expiries: Record<ExpiryKind, string | null>;
+  ladder: string[];
+  startDay: string;
+  endDay: string;
+};
 
-/** Fetch bars for one event and (re)build its option_paths. Returns the legs stored. */
-async function processEvent(ev: EventInput, neighbors: number | "all", stats: Stats): Promise<number> {
-  await ensureYears(addDays(ev.t0, -45), addDays(ev.r, 3));
-  const startDay = addSessions(ev.t0, -25);
-  const endDay = addSessions(ev.r, 1);
-  const spotVals = ENTRIES.map((e) => ev.spots[e]).concat(ev.spots["T0:close"]).filter((v): v is number => typeof v === "number" && v > 0);
-  if (spotVals.length === 0) return 0;
+/** The contracts, expiries and ladder OCCs one event needs, from its chunk's listing. */
+function planEvent(ev: EventInput, listing: OptionContract[], neighbors: number | "all"): Plan | null {
+  const spotVals = spotsOf(ev);
+  if (spotVals.length === 0) return null;
   const lo = Math.min(...spotVals) * 0.88;
   const hi = Math.max(...spotVals) * 1.12;
-
-  const contracts = await contractsFor(ev.symbol, ev.r, lo, hi, stats);
-  if (contracts.length === 0) return 0;
+  const until = addDays(ev.r, LISTING_DAYS);
+  const contracts = listing.filter((c) => c.expiry >= ev.r && c.expiry <= until && c.strike >= lo && c.strike <= hi);
+  if (contracts.length === 0) return null;
   const chain = buildChain(contracts);
   const expiries = pickExpiries([...new Set(contracts.map((c) => c.expiry))], ev.r);
-
-  // Daily ladder: strikes around every entry spot, both types, both expiries.
   const ladder = new Set<string>();
   for (const kind of EXPIRY_KINDS) {
     const expiry = expiries[kind];
@@ -313,9 +400,61 @@ async function processEvent(ev: EventInput, neighbors: number | "all", stats: St
       for (const s of wanted) ladder.add(map.get(s)!);
     }
   }
-  await fetchDaily([...ladder], startDay, endDay, stats);
+  return { ev, contracts, chain, expiries, ladder: [...ladder], startDay: addSessions(ev.t0, -25), endDay: addSessions(ev.r, 1) };
+}
 
-  // Intraday: ATM-1..ATM+1 calls and the ATM put at the T0 morning spot, plus the contracts that daily entries picked.
+/**
+ * Daily bars for the ladders of many events in as few requests as possible:
+ * events (in date order) share a request while the OCC count stays under the
+ * batch size and the date span under 150 days. Returns the keys of events
+ * whose bars could not be fetched.
+ */
+async function fetchLadders(plans: Plan[], stats: Stats): Promise<Set<Plan>> {
+  const failed = new Set<Plan>();
+  const sorted = [...plans].sort((a, b) => a.startDay.localeCompare(b.startDay));
+  let batch: Plan[] = [];
+  const flush = async () => {
+    if (batch.length === 0) return;
+    const group = batch;
+    batch = [];
+    const window = new Map<string, [string, string]>();
+    for (const p of group) {
+      for (const occ of p.ladder) {
+        const w = window.get(occ);
+        window.set(occ, w ? [w[0] < p.startDay ? w[0] : p.startDay, w[1] > p.endDay ? w[1] : p.endDay] : [p.startDay, p.endDay]);
+      }
+    }
+    const occs = [...window.keys()];
+    const start = group.reduce((m, p) => (p.startDay < m ? p.startDay : m), group[0].startDay);
+    const end = group.reduce((m, p) => (p.endDay > m ? p.endDay : m), group[0].endDay);
+    try {
+      for (let i = 0; i < occs.length; i += BAR_BATCH) {
+        const bars = await optionDailyBars(occs.slice(i, i + BAR_BATCH), start, addDays(end, 1), stats);
+        saveLadder(bars, window);
+      }
+    } catch (err) {
+      console.warn(`[option-paths] ladder bars ${group[0].ev.symbol}: ${err instanceof Error ? err.message : String(err)}`);
+      for (const p of group) failed.add(p);
+    }
+  };
+  let count = 0;
+  for (const p of sorted) {
+    const span = batch.length ? daysBetween(batch[0].startDay, p.endDay) : 0;
+    if (batch.length && (count + p.ladder.length > BAR_BATCH || span > 150)) {
+      await flush();
+      count = 0;
+    }
+    batch.push(p);
+    count += p.ladder.length;
+  }
+  await flush();
+  return failed;
+}
+
+/** Intraday bars and paths for one planned event, after its ladder is stored. Returns the legs stored. */
+async function finishEvent(plan: Plan, stats: Stats): Promise<number> {
+  const { ev, contracts, chain, expiries, ladder, startDay, endDay } = plan;
+  // ATM-1..ATM+1 calls and the ATM put at the T0 morning spot, plus the contracts that daily entries picked.
   const t1 = addSessions(ev.t0, -1);
   const intraDays = [...new Set([t1, ev.t0, ev.r])];
   const setA = new Set<string>();
@@ -329,14 +468,72 @@ async function processEvent(ev: EventInput, neighbors: number | "all", stats: St
       if (put !== undefined) setA.add(chain.occ.get(`${expiry}|put`)!.get(put)!);
     }
   }
-  const dailyOnly = buildLegPaths({ ...ev, spots: { ...ev.spots, "T0:10:00": null } }, contracts, loadLookup([...ladder], [startDay, endDay], []));
+  const dailyOnly = buildLegPaths({ ...ev, spots: { ...ev.spots, "T0:10:00": null } }, contracts, loadLookup(ladder, [startDay, endDay], []));
   for (const p of dailyOnly) if (p.expiryKind === "event") setA.add(p.contract);
-  await fetchIntraday([...setA], intraDays, stats);
-
+  // T0-1, T0 and R are consecutive sessions, so one request covers all three days.
+  const occs = [...setA];
+  for (let i = 0; i < occs.length; i += BAR_BATCH) saveIntraday(await optionIntradayBars(occs.slice(i, i + BAR_BATCH), intraDays[0], "15Min", stats, 20, intraDays[intraDays.length - 1]));
   const lookup = loadLookup([...new Set([...ladder, ...setA])], [startDay, endDay], intraDays);
   const paths = buildLegPaths(ev, contracts, lookup);
   savePaths(ev, paths);
   return paths.length;
+}
+
+type SymbolOutcome = { legs: Map<string, number>; failed: Set<string> };
+
+/**
+ * Fetch and build the option paths of several events of one symbol. Contract
+ * listings are per year of R, ladder bars are shared across events, and
+ * an event whose requests failed is reported in `failed` and not written.
+ */
+async function processSymbolEvents(symbol: string, evs: EventInput[], neighbors: number | "all", stats: Stats): Promise<SymbolOutcome> {
+  const out: SymbolOutcome = { legs: new Map(), failed: new Set() };
+  if (evs.length === 0) return out;
+  await ensureYears(addDays(evs[0].t0, -45), addDays(evs[evs.length - 1].r, 3));
+  const sortedEvs = [...evs].sort((a, b) => a.r.localeCompare(b.r));
+  let factor: FactorFn;
+  try {
+    factor = await rawPriceFactors(symbol, addSessions(sortedEvs[0].t0, -25), addSessions(sortedEvs[sortedEvs.length - 1].r, 1), stats);
+  } catch (err) {
+    console.warn(`[option-paths] ${symbol} raw prices: ${err instanceof Error ? err.message : String(err)}`);
+    for (const ev of evs) out.failed.add(ev.reportDate);
+    return out;
+  }
+  evs = evs.map((ev) => toRawSpots(ev, factor));
+  const chunks = new Map<string, EventInput[]>();
+  for (const ev of [...evs].sort((a, b) => a.r.localeCompare(b.r))) {
+    const q = chunkOf(ev.r);
+    if (!chunks.has(q)) chunks.set(q, []);
+    chunks.get(q)!.push(ev);
+  }
+  const plans: Plan[] = [];
+  for (const group of chunks.values()) {
+    try {
+      const listing = await listChunk(symbol, group, factor, stats);
+      for (const ev of group) {
+        const plan = planEvent(ev, listing, neighbors);
+        if (plan) plans.push(plan);
+        else out.legs.set(ev.reportDate, 0);
+      }
+    } catch (err) {
+      console.warn(`[option-paths] ${symbol} contracts: ${err instanceof Error ? err.message : String(err)}`);
+      for (const ev of group) out.failed.add(ev.reportDate);
+    }
+  }
+  const badLadder = await fetchLadders(plans, stats);
+  for (const plan of plans) {
+    if (badLadder.has(plan)) {
+      out.failed.add(plan.ev.reportDate);
+      continue;
+    }
+    try {
+      out.legs.set(plan.ev.reportDate, await finishEvent(plan, stats));
+    } catch (err) {
+      out.failed.add(plan.ev.reportDate);
+      console.warn(`[option-paths] ${symbol} ${plan.ev.reportDate}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return out;
 }
 
 // ---- drivers -----------------------------------------------------------------
@@ -367,7 +564,8 @@ export async function backfillOptions(
   symbols: string[],
   opts: { since?: string; ladderNeighbors?: number | "all"; concurrency?: number } = {}
 ): Promise<{ events: number; legs: number; requests: number; errors: number }> {
-  const since = opts.since ?? DEFAULT_SINCE;
+  // Alpaca has no option bars before Feb 2024, so earlier events are never tried whatever `since` says.
+  const since = opts.since && opts.since > DEFAULT_SINCE ? opts.since : DEFAULT_SINCE;
   const stats: Stats = { requests: 0 };
   let events = 0;
   let legs = 0;
@@ -383,20 +581,16 @@ export async function backfillOptions(
     const prev = progress.get(TASK, symbol) as { status: string; detail: string | null } | undefined;
     const through = prev?.status === "done" ? (JSON.parse(prev.detail ?? "{}").through as string | undefined) : undefined;
     const todo = rows.filter((e) => !(through && e.report_date <= through) && !hasPaths(e.symbol, e.report_date));
-    let failed = 0;
-    for (const ev of eventInputs(todo)) {
-      try {
-        const n = await processEvent(ev, opts.ladderNeighbors ?? LADDER_NEIGHBORS, stats);
-        if (n > 0) events++;
-        legs += n;
-      } catch (err) {
-        failed++;
-        errors++;
-        console.warn(`[option-paths] ${ev.symbol} ${ev.reportDate}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    const out = await processSymbolEvents(symbol, eventInputs(todo), opts.ladderNeighbors ?? LADDER_NEIGHBORS, stats);
+    const failed = out.failed.size;
+    errors += failed;
+    for (const n of out.legs.values()) {
+      if (n > 0) events++;
+      legs += n;
     }
     mark.run(TASK, symbol, failed ? "error" : "done", JSON.stringify({ through: rows.length ? rows[rows.length - 1].report_date : (through ?? null), failed }));
   });
+  console.log(`[option-paths] requests=${stats.requests} (contract listings ${stats.listing ?? 0}, bars ${stats.requests - (stats.listing ?? 0)}) events=${events} legs=${legs} errors=${errors}`);
   return { events, legs, requests: stats.requests, errors };
 }
 
@@ -405,12 +599,11 @@ export async function buildOptionPathsFor(events: EventRef[]): Promise<void> {
   const stats: Stats = { requests: 0 };
   const sel = earningsDb.prepare("SELECT symbol, report_date, t0, r FROM events WHERE symbol = ? AND report_date = ? AND confirmed = 1 AND t0 IS NOT NULL AND r IS NOT NULL");
   const rows = events.map((e) => sel.get(e.symbol.toUpperCase(), e.reportDate) as EventRow | undefined).filter((r): r is EventRow => !!r);
-  for (const ev of eventInputs(rows)) {
-    try {
-      await processEvent(ev, LADDER_NEIGHBORS, stats);
-    } catch (err) {
-      console.warn(`[option-paths] ${ev.symbol} ${ev.reportDate}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  const bySymbol = new Map<string, EventInput[]>();
+  for (const ev of eventInputs(rows)) bySymbol.set(ev.symbol, [...(bySymbol.get(ev.symbol) ?? []), ev]);
+  for (const [symbol, evs] of bySymbol) {
+    const out = await processSymbolEvents(symbol, evs, LADDER_NEIGHBORS, stats);
+    for (const d of out.failed) console.warn(`[option-paths] ${symbol} ${d}: failed, will be retried by the next run`);
   }
 }
 
