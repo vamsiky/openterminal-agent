@@ -6,6 +6,8 @@
 // dataFetch(), which refuses any other origin. Agents propose; nothing in this
 // app places orders.
 
+// 429s are retried with backoff (Retry-After honoured, capped at 30 s) before the call fails.
+const MAX_RETRIES = 8;
 const DATA_BASE = "https://data.alpaca.markets";
 // Real-time stream for the same market data (trades, quotes, bars).
 const STREAM_BASE = "wss://stream.data.alpaca.markets";
@@ -70,9 +72,10 @@ export async function dataFetch(path: string, params: Record<string, string | un
         Accept: "application/json",
       },
     });
-    if (res.status === 429 && attempt < 5) {
-      const retryAfter = Number(res.headers.get("retry-after"));
-      await new Promise((r) => setTimeout(r, (isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2 ** attempt) * 1000));
+    if (res.status === 429 && attempt < MAX_RETRIES) {
+      const header = res.headers.get("retry-after");
+        const retryAfter = header === null || header === "" ? NaN : Number(header);
+      await new Promise((r) => setTimeout(r, Math.min(isFinite(retryAfter) && retryAfter >= 0 ? retryAfter : 2 ** attempt, 30) * 1000 + Math.random() * 500));
       continue;
     }
     if (!res.ok) {

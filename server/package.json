@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "history": "tsx src/history/cli.ts",
     "backfill-iv": "tsx src/options/backfill-cli.ts",
+    "backfill-earnings": "tsx src/earnings/backfill.ts",
     "watchlists": "tsx src/watchlists/cli.ts"
   },
   "dependencies": {

@@ -24,6 +24,12 @@ import * as alpaca from "./providers/alpaca.js";
 import { allStats } from "./providers/registry.js";
 import { hasApiKey, requireApiKey } from "./auth.js";
 import * as live from "./live/feed.js";
+import { earningsRouter } from "./routes/earnings.js";
+import { startEarningsJobs } from "./earnings/jobs.js";
+import { buildOptionPathsFor } from "./earnings/option-paths.js";
+import { startSnapshotJobs } from "./earnings/snapshots.js";
+import { startReviewWorker } from "./earnings/review.js";
+import { rebuildStats } from "./earnings/stats.js";
 import { rateLimit } from "./rateLimit.js";
 
 const app = express();
@@ -67,6 +73,7 @@ app.use("/api/estimates", requireApiKey, estimatesRouter);
 app.use("/api/research", requireApiKey, researchRouter);
 // Quant scans and ideas, broker positions, and the options data layer (quant/, options/).
 app.use("/api/scan", requireApiKey, scanRouter);
+app.use("/api/earnings", requireApiKey, earningsRouter);
 app.use("/api/positions", requireApiKey, positionsRouter);
 app.use("/api/options-data", requireApiKey, optionsDataRouter);
 // Macro and analyst agents, theses and the pre-market brief (agents/).
@@ -114,3 +121,14 @@ setIdeasListener(onIdeasUpdated);
 // The judge's premium sanity check reads contract quotes from the options stream.
 setOptionQuoteSource((occ) => options.stream.quote(occ));
 startAgents();
+// Earnings schedulers (nightly events/paths, 30-minute option snapshots). EARNINGS_JOBS_ENABLED=0 turns them off.
+if (process.env.EARNINGS_JOBS_ENABLED?.trim() !== "0") {
+  startEarningsJobs({
+    afterNewEvents: buildOptionPathsFor,
+    afterNightly: async () => {
+      rebuildStats();
+    },
+  });
+  startSnapshotJobs();
+  startReviewWorker();
+}

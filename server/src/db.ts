@@ -14,10 +14,10 @@ export const db = new Database(join(dataDir, "terminal.db"));
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
-// An earlier earnings_timing (before DMH existed) can't take the new values;
+// An earlier earnings_timing (before DMH or its source column existed) can't take the new values;
 // it is a cache, so drop it and let the refresh job refill it.
 const oldTiming = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'earnings_timing'").get() as { sql: string } | undefined;
-if (oldTiming && !oldTiming.sql.includes("'dmh'")) db.exec("DROP TABLE earnings_timing");
+if (oldTiming && (!oldTiming.sql.includes("'dmh'") || !oldTiming.sql.includes("source"))) db.exec("DROP TABLE earnings_timing");
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS portfolios (
@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS earnings_timing (
   timing TEXT CHECK (timing IN ('bmo','amc','dmh')),
   matched INTEGER NOT NULL,
   total INTEGER NOT NULL,
-  updated_day TEXT NOT NULL
+  updated_day TEXT NOT NULL,
+  source TEXT CHECK (source IN ('fmp','press_release'))
 );
 CREATE TABLE IF NOT EXISTS estimate_runs (
   day TEXT PRIMARY KEY,

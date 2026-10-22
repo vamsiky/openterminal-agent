@@ -174,7 +174,7 @@ describe("thesis view", () => {
     expect(await screen.findByText("Act: Sell put")).toBeTruthy();
     expect(screen.getByText("Confidence 72%")).toBeTruthy();
     expect(screen.getByText("Roll down and out if tested")).toBeTruthy();
-    expect(screen.getByText("Earnings")).toBeTruthy();
+    expect(screen.getByText("2026-10-30")).toBeTruthy();
     expect(screen.getByText("Would own it at 150.")).toBeTruthy();
     expect(screen.getByText(/PE 20 \(fundamentals:metrics, 2026-10-20\)/)).toBeTruthy();
     expect(calls.some((c) => c.url.includes("ideaId=2"))).toBe(true);

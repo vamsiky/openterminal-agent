@@ -984,7 +984,7 @@ marketRouter.get("/calendar", async (req, res) => {
     res.json(
       rows.map((r) => {
         const t = timings.get(r.symbol);
-        return { ...r, found: undefined, timing: t?.timing ?? null, timingBasis: t?.timing ? { matched: t.matched, total: t.total } : null };
+        return { ...r, found: undefined, timing: t?.timing ?? null, timingBasis: t?.timing ? { matched: t.matched, total: t.total } : null, timingSource: t?.timing ? t.source : null };
       })
     );
   } catch (err) {
