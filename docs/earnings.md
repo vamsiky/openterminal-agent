@@ -140,7 +140,7 @@ All tables live in `data/earnings.db` (under `DATA_DIR`, in WAL mode). The file 
 
 Indexes: `events(report_date)`, `upcoming(report_date)`, `snapshots(ts)`, and `reviews(report_date, horizon, symbol)`.
 
-Disk use: TODO(commander): measured size of `earnings.db` after the full US backfill, and the measured growth per year. The Phase 2b plan's targets are under 5 GB after the backfill and under 1.5 GB a year, with snapshot rows pruned once they roll up. Those are targets, not measurements.
+Disk use: measured after the full US backfill (5,504 names), `earnings.db` is 1.21 GB (1,206,222,848 bytes, WAL checkpointed). Rows: 144,138 events, 135,171 stock paths, 482,786 option legs, 5,868,630 ladder bars, 3,883,680 intraday option bars, 37,237 stats scopes, 3,363 upcoming rows and 21,610 analyst rows. That is well under the 5 GB target. Growth per year has not been measured yet; the target is under 1.5 GB a year, with snapshot rows pruned once they roll up.
 
 ## Backfill
 
@@ -200,7 +200,7 @@ The CLI sets the two `ALPACA_MAX_REQ_PER_MIN` and `FMP_MAX_REQ_PER_MIN` values f
 
 The backfill needs `FMP_API_KEY` and the Alpaca key pair, and exits with an error if either is missing.
 
-Expected run: TODO(commander): time for the full US backfill (hours, from a measured run), total Alpaca and FMP request counts, and the peak request rate. The full-market numbers are being measured again. The earlier plan figures (about 150,000 Alpaca requests, about 7,000 FMP requests and 1 to 3 hours) are estimates and are not confirmed here.
+Measured run (2026-10-22, 07:12 to 09:15 UTC, about 2 h 03 min in total, 5,503 symbols with 5,504 in the option phase): events 31 min (144,156 events: 122,873 confirmed, 640 shifted, 21,192 unconfirmed, 11,985 skipped, 0 errors; about 180 symbols a minute, FMP requests, roughly 50,000), stock 4.5 min (135,171 paths, about 1,200 Alpaca data requests per 200 symbols), options 83 min (29,310 events, 482,786 legs, 72,428 requests: 16,872 contract listings on the trading API and 55,556 bar requests; 4 errors, all Alpaca 429s on contract listings, cleared by a re-run of `--phase options`), then the upcoming and analyst fill (3,363 upcoming rows, 21,649 analyst rows, about 6,000 FMP requests) and the stats rebuild (37,237 scopes in 6.2 s). The options phase averaged about 870 requests a minute, well under the 2,500 a minute cap.
 
 ## Jobs
 
