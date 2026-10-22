@@ -83,6 +83,7 @@ export type AtmSummary = {
   strike: number;
   call: ParsedContract;
   put: ParsedContract;
+  otm: ParsedContract | null; // the call at the next strike above the ATM one
   impliedMovePct: number | null; // straddle mid ÷ spot
   iv: number | null; // mean of the call and put IV
 };
@@ -103,7 +104,9 @@ export function atmSummary(contracts: ParsedContract[], expiry: string, spot: nu
   const call = calls.get(strike)!;
   const put = puts.get(strike)!;
   const straddle = call.mid !== null && put.mid !== null ? call.mid + put.mid : null;
-  return { expiry, strike, call, put, impliedMovePct: straddle !== null && spot > 0 ? (straddle / spot) * 100 : null, iv: mean([call.iv, put.iv]) };
+  const above = [...calls.keys()].filter((k) => k > strike).sort((a, b) => a - b)[0];
+  const otm = above === undefined ? null : calls.get(above)!;
+  return { expiry, strike, call, put, otm, impliedMovePct: straddle !== null && spot > 0 ? (straddle / spot) * 100 : null, iv: mean([call.iv, put.iv]) };
 }
 
 /** Event-expiry ATM IV ÷ next-expiry ATM IV; null when either is missing. */
@@ -124,14 +127,17 @@ export type CycleResult = { kind: "near" | "far"; names: number; rows: number; n
 
 const insertSnapshot = earningsDb.prepare(`INSERT OR REPLACE INTO snapshots
   (symbol, ts, expiry_kind, report_date, expiry, spot, call_occ, call_strike, call_bid, call_ask, call_iv, call_volume, call_oi,
-   put_occ, put_strike, put_bid, put_ask, put_iv, put_volume, put_oi, implied_move_pct, event_premium)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+   put_occ, put_strike, put_bid, put_ask, put_iv, put_volume, put_oi,
+   otm_occ, otm_strike, otm_bid, otm_ask, otm_iv, otm_volume, otm_oi, call_delta, otm_delta, put_delta, implied_move_pct, event_premium)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
 function storeRow(t: Tracked, ts: string, kind: "event" | "next", spot: number, a: AtmSummary, premium: number | null): void {
   insertSnapshot.run(
     t.symbol, ts, kind, t.reportDate, a.expiry, spot,
     a.call.occ, a.strike, a.call.bid, a.call.ask, a.call.iv, a.call.volume, a.call.openInterest,
     a.put.occ, a.strike, a.put.bid, a.put.ask, a.put.iv, a.put.volume, a.put.openInterest,
+    a.otm?.occ ?? null, a.otm?.strike ?? null, a.otm?.bid ?? null, a.otm?.ask ?? null, a.otm?.iv ?? null, a.otm?.volume ?? null, a.otm?.openInterest ?? null,
+    a.call.delta, a.otm?.delta ?? null, a.put.delta,
     a.impliedMovePct, premium
   );
 }

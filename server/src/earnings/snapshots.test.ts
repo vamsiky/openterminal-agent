@@ -83,6 +83,7 @@ describe("summary math", () => {
     NOW261023C00100000: q(2.0, 2.2),
     NOW261023P00100000: q(1.9, 2.1),
     NOW261023C00105000: q(0.5, 0.6),
+    NOW261023C00102000: q(1.0, 1.2),
     NOW261030C00100000: q(3.0, 3.2),
     NOW261030P00100000: q(2.9, 3.1),
   };
@@ -91,6 +92,10 @@ describe("summary math", () => {
     const a = sn.atmSummary(contracts, "2026-10-23", 100)!;
     expect(a.strike).toBe(100);
     expect(a.impliedMovePct).toBeCloseTo(4.1, 6); // (2.1 + 2.0) / 100
+    expect(a.otm).toMatchObject({ strike: 102, occ: "NOW261023C00102000" });
+    expect(a.call.delta).toBeGreaterThan(0.3);
+    expect(a.put.delta!).toBeLessThan(0);
+    expect(a.otm!.delta!).toBeLessThan(a.call.delta!);
     expect(sn.atmSummary(contracts, "2026-10-23", 100.4)!.impliedMovePct).toBeCloseTo(4.1 / 1.004, 6);
     expect(sn.atmSummary(contracts, "2026-10-23", 104)!.strike).toBe(100); // 105 has no put
     expect(sn.atmSummary(contracts, "2026-11-06", 100)).toBeNull();
@@ -122,7 +127,7 @@ describe("cycle, roll-up and prune", () => {
         return new Response(
           JSON.stringify({
             snapshots: {
-              NOW261023C00100000: q(2.0, 2.2), NOW261023P00100000: q(1.9, 2.1),
+              NOW261023C00100000: q(2.0, 2.2), NOW261023P00100000: q(1.9, 2.1), NOW261023C00102500: q(1.0, 1.2),
               NOW261030C00100000: q(3.0, 3.2), NOW261030P00100000: q(2.9, 3.1),
             },
           }),
@@ -137,6 +142,10 @@ describe("cycle, roll-up and prune", () => {
     const rows = edb.earningsDb.prepare("SELECT * FROM snapshots WHERE symbol = 'NOW' ORDER BY expiry_kind").all() as any[];
     expect(rows.map((r) => [r.expiry_kind, r.expiry])).toEqual([["event", "2026-10-23"], ["next", "2026-10-30"]]);
     expect(rows[0]).toMatchObject({ spot: 100, call_occ: "NOW261023C00100000", call_bid: 2.0, put_ask: 2.1, call_volume: 100, report_date: "2026-10-21" });
+    expect(rows[0]).toMatchObject({ otm_occ: "NOW261023C00102500", otm_strike: 102.5, otm_bid: 1.0, otm_ask: 1.2, otm_volume: 100 });
+    expect(rows[0].call_delta).toBeGreaterThan(rows[0].otm_delta);
+    expect(rows[0].put_delta).toBeLessThan(0);
+    expect(rows[1].otm_occ).toBeNull();
     expect(rows[0].implied_move_pct).toBeCloseTo(4.1, 6);
     expect(rows[0].event_premium).toBeGreaterThan(0);
     expect(rows[1].event_premium).toBeNull();
