@@ -226,9 +226,27 @@ export const tools: Tool[] = [
   },
   {
     name: "earnings_calendar",
-    description: "Next earnings report date and before/after-market timing for up to 100 symbols, with consensus EPS and revenue where known.",
-    shape: { symbols: z.array(symbol).min(1).max(100) },
-    run: (a, cfg) => apiGet(cfg, "/api/calendar", { symbols: a.symbols.join(",") }),
+    description:
+      "Upcoming earnings reports. With only `symbols` (up to 100): the next report date and before/after-market timing with consensus EPS and revenue. " +
+      "With any of from/to/time/sector/minCap/maxCap/optionable (symbols then optional): every report in the window from the earnings store, with the report time (bmo/amc/dmh) and its source, estimates, last report vs estimate, last reaction, implied move and a tradable flag.",
+    shape: {
+      symbols: z.array(symbol).min(1).max(100).optional(),
+      from: day.optional().describe("First report date, YYYY-MM-DD (default today)."),
+      to: day.optional().describe("Last report date (default from + 7 days)."),
+      time: z.enum(["bmo", "amc", "dmh"]).optional().describe("Before the open, after the close, or during market hours."),
+      sector: z.string().optional(),
+      minCap: z.number().optional().describe("Minimum market cap in dollars."),
+      maxCap: z.number().optional().describe("Maximum market cap in dollars."),
+      optionable: z.boolean().optional().describe("Only names with (true) or without (false) listed options."),
+    },
+    run: (a, cfg) => {
+      const filtered = ["from", "to", "time", "sector", "minCap", "maxCap", "optionable"].some((k) => a[k] !== undefined);
+      if (!filtered) {
+        if (!a.symbols) throw new ApiError("Give symbols, or a from/to window with optional filters.");
+        return apiGet(cfg, "/api/calendar", { symbols: a.symbols.join(",") });
+      }
+      return apiGet(cfg, "/api/earnings/calendar", { ...pick(a, ["from", "to", "time", "sector", "minCap", "maxCap", "optionable"]), ...(a.symbols ? { symbols: a.symbols.join(",") } : {}) });
+    },
   },
   {
     name: "estimate_revisions",
@@ -377,6 +395,61 @@ export const tools: Tool[] = [
     description: "The latest pre-market brief as markdown (regime, today's calendar, overnight movers, act/wait ideas, watch-outs), with its day. Written at 07:00 ET on trading days.",
     shape: {},
     run: (_a, cfg) => apiGet(cfg, "/api/agents/brief/latest"),
+  },
+  {
+    name: "earnings_screen",
+    description:
+      "Earnings setups for names reporting in a window, scored 0-100 for buying a call and selling it BEFORE the announcement (horizons: intraday = buy 10:00 sell 15:45 on the last session before the print; week = buy ~5 sessions before; month = ~20 sessions before). " +
+      "Returns EVERY match (no default limit; narrow with filters or `limit`) sorted by score, each with the five components and their reasons, the gates, the chosen contract, history and verdict (candidate >= 70, conditional 55-69, pass). Default window: the next session. Advice only.",
+    shape: {
+      from: day.optional().describe("Window start (matches report date or the T0 session)."),
+      to: day.optional(),
+      horizon: z.enum(["intraday", "week", "month"]).optional(),
+      time: z.enum(["bmo", "amc", "dmh"]).optional(),
+      sector: z.string().optional(),
+      industry: z.string().optional(),
+      minCap: z.number().optional(),
+      maxCap: z.number().optional(),
+      minScore: z.number().min(0).max(100).optional(),
+      verdict: z.enum(["candidate", "conditional", "pass"]).optional(),
+      tradable: z.boolean().optional().describe("Only setups whose gates all pass."),
+      symbols: z.array(symbol).max(500).optional(),
+      sort: z.enum(["score", "symbol", "cap", "date", "spread", "impliedMove"]).optional(),
+      limit: z.number().int().min(1).optional(),
+    },
+    run: (a, cfg) => apiGet(cfg, "/api/earnings/screen", { ...pick(a, ["from", "to", "horizon", "time", "sector", "industry", "minCap", "maxCap", "minScore", "verdict", "tradable", "sort", "limit"]), ...(a.symbols ? { symbols: a.symbols.join(",") } : {}) }),
+  },
+  {
+    name: "earnings_setup",
+    description: "The earnings setup for one symbol's next report on a horizon (default intraday): score, the five components with reasons, gates, contract, live numbers, own and peer history, last report, revisions, analyst actions, weights version. 404 when no report is upcoming.",
+    shape: { symbol, horizon: z.enum(["intraday", "week", "month"]).optional() },
+    run: (a, cfg) => apiGet(cfg, `/api/earnings/setup/${enc(a.symbol)}`, pick(a, ["horizon"])),
+  },
+  {
+    name: "earnings_events",
+    description: "Past (and stored) earnings events of a symbol, newest first: report date and time, T0/R sessions, EPS and revenue vs estimates, confirmation checks, stock prices at every anchor and the tracked option legs.",
+    shape: { symbol, from: day.optional(), confirmed: z.boolean().optional().describe("Only confirmed (true) or only unconfirmed (false) events.") },
+    run: (a, cfg) => apiGet(cfg, `/api/earnings/events/${enc(a.symbol)}`, pick(a, ["from", "confirmed"])),
+  },
+  {
+    name: "earnings_stats",
+    description:
+      "Historical statistics of the buy-before-the-print trade: distributions of stock and call returns, call beta/alpha, flat-day call result, pre-report drift, implied vs realised move, IV ramp and reactions. " +
+      "Scope: `symbol`, or `sector` + `capBucket`, or `capBucket` alone, or nothing for all events. Horizon default intraday; time bmo/amc/dmh/any (default any).",
+    shape: {
+      horizon: z.enum(["intraday", "week", "month"]).optional(),
+      symbol: symbol.optional(),
+      sector: z.string().optional(),
+      capBucket: z.enum(["micro", "small", "mid", "large", "mega"]).optional(),
+      time: z.enum(["bmo", "amc", "dmh", "any"]).optional(),
+    },
+    run: (a, cfg) => apiGet(cfg, "/api/earnings/stats", pick(a, ["horizon", "symbol", "sector", "capBucket", "time"])),
+  },
+  {
+    name: "earnings_reviews",
+    description: "AI reviews of earnings setups (read-only): base and adjusted score, verdict, news factors with evidence, entry conditions, exit plan, risks, summary. Filter by report date or range, horizon, symbol.",
+    shape: { reportDate: day.optional(), from: day.optional(), to: day.optional(), horizon: z.enum(["intraday", "week", "month"]).optional(), symbol: symbol.optional(), limit: z.number().int().min(1).max(1000).optional() },
+    run: (a, cfg) => apiGet(cfg, "/api/earnings/reviews", pick(a, ["reportDate", "from", "to", "horizon", "symbol", "limit"])),
   },
 ];
 

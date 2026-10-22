@@ -1,3 +1,4 @@
+import { nyInstant } from "../live/session.js";
 import { dataFetch, snapshots as stockSnapshots } from "./alpaca.js";
 
 // Option chains from Alpaca's OPRA snapshots (/v1beta1/options/snapshots/{underlying}).
@@ -170,7 +171,7 @@ export async function chain(underlying: string, filter: Omit<ChainFilter, "type"
   return { symbol, underlyingPrice: price, expirationDates, selectedDate, calls, puts };
 }
 
-export type OptionDayBar = { t: string; o: number; h: number; l: number; c: number; v: number };
+export type OptionDayBar = { t: string; o: number; h: number; l: number; c: number; v: number; n?: number; vw?: number };
 
 /**
  * Daily bars for many option contracts (expired ones too, back to early 2024)
@@ -185,6 +186,35 @@ export async function optionDailyBars(symbols: string[], start: string, end: str
     const data = await dataFetch("/v1beta1/options/bars", {
       symbols: symbols.join(","),
       timeframe: "1Day",
+      start,
+      end,
+      limit: "10000",
+      sort: "asc",
+      page_token: pageToken,
+    });
+    for (const [occ, bars] of Object.entries<OptionDayBar[]>(data?.bars ?? {})) (out[occ] ??= []).push(...bars);
+    pageToken = data?.next_page_token ?? undefined;
+    if (!pageToken) break;
+  }
+  return out;
+}
+
+/**
+ * Intraday bars (15-minute by default) for many option contracts on one New
+ * York trading day, regular session only, all pages. Contracts that did not
+ * trade are absent, and so are quiet intervals: callers must handle gaps.
+ */
+export async function optionIntradayBars(symbols: string[], day: string, timeframe = "15Min", stats?: { requests: number }, maxPages = 20): Promise<Record<string, OptionDayBar[]>> {
+  const out: Record<string, OptionDayBar[]> = {};
+  if (symbols.length === 0) return out;
+  const start = new Date(nyInstant(day, 9, 30)).toISOString();
+  const end = new Date(nyInstant(day, 16, 0)).toISOString();
+  let pageToken: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    if (stats) stats.requests++;
+    const data = await dataFetch("/v1beta1/options/bars", {
+      symbols: symbols.join(","),
+      timeframe,
       start,
       end,
       limit: "10000",

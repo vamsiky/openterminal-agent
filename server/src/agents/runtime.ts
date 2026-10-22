@@ -58,7 +58,7 @@ export function reserveActive(now: Date): boolean {
 /** Dollars an agent may still start today: macro and brief use the whole budget, analyses leave the brief's floor. */
 export function availableUsd(agent: AgentName, now = new Date()): number {
   const day = nyClock(now).date;
-  const floor = agent === "bull" || agent === "bear" || agent === "judge" ? (reserveActive(now) ? BRIEF_RESERVE_USD : 0) : 0;
+  const floor = agent === "bull" || agent === "bear" || agent === "judge" || agent === "earnings" ? (reserveActive(now) ? BRIEF_RESERVE_USD : 0) : 0;
   return dailyBudgetUsd() - spentOn(day) - floor;
 }
 
