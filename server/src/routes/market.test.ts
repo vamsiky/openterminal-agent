@@ -286,8 +286,8 @@ describe("features that need FMP_API_KEY", () => {
     const row = { fiscalQtrEnd: "", surprisePercent: null, revenue: null, revenueEstimate: null, eps: 1, consensusForecast: 1 };
     vi.mocked(fmp.earnings).mockResolvedValue([{ ...row, dateReported: d(26) }]);
     const { recordTiming } = await import("../estimates/timing.js");
-    recordTiming("BMOCO", { timing: "bmo", matched: 4, total: 4 }, "2026-08-27");
-    recordTiming("AMCCO", { timing: "amc", matched: 4, total: 4 }, "2026-08-27");
+    recordTiming("BMOCO", { timing: "bmo", matched: 4, total: 4, source: "fmp" }, "2026-08-27");
+    recordTiming("AMCCO", { timing: "amc", matched: 4, total: 4, source: "fmp" }, "2026-08-27");
     const bmo = await call("/earnings-history/:symbol", { params: { symbol: "BMOCO" } });
     expect(bmo.body[0].dayAfterChangePercent).toBeCloseTo(20);
     const amc = await call("/earnings-history/:symbol", { params: { symbol: "AMCCO" } });
@@ -337,6 +337,7 @@ describe("features that need FMP_API_KEY", () => {
         lastRevenue: 95,
         timing: null,
         timingBasis: null,
+        timingSource: null,
       });
       // The capture already ran today, so a symbol with no dates (an ETF) is not chased.
       expect(body[142]).toMatchObject({ symbol: "SPY", nextEarningsDate: null });
@@ -346,10 +347,11 @@ describe("features that need FMP_API_KEY", () => {
     it("adds the stored timing and its basis from the table, without calling FMP", async () => {
       vi.mocked(fmp.isConfigured).mockReturnValue(true);
       const { recordTiming } = await import("../estimates/timing.js");
-      recordTiming("ZC3", { timing: "amc", matched: 4, total: 4 }, today);
-      recordTiming("ZC4", { timing: null, matched: 1, total: 4 }, today);
+      recordTiming("ZC3", { timing: "amc", matched: 4, total: 4, source: "fmp" }, today);
+      recordTiming("ZC4", { timing: null, matched: 1, total: 4, source: null }, today);
       const { body } = await call("/calendar", { query: { symbols: "ZC3,ZC4,ZC5" } });
       expect(body.map((r: { timing: unknown; timingBasis: unknown }) => [r.timing, r.timingBasis])).toEqual([["amc", { matched: 4, total: 4 }], [null, null], [null, null]]);
+      expect(body[0].timingSource).toBe("fmp");
       expect(fmp.earningsInfo).not.toHaveBeenCalled();
     });
 

@@ -80,6 +80,13 @@ export type EarningsCalendarRow = {
   epsEstimated: number | null;
   revenueActual: number | null;
   revenueEstimated: number | null;
+  // Only with includeReportTimes: FMP's report time (never "dmh"; null for ~6% of US names), its own
+  // confirmed flag (false on much older history) and the fiscal period the report covers.
+  time?: "bmo" | "amc" | null;
+  confirmed?: boolean | null;
+  fiscalPeriod?: string | null;
+  fiscalYear?: number | null;
+  periodEnding?: string | null;
 };
 
 /** The /calendar route's row. */
@@ -101,6 +108,8 @@ export type EarningsHistoryRow = {
   surprisePercent: number | null;
   revenue: number | null;
   revenueEstimate: number | null;
+  time?: "bmo" | "amc" | null; // with includeReportTimes
+  confirmed?: boolean | null;
 };
 
 /** The /econ-calendar row, plus the currency. */
@@ -283,11 +292,21 @@ export async function historical(symbol: string, from: string, to: string): Prom
   });
 }
 
-function earningsRow(r: any): EarningsCalendarRow | null {
+function earningsRow(r: any, withTimes = false): EarningsCalendarRow | null {
   const date = unixDay(r?.date);
   const symbol = String(r?.symbol ?? "").toUpperCase();
   if (date === null || !symbol) return null;
+  const times = withTimes
+    ? {
+        time: r.time === "bmo" || r.time === "amc" ? (r.time as "bmo" | "amc") : null,
+        confirmed: typeof r.confirmed === "boolean" ? r.confirmed : null,
+        fiscalPeriod: str(r.fiscalPeriod),
+        fiscalYear: num(r.fiscalYear),
+        periodEnding: str(r.periodEnding),
+      }
+    : {};
   return {
+    ...times,
     symbol,
     date,
     epsActual: num(r.epsActual),
@@ -297,12 +316,80 @@ function earningsRow(r: any): EarningsCalendarRow | null {
   };
 }
 
-/** Raw earnings calendar for a date window (YYYY-MM-DD; FMP caps the window at 90 days). GET /earnings-calendar. */
-export async function earningsCalendar(from: string, to: string): Promise<EarningsCalendarRow[]> {
+/**
+ * Raw earnings calendar for a date window (YYYY-MM-DD; FMP caps the window at 90 days). GET /earnings-calendar.
+ * `includeReportTimes` adds time/confirmed/fiscalPeriod/fiscalYear/periodEnding to every row.
+ */
+export async function earningsCalendar(from: string, to: string, opts: { includeReportTimes?: boolean } = {}): Promise<EarningsCalendarRow[]> {
   requireKey();
-  return cached(`earn-cal:${from}:${to}`, CALENDAR_TTL, async () => {
-    const rows = await get("earnings-calendar", { from, to });
-    return (Array.isArray(rows) ? rows : []).map(earningsRow).filter((r): r is EarningsCalendarRow => r !== null);
+  const withTimes = opts.includeReportTimes === true;
+  return cached(`earn-cal:${from}:${to}:${withTimes}`, CALENDAR_TTL, async () => {
+    const rows = await get("earnings-calendar", { from, to, includeReportTimes: withTimes ? "true" : undefined });
+    return (Array.isArray(rows) ? rows : []).map((r) => earningsRow(r, withTimes)).filter((r): r is EarningsCalendarRow => r !== null);
+  });
+}
+
+/** Raw per-symbol earnings rows (reported and upcoming), newest first, optionally with report times. GET /earnings?symbol=X. */
+export async function earningsReports(symbol: string, limit = 60, opts: { includeReportTimes?: boolean } = {}): Promise<EarningsCalendarRow[]> {
+  requireKey();
+  const sym = symbol.trim().toUpperCase();
+  const withTimes = opts.includeReportTimes === true;
+  return cached(`earn-rows:${sym}:${limit}:${withTimes}`, CALENDAR_TTL, async () => {
+    const raw = await get("earnings", { symbol: sym, limit, includeReportTimes: withTimes ? "true" : undefined });
+    return (Array.isArray(raw) ? raw : [])
+      .map((r) => earningsRow(r, withTimes))
+      .filter((r): r is EarningsCalendarRow => r !== null)
+      .sort((a, b) => b.date - a.date);
+  });
+}
+
+const dayOf = (v: unknown): string | null => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
+
+/** An optional endpoint: a plan without it (402/403) yields []. */
+async function optionalList(path: string, params: Record<string, string | number | undefined>): Promise<any[]> {
+  const rows = await get(path, params).catch((err) => {
+    if (err instanceof FmpError && (err.status === 402 || err.status === 403)) return [];
+    throw err;
+  });
+  return Array.isArray(rows) ? rows : [];
+}
+
+/** Dates (YYYY-MM-DD) of the symbol's earnings calls, newest first. GET /earning-call-transcript-dates. */
+export async function transcriptDates(symbol: string): Promise<string[]> {
+  requireKey();
+  return cached(`transcript-dates:${symbol}`, CALENDAR_TTL, async () => {
+    const rows = await optionalList("earning-call-transcript-dates", { symbol });
+    return rows.map((r) => dayOf(r?.date)).filter((d): d is string => d !== null).sort().reverse();
+  });
+}
+
+export type Grade = { date: string; firm: string | null; action: string; previousGrade: string | null; newGrade: string | null };
+
+/** Analyst rating changes, newest first. GET /grades. */
+export async function grades(symbol: string, limit = 50): Promise<Grade[]> {
+  requireKey();
+  return cached(`grades:${symbol}:${limit}`, PROFILE_TTL, async () => {
+    const rows = await optionalList("grades", { symbol, limit });
+    return rows
+      .map((r) => ({ date: dayOf(r?.date), firm: str(r?.gradingCompany), action: str(r?.action) ?? "", previousGrade: str(r?.previousGrade), newGrade: str(r?.newGrade) }))
+      .filter((r): r is Grade => r.date !== null && r.action !== "");
+  });
+}
+
+export type PriceTargetNews = { date: string; firm: string | null; priceTarget: number | null; priorPriceTarget: number | null; title: string };
+
+/** Price-target headlines, newest first; the prior target is parsed from "... from $X ..." in the title. GET /price-target-news. */
+export async function priceTargetNews(symbol: string, limit = 30): Promise<PriceTargetNews[]> {
+  requireKey();
+  return cached(`pt-news:${symbol}:${limit}`, PROFILE_TTL, async () => {
+    const rows = await optionalList("price-target-news", { symbol, limit });
+    return rows
+      .map((r) => {
+        const title = str(r?.newsTitle) ?? "";
+        const prior = /\bfrom \$([\d,]+(?:\.\d+)?)/i.exec(title);
+        return { date: dayOf(r?.publishedDate), firm: str(r?.analystCompany), priceTarget: num(r?.priceTarget), priorPriceTarget: prior ? num(prior[1].replace(/,/g, "")) : null, title };
+      })
+      .filter((r): r is PriceTargetNews => r.date !== null);
   });
 }
 
@@ -351,7 +438,7 @@ export async function earningsInfo(symbols: string[], now = new Date()): Promise
         if (err instanceof FmpError && (err.status === 402 || err.status === 403)) return [];
         throw err;
       });
-      return (Array.isArray(raw) ? raw : []).map(earningsRow).filter((r): r is EarningsCalendarRow => r !== null);
+      return (Array.isArray(raw) ? raw : []).map((r) => earningsRow(r)).filter((r): r is EarningsCalendarRow => r !== null);
     });
     bySymbol.set(symbol, rows);
   });
@@ -417,15 +504,12 @@ function matchPeriod(reported: number, periods: QuarterPeriod[]): QuarterPeriod 
  * actual, dated today or later) comes first as `upcoming` with only the
  * consensus. surprisePercent is computed: (actual - estimate) / |estimate| * 100.
  */
-export async function earnings(symbol: string, limit = 12, now = new Date()): Promise<EarningsHistoryRow[]> {
+export async function earnings(symbol: string, limit = 12, now = new Date(), opts: { includeReportTimes?: boolean } = {}): Promise<EarningsHistoryRow[]> {
   requireKey();
   const sym = symbol.trim().toUpperCase();
   const today = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 1000);
   const [rows, periods] = await Promise.all([
-    cached(`earnings:${sym}:${limit}`, CALENDAR_TTL, async () => {
-      const raw = await get("earnings", { symbol: sym, limit });
-      return (Array.isArray(raw) ? raw : []).map(earningsRow).filter((r): r is EarningsCalendarRow => r !== null);
-    }),
+    earningsReports(sym, limit, opts),
     // The fiscal quarter is a label; a failed statement lookup must not fail the history.
     quarterlyPeriods(sym).catch(() => [] as QuarterPeriod[]),
   ]);
@@ -446,6 +530,7 @@ export async function earnings(symbol: string, limit = 12, now = new Date()): Pr
             : null,
         revenue: r.revenueActual,
         revenueEstimate: r.revenueEstimated,
+        ...(opts.includeReportTimes ? { time: r.time ?? null, confirmed: r.confirmed ?? null } : {}),
       };
     });
   const next = rows
@@ -462,6 +547,7 @@ export async function earnings(symbol: string, limit = 12, now = new Date()): Pr
       surprisePercent: null,
       revenue: null,
       revenueEstimate: next.revenueEstimated,
+      ...(opts.includeReportTimes ? { time: next.time ?? null, confirmed: next.confirmed ?? null } : {}),
     },
     ...reported,
   ];
