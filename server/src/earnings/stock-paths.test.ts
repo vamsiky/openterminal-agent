@@ -145,4 +145,34 @@ describe("intraday anchors", () => {
     const res = await paths.buildStockPaths([{ symbol: "AAA", reportDate: "2026-10-19", t0: "2026-10-19", r: "2026-10-20" }], "2026-10-21");
     expect(res).toEqual({ stored: 0, skipped: 1 });
   });
+
+  it("a 09:45 bar stands in for a missing 10:00 bar in the stored path, and 15:45 stays null without bars near it", async () => {
+    bars("AAA");
+    stockBars.mockImplementation(async function* () {
+      yield { AAA: [bar("2026-05-06T13:30:00Z", 9.5)] }; // the 09:30 bar, ending 09:45 New York
+    });
+    await paths.buildStockPaths([{ symbol: "AAA", reportDate: "2026-05-06", t0: "2026-05-06", r: "2026-05-07" }], "2026-10-21");
+    expect(edb.prepare("SELECT t0_1000, t0_1545 FROM stock_paths WHERE symbol = 'AAA'").get()).toEqual({ t0_1000: 9.5, t0_1545: null });
+  });
+});
+
+describe("anchors near the start of coverage", () => {
+  it("T0-20 is null when the daily bars start later, while the anchors inside coverage still fill", () => {
+    bars("X");
+    db.prepare("DELETE FROM daily_bars WHERE symbol = 'X' AND day < ?").run(sessionDays[10]);
+    const t0 = sessionDays[25];
+    const r = sessionDays[26];
+    const p = paths.dailyPath(paths.loadDaily("X"), t0, r);
+    expect(p["T0-20"]).toBeNull(); // index 5, before the first bar
+    expect(p["T0-10"]).toBe(closeOf(sessionDays[15]));
+    expect(p["T0-5"]).toBe(closeOf(sessionDays[20]));
+    expect(p["T0:close"]).toBe(closeOf(t0));
+  });
+
+  it("a 20-session baseline that starts before coverage gives no volume ratio", () => {
+    bars("X");
+    db.prepare("DELETE FROM daily_bars WHERE symbol = 'X' AND day < ?").run(sessionDays[10]);
+    expect(paths.reaction(paths.loadDaily("X"), sessionDays[25], sessionDays[26])!.volumeRatio).toBe(1); // 15 sessions of baseline: enough
+    expect(paths.reaction(paths.loadDaily("X"), sessionDays[15], sessionDays[16])!.volumeRatio).toBeNull(); // 5 sessions of baseline: under 10, so null
+  });
 });
