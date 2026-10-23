@@ -559,7 +559,14 @@ function liveInputs(symbol: string, daily: Daily, today: string, now: Date): Liv
   };
 }
 
-export type IntradayResult = { scored: number; durationMs: number };
+export type IntradayResult = {
+  scored: number;
+  durationMs: number;
+  /** What the pass scored, with the nightly day and definition it used, for the Scan Lab's input snapshots. */
+  cards: Scorecard[];
+  nightlyDay: string | null;
+  definition: StockDefinition;
+};
 
 /**
  * The 15-minute pass for the universe: momentum recomputed with live prices
@@ -644,5 +651,5 @@ export function runIntradayStockScan(symbols: string[], now = new Date()): Intra
       put.run(c.symbol, c.asOf, c.sector, c.industry, round(c.composite, 5), JSON.stringify(c.groups), JSON.stringify(pack(c.factors)), round(c.coverage, 3), c.weightsVersion, rank.get(c.symbol) ?? null);
     }
   })();
-  return { scored: out.length, durationMs: Date.now() - started };
+  return { scored: out.length, durationMs: Date.now() - started, cards: out.map((o) => o.card), nightlyDay: day, definition: def };
 }

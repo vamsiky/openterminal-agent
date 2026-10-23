@@ -167,7 +167,7 @@ export function onePerCompany<T extends { symbol: string }>(cards: T[]): T[] {
 }
 
 /** Candidates for the screen's filters: the cards with the price and days to earnings the catalog offers. */
-function candidatesFor(cards: Scorecard[], today: string): StockCandidate[] {
+export function candidatesFor(cards: Scorecard[], today: string): StockCandidate[] {
   if (cards.length === 0) return [];
   const symbols = JSON.stringify(cards.map((c) => c.symbol));
   const prices = new Map((db.prepare("SELECT symbol, price FROM bulk_profiles WHERE symbol IN (SELECT value FROM json_each(?))").all(symbols) as Array<{ symbol: string; price: number | null }>).map((r) => [r.symbol, r.price]));
