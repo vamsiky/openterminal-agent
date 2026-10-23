@@ -50,19 +50,29 @@ export const buildJson = {
   additionalProperties: false,
 };
 
-// ---- refusal of the fixed rules ----
+// ---- hint for the fixed rules ----
 
-const FIXED_RULES = "Scan Lab only builds the three fixed strategies: buy a call, sell a cash-secured put and sell a covered call (only against shares you hold). It cannot express long puts, spreads or naked calls, and nothing in it places orders.";
+// Only a hint: the schema cannot express these structures, and the model's `refusal` is the refusal path.
 const FORBIDDEN: Array<[RegExp, string]> = [
   [/\b(?:buy(?:ing)?|long|purchase)\s+(?:a\s+|an\s+|the\s+)?puts?\b/i, "buying puts"],
-  [/\b(?:bull|bear|credit|debit|vertical|calendar|diagonal|call|put)\s+spreads?\b|\biron\s+(?:condor|butterfly)|\bbutterfl(?:y|ies)\b|\bstraddles?\b|\bstrangles?\b/i, "spreads or multi-leg structures"],
-  [/\bnaked\s+(?:calls?|puts?|short)|\buncovered\s+calls?\b|\bsell(?:ing)?\s+calls?\s+(?:without|with no)\s+(?:the\s+)?shares\b/i, "naked calls"],
+  [/\b(?:bull|bear|credit|debit|vertical|calendar|diagonal)\s+(?:call\s+|put\s+)?spreads?\b|\b(?:call|put)\s+spreads?\b|\biron\s+(?:condor|butterfly)|\bbutterfl(?:y|ies)\b|\bstraddles?\b|\bstrangles?\b/i, "spreads or multi-leg structures"],
+  [/\bnaked\s+(?:calls?|puts?|short)|\buncovered\s+calls?\b/i, "naked calls"],
   [/\b(?:place|submit|send|execute|stage|route)\s+(?:\w+\s+){0,2}orders?\b|\bauto[- ]?(?:trade|trading|buy|sell|execute)|\bautomatically\s+(?:trade|buy|sell|execute|place)/i, "placing orders"],
 ];
+const NEGATED = /\b(?:never|avoid|don'?t|do not|no|not|without|skip|exclude|ignore)\b|bid[- /]?ask|wide|tight|implied move/i;
 
-/** The forbidden thing a text asks for, or null. A cheap first pass; the model refuses what this misses. */
-export function forbiddenIn(text: string): string | null {
-  for (const [re, what] of FORBIDDEN) if (re.test(text)) return what;
+/** Lines of `text` that are not lines of `base`. */
+export function addedLines(text: string, base: string): string[] {
+  const had = new Set(base.split("\n").map((l) => l.trim()));
+  return text.split("\n").map((l) => l.trim()).filter((l) => l && !had.has(l));
+}
+
+/** What the lines the investor added or changed seem to ask for outside the fixed rules, or null. Negated mentions and bid-ask spreads do not count. */
+export function forbiddenIn(text: string, baseText = ""): string | null {
+  for (const line of addedLines(text, baseText)) {
+    if (NEGATED.test(line)) continue;
+    for (const [re, what] of FORBIDDEN) if (re.test(line)) return what;
+  }
   return null;
 }
 
@@ -85,6 +95,8 @@ const fence = (nonce: string, name: string, body: string): string => `<<<${name}
 /** The task for one build. Every piece of user-supplied text sits between nonce-tagged delimiters. */
 export function buildPrompt(base: DefRecord, text: string, nonce = randomBytes(8).toString("hex")): string {
   const scope: Scope = base.kind;
+  const baseText = render(base.definition);
+  const hint = forbiddenIn(text, baseText);
   while (text.includes(nonce)) nonce = randomBytes(8).toString("hex");
   return [
     `Build a draft ${base.kind} scan definition from the investor's edited text. Return the complete new definition.`,
@@ -92,9 +104,10 @@ export function buildPrompt(base: DefRecord, text: string, nonce = randomBytes(8
     `## Data catalog (${scope} scope): key | label | unit | description\nOnly these keys may appear in conditions, expressions and \`say\` placeholders.\n${catalogText(scope)}`,
     `## Definition JSON Schema (${base.kind})\n\`\`\`json\n${JSON.stringify(dslSchema(base.kind))}\n\`\`\``,
     `## Base definition (JSON)\n${fence(nonce, "UNTRUSTED_BASE_JSON", JSON.stringify(base.definition, null, 1))}`,
-    `## Base definition as text (what the investor started from)\n${fence(nonce, "UNTRUSTED_BASE_TEXT", render(base.definition))}`,
+    `## Base definition as text (what the investor started from)\n${fence(nonce, "UNTRUSTED_BASE_TEXT", baseText)}`,
     `## The investor's edited text\n${fence(nonce, "UNTRUSTED_EDITED_TEXT", text)}`,
     "Compare the edited text with the base text and change only what the edit changes.",
+    ...(hint ? [`Check: the lines the investor added or changed seem to mention ${hint}. If they ask to trade that, set \`refusal\` and leave the definition unchanged; if the mention is only a condition on data or a note, build it normally.`] : []),
   ].join("\n\n");
 }
 
@@ -190,12 +203,6 @@ export function startBuild(kind: DefKind, baseId: number | undefined, text: stri
   jobs.set(job.id, job);
   while (jobs.size > MAX_JOBS) jobs.delete(jobs.keys().next().value!);
 
-  const forbidden = forbiddenIn(text);
-  if (forbidden) {
-    fail(job, `${FIXED_RULES} Your text asks for ${forbidden}, so I did not build a draft.`, { refused: true });
-    job.notes = [job.error!];
-    return { jobId: job.id };
-  }
   running.set(kind, job.id);
   finished.set(job.id, run(job, base, text).finally(() => setTimeout(() => finished.delete(job.id), 60_000).unref()));
   return { jobId: job.id };

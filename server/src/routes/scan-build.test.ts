@@ -114,21 +114,41 @@ describe("build with Claude", () => {
     expect(sd.getDraft("option")).toBeNull();
   });
 
-  it("refuses forbidden strategies without calling Claude", async () => {
-    for (const text of ["Also buy puts when the daily trend is down.", "Add a bull put spread.", "Sell naked calls on strong names.", "Automatically place orders for ideas above 90."]) {
-      const r = await start(text);
+  it("lets unchanged real text plus a small edit reach the model", async () => {
+    for (const kind of ["option", "stock"] as const) {
+      const def = structuredClone(kind === "option" ? sd.OPTION_V1_DEF : sd.STOCK_V2_DEF) as any;
+      def.listing[kind === "option" ? "minScore" : "top"] = 5;
+      runAgent.mockResolvedValueOnce(ok(answer(def)));
+      const r = await start(`${sd.render(sd.getActive(kind).definition)}\nList at 65.`, kind);
       expect(r.status).toBe(202);
-      const j = await job(r.body.jobId);
-      expect(j).toMatchObject({ status: "error", refused: true, draftId: null });
-      expect(j.error).toMatch(/only builds the three fixed strategies/);
-      expect(j.notes).toEqual([j.error]);
+      expect(runAgent).toHaveBeenCalledTimes(1);
+      expect(runAgent.mock.calls[0][0].prompt).not.toContain("Check: the lines the investor added");
+      runAgent.mockReset();
+      const d = sd.getDraft(kind);
+      if (d) sd.setStatus(d.id, "discarded");
     }
-    expect(runAgent).not.toHaveBeenCalled();
   });
 
-  it("does not refuse the allowed strategies or a bid-ask spread gate", () => {
-    expect(build.forbiddenIn("Sell puts when the bid-ask spread is under 5%.")).toBeNull();
-    expect(build.forbiddenIn("Sell covered calls only on shares I hold.")).toBeNull();
+  it("does not hint or refuse phrases that only look forbidden", () => {
+    const optionText = sd.render(sd.getActive("option").definition);
+    expect(optionText).toContain("Never buy puts");
+    expect(build.forbiddenIn(optionText, optionText)).toBeNull();
+    expect(build.forbiddenIn(optionText, "")).toBeNull();
+    for (const line of ["skip names with a wide call spread", "the implied move from the straddle", "avoid naked calls entirely", "Sell puts when the bid-ask spread is under 5%.", "Sell covered calls only on shares I hold."]) {
+      expect(build.forbiddenIn(`${optionText}\n${line}`, optionText)).toBeNull();
+    }
+  });
+
+  it("hints added lines that ask for forbidden things, and the model's refusal ends the job", async () => {
+    const optionText = sd.render(sd.getActive("option").definition);
+    for (const line of ["buy puts when momentum is negative", "Add a bull put spread.", "Sell naked calls on strong names.", "Automatically place orders for ideas above 90."]) {
+      expect(build.forbiddenIn(`${optionText}\n${line}`, optionText)).not.toBeNull();
+    }
+    runAgent.mockResolvedValueOnce(ok(answer(lowered(), { refusal: "Scan Lab never buys puts, so I did not build this.", notes: [] })));
+    const r = await start(`${optionText}\nbuy puts when momentum is negative`);
+    expect(runAgent.mock.calls[0][0].prompt).toContain("seem to mention buying puts");
+    expect(await job(r.body.jobId)).toMatchObject({ status: "error", refused: true, draftId: null, error: "Scan Lab never buys puts, so I did not build this." });
+    expect(sd.getDraft("option")).toBeNull();
   });
 
   it("passes on a refusal the model makes itself", async () => {
