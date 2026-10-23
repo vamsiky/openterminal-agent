@@ -29,7 +29,7 @@ export default function DetailsWidget({ widget }: { widget: WidgetInstance }) {
   return (
     <div className="flex flex-col min-h-full font-sans-ui" data-widget={widget.id}>
       <div className="sticky top-0 z-[2] px-2 py-1.5 border-b border-[#262626] bg-[#0d0d0d]">
-        <PillTabs tabs={TABS} value={tab} onChange={setTab} ariaLabel="Stock details sections" />
+        <PillTabs tabs={TABS} value={tab} onChange={setTab} ariaLabel="Stock details sections" className="flex-wrap" />
       </div>
       <div className="flex flex-col gap-2.5 px-3 py-2.5" key={`${symbol}-${tab}`}>
         {tab === "news" && <NewsTab symbol={symbol} />}
