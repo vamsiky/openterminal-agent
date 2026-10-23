@@ -603,7 +603,7 @@ marketRouter.get("/options/:symbol", async (req, res) => {
   const expiry = req.query.expiry ? String(req.query.expiry) : undefined;
   if (!alpaca.isConfigured()) return needs(res, "Alpaca API keys", req.path);
   try {
-    const data = await cached(`options:${symbol}:${expiry ?? "front"}`, 60_000, () =>
+    const data = await cached(`options:${symbol}:${expiry ?? "front"}`, 15_000, () =>
       withFallback([["alpaca-options", () => alpacaOptions.chain(symbol, { expiry })]])
     );
     res.json(data);
