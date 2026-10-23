@@ -50,20 +50,24 @@ export type NeedsCode = { request: string; reason: string };
 export type DraftNotes = { notes: string[]; needsCode: NeedsCode[] };
 
 /** What one scored pass looks like: replay, each shadow pass and live all use it. */
-export type ResultIdea = { symbol: string; strategy: string; contract?: string | null; score: number; rank: number };
+export type ResultIdea = { symbol: string; strategy: "buy" | OptionStrategy; contract: string | null; score: number; rank: number };
+export type OptionStrategy = "long_call" | "short_put" | "covered_call";
+/** Options steps carry their strategy; stock steps have none. */
+export type FunnelStep = { step: string; count: number; strategy?: OptionStrategy };
 export type ScanResult = {
   at: string;
   scanned: number;
   ideas: ResultIdea[];
   nearMisses: ResultIdea[];
-  funnel: Array<{ step: string; count: number }>;
+  funnel: FunnelStep[];
   spread: Array<{ bucket: string; count: number }>;
 };
 export type ShadowPass = { at: string; live: ScanResult; draft: ScanResult };
-export type DefTests = {
-  replay: { at?: string; result?: ScanResult } | null;
-  shadow: { on?: boolean; passes?: ShadowPass[] } | null;
-};
+/** The latest stored replay (live and draft scored on one stored pass). */
+export type ReplayRow = { id: number; defId: number; kind: ScanKind; source: "replay"; passAt: string; createdAt: string; live: ScanResult; draft: ScanResult };
+/** Passes are newest first. */
+export type ShadowView = { on: boolean; startedAt: string | null; count: number; passes: ShadowPass[] };
+export type DefTests = { replay: ReplayRow | null; shadow: ShadowView };
 
 export type DefView = {
   meta: DefMeta;
@@ -74,8 +78,10 @@ export type DefView = {
   tests?: DefTests;
 };
 
-export type RankChange = { symbol: string; strategy: string; from: number; to: number };
+export type RankChange = { symbol: string; strategy: ResultIdea["strategy"]; from: number; to: number; scoreFrom: number; scoreTo: number };
 export type Compare = {
+  source: "replay" | "shadow";
+  at: string;
   live: ScanResult;
   draft: ScanResult;
   added: ResultIdea[];
@@ -89,6 +95,8 @@ export type BuildJob = {
   notes: string[] | null;
   needsCode: NeedsCode[] | null;
   error: string | null;
+  /** The text asked for something the fixed rules forbid (long puts, spreads, naked calls, orders). */
+  refused: boolean;
 };
 
 export const KIND_LABEL: Record<ScanKind, string> = { stock: "Stock scan", option: "Options scan" };
@@ -123,14 +131,38 @@ export function barWidth(count: number, max: number, floor = 1.5): number {
   return Math.min(100, Math.max(floor, (count / max) * 100));
 }
 
-export type GateRow = { step: string; live: number | null; draft: number | null };
+export type GateRow = { strategy: OptionStrategy | null; step: string; live: number | null; draft: number | null };
 
-/** Funnel steps of both results side by side, in draft order then any live-only steps. */
-export function mergeFunnel(live: ScanResult["funnel"] | undefined, draft: ScanResult["funnel"] | undefined): GateRow[] {
-  const l = new Map((live ?? []).map((f) => [f.step, f.count]));
-  const d = new Map((draft ?? []).map((f) => [f.step, f.count]));
-  const steps = [...new Set([...(draft ?? []).map((f) => f.step), ...(live ?? []).map((f) => f.step)])];
-  return steps.map((step) => ({ step, live: l.get(step) ?? null, draft: d.get(step) ?? null }));
+/** Funnel steps of both results side by side, keyed on strategy and step, in draft order then any live-only steps. */
+export function mergeFunnel(live: FunnelStep[] | undefined, draft: FunnelStep[] | undefined): GateRow[] {
+  const key = (f: FunnelStep) => `${f.strategy ?? ""}|${f.step}`;
+  const l = new Map((live ?? []).map((f) => [key(f), f.count]));
+  const d = new Map((draft ?? []).map((f) => [key(f), f.count]));
+  const seen = new Set<string>();
+  const rows: GateRow[] = [];
+  for (const f of [...(draft ?? []), ...(live ?? [])]) {
+    if (seen.has(key(f))) continue;
+    seen.add(key(f));
+    rows.push({ strategy: f.strategy ?? null, step: f.step, live: l.get(key(f)) ?? null, draft: d.get(key(f)) ?? null });
+  }
+  return rows;
+}
+
+export const STRATEGY_HEADING: Record<OptionStrategy, string> = {
+  long_call: "Buy a call",
+  short_put: "Sell a cash-secured put",
+  covered_call: "Sell a covered call",
+};
+
+/** Funnel rows grouped by strategy in first-seen order; stock steps (no strategy) form one group with a null heading. */
+export function groupFunnel(rows: GateRow[]): Array<{ strategy: OptionStrategy | null; rows: GateRow[] }> {
+  const groups: Array<{ strategy: OptionStrategy | null; rows: GateRow[] }> = [];
+  for (const r of rows) {
+    let g = groups.find((x) => x.strategy === r.strategy);
+    if (!g) groups.push((g = { strategy: r.strategy, rows: [] }));
+    g.rows.push(r);
+  }
+  return groups;
 }
 
 export type SpreadRow = { bucket: string; live: number; draft: number };

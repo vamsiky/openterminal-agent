@@ -84,7 +84,7 @@ export default function ScanLabWidget() {
       : build.error
         ? { phase: "failed", message: buildFailure(build.error instanceof ApiError ? build.error.status : undefined, build.error.message).message }
         : jobStatus === "error"
-          ? { phase: "failed", message: job.data?.error ?? "Claude couldn't build a draft from that text." }
+          ? { phase: "failed", message: job.data?.error ?? "Claude couldn't build a draft from that text.", refused: job.data?.refused === true }
           : job.error
             ? { phase: "failed", message: `Lost track of the build: ${job.error.message}` }
             : { phase: "idle" };

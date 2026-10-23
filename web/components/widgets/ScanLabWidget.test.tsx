@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DefMeta, DefView, FormSection, ScanResult } from "../../lib/scanlab";
+import type { Compare, DefMeta, DefTests, DefView, FormSection, ReplayRow, ScanResult } from "../../lib/scanlab";
 import ScanLabWidget from "./ScanLabWidget";
 
 const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body, headers: new Headers() }) as Response;
@@ -26,6 +26,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const noShadow = { on: false, startedAt: null, count: 0, passes: [] };
 const meta = (over: Partial<DefMeta>): DefMeta => ({ id: 1, kind: "option", version: "option-v1", status: "active", parentId: null, author: "built-in", sourceText: null, notes: null, createdAt: "2026-10-01T00:00:00Z", promotedAt: null, ...over });
 const form = (value: number): FormSection[] => [
   { section: "Listing", items: [
@@ -34,23 +35,25 @@ const form = (value: number): FormSection[] => [
   ] },
 ];
 const ACTIVE_TEXT = "OPTIONS SCAN · option-v1\n\nLISTING\n- List a setup when it scores 70 or more.";
-const activeView: DefView = { meta: meta({}), definition: { listing: { minScore: 70 }, gate: "m15" }, text: ACTIVE_TEXT, form: form(70), diff: [] };
-const idea = (symbol: string, score: number, rank: number) => ({ symbol, strategy: "long_call", contract: null, score, rank });
+const activeView: DefView = { meta: meta({}), definition: { listing: { minScore: 70 }, gate: "m15" }, text: ACTIVE_TEXT, form: form(70), diff: [], tests: { replay: null, shadow: noShadow } };
+const idea = (symbol: string, score: number, rank: number): ScanResult["ideas"][number] => ({ symbol, strategy: "long_call", contract: null, score, rank });
 const result = (ideas: ReturnType<typeof idea>[], extra: Partial<ScanResult> = {}): ScanResult => ({
-  at: "2026-10-23T19:56:00Z", scanned: 431, ideas, nearMisses: [], funnel: [{ step: "Scanned", count: 431 }, { step: "Buy call: listed", count: ideas.length }], spread: [{ bucket: "70 and up", count: ideas.length }], ...extra,
+  at: "2026-10-23T19:56:00Z", scanned: 431, ideas, nearMisses: [], funnel: [{ step: "With data", count: 431, strategy: "long_call" }, { step: "Listed", count: ideas.length, strategy: "long_call" }, { step: "With data", count: 431, strategy: "short_put" }, { step: "Listed", count: 0, strategy: "short_put" }], spread: [{ bucket: "70-75", count: ideas.length }], ...extra,
 });
 const draftMeta = meta({ id: 2, version: "option-v2", status: "draft", parentId: 1, author: "claude", sourceText: ACTIVE_TEXT.replace("70", "65") });
-const draftView = (tests?: DefView["tests"]): DefView => ({
+const replayRow = (): ReplayRow => ({ id: 1, defId: 2, kind: "option", source: "replay", passAt: "2026-10-23T19:56:00Z", createdAt: "2026-10-23T22:00:00Z", live: result([idea("ASAN", 76.8, 1)]), draft: result([idea("ASAN", 76.8, 1)]) });
+const compareOf = (over: Partial<Compare>): Compare => ({ source: "replay", at: "2026-10-23T19:56:00Z", live: result([]), draft: result([]), added: [], removed: [], rankChanges: [], ...over });
+const draftView = (tests: DefTests = { replay: null, shadow: noShadow }): DefView => ({
   meta: draftMeta, definition: {}, text: "draft text", form: form(65), tests,
   diff: [{ path: "listing.minScore", label: "Listing › List a setup when it scores at least", from: "70", to: "65", change: "changed" }],
 });
 
-function serve({ draft = false, tests }: { draft?: boolean; tests?: DefView["tests"] } = {}) {
+function serve({ draft = false, tests }: { draft?: boolean; tests?: DefTests } = {}) {
   on("/api/scan/defs?kind=option", () => reply({ active: activeView.meta, draft: draft ? draftMeta : null, versions: draft ? [draftMeta, activeView.meta] : [activeView.meta] }));
   on("/api/scan/defs?kind=stock", () => reply({ active: meta({ id: 9, kind: "stock", version: "stock-v2" }), draft: null, versions: [] }));
   on("/api/scan/defs/1", () => reply(activeView));
   on("/api/scan/defs/2", () => reply(draftView(tests)));
-  on("/api/scan/defs/2/compare", () => reply({ live: result([idea("ASAN", 76.8, 1)]), draft: result([idea("ASAN", 76.8, 1)]), added: [], removed: [], rankChanges: [] }));
+  on("/api/scan/defs/2/compare", () => reply(compareOf({ live: result([idea("ASAN", 76.8, 1)]), draft: result([idea("ASAN", 76.8, 1)]) })));
   on("/api/scan/defs/9", () => reply({ ...activeView, meta: meta({ id: 9, kind: "stock", version: "stock-v2" }), text: "STOCK SCAN · stock-v2" }));
 }
 
@@ -111,7 +114,7 @@ describe("Text view and Build", () => {
   it("builds: posts the text, shows 'Claude is reading your text…', then refreshes to the draft", async () => {
     serve();
     let polls = 0;
-    on("/api/scan/defs/build", (init) => (init?.method === "POST" ? reply({ jobId: "j1" }, 202) : reply({ status: ++polls < 2 ? "running" : "done", draftId: 2, notes: ["Set the bar to 65."], needsCode: [{ request: "Short-interest filter", reason: "Needs new data." }], error: null })));
+    on("/api/scan/defs/build", (init) => (init?.method === "POST" ? reply({ jobId: "j1" }, 202) : reply({ status: ++polls < 2 ? "running" : "done", draftId: 2, notes: ["Set the bar to 65."], needsCode: [{ request: "Short-interest filter", reason: "Needs new data." }], error: null, refused: false })));
     wrap();
     await edit();
     fireEvent.click(screen.getByRole("button", { name: "Build draft with Claude" }));
@@ -138,7 +141,7 @@ describe("Text view and Build", () => {
 
   it("shows a failed build job's reasons", async () => {
     serve();
-    on("/api/scan/defs/build", (init) => (init?.method === "POST" ? reply({ jobId: "j2" }, 202) : reply({ status: "error", draftId: null, notes: null, needsCode: null, error: "Weights must add up to 1." })));
+    on("/api/scan/defs/build", (init) => (init?.method === "POST" ? reply({ jobId: "j2" }, 202) : reply({ status: "error", draftId: null, notes: [], needsCode: [], error: "Weights must add up to 1.", refused: false })));
     wrap();
     await edit();
     fireEvent.click(screen.getByRole("button", { name: "Build draft with Claude" }));
@@ -146,8 +149,23 @@ describe("Text view and Build", () => {
   });
 });
 
+describe("Refused builds", () => {
+  it("reads a refusal as a refusal, with the fixed rules", async () => {
+    serve();
+    on("/api/scan/defs/build", (init) => (init?.method === "POST" ? reply({ jobId: "j3" }, 202) : reply({ status: "error", draftId: null, notes: ["No long puts."], needsCode: [], error: "Long puts aren't allowed.", refused: true })));
+    wrap();
+    const box = (await screen.findByLabelText(/Options scan as text/)) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: box.value + "\n- Buy puts." } });
+    fireEvent.click(screen.getByRole("button", { name: "Build draft with Claude" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/Claude can't build that/);
+    expect(alert.textContent).toMatch(/Long puts aren't allowed/);
+    expect(alert.textContent).toMatch(/never places orders/);
+  });
+});
+
 describe("Draft card", () => {
-  const tested: DefView["tests"] = { replay: { at: "2026-10-23T19:56:00Z" }, shadow: null };
+  const tested: DefTests = { replay: replayRow(), shadow: noShadow };
 
   it("shows the diff, the notes and requests a code change", async () => {
     serve({ draft: true, tests: tested });
@@ -179,11 +197,12 @@ describe("Draft card", () => {
     wrap();
     const run = await screen.findByRole("button", { name: "Run replay" });
     serve({ draft: true, tests: tested });
-    on("/api/scan/defs/2/compare", () => reply({
+    on("/api/scan/defs/2/compare", () => reply(compareOf({
       live: result([idea("ASAN", 76.8, 1)]),
-      draft: result([idea("ASAN", 76.8, 1), idea("D", 68, 2)], { nearMisses: [idea("ISRG", 63.5, 3)], funnel: [{ step: "Scanned", count: 431 }, { step: "Buy call: listed", count: 2 }] }),
-      added: [idea("D", 68, 2)], removed: [], rankChanges: [],
-    }));
+      draft: result([idea("ASAN", 76.8, 1), idea("D", 68, 2)], { nearMisses: [idea("ISRG", 63.5, 3)], funnel: [{ step: "With data", count: 431, strategy: "long_call" }, { step: "Listed", count: 2, strategy: "long_call" }, { step: "With data", count: 431, strategy: "short_put" }, { step: "Listed", count: 0, strategy: "short_put" }] }),
+      added: [idea("D", 68, 2)],
+    })));
+
     fireEvent.click(run);
     await waitFor(() => expect(posts("/api/scan/defs/2/replay")).toHaveLength(1));
     expect(JSON.parse(String(posts("/api/scan/defs/2/replay")[0].init?.body))).toEqual({ source: "latest" });
@@ -192,13 +211,19 @@ describe("Draft card", () => {
     expect(screen.getByText(/D comes in/)).toBeTruthy();
     const cmp = screen.getByRole("group", { name: "Compare" });
     fireEvent.click(within(cmp).getByRole("button", { name: "Gates" }));
-    expect(screen.getByText("Buy call: listed")).toBeTruthy();
+    // The two strategies each have their own "With data" and "Listed" rows.
+    const buy = within(screen.getByRole("group", { name: "Buy a call" }));
+    const sell = within(screen.getByRole("group", { name: "Sell a cash-secured put" }));
+    expect(buy.getAllByText("Listed")).toHaveLength(1);
+    expect(buy.getByText("2", { selector: ".amber" })).toBeTruthy();
+    expect(sell.getByText("With data")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Sell a covered call" })).toBeNull();
     fireEvent.click(within(cmp).getByRole("button", { name: "Score spread" }));
-    expect(screen.getByText("70 and up")).toBeTruthy();
+    expect(screen.getByText("70-75")).toBeTruthy();
   });
 
   it("starts live shadow and lists its passes", async () => {
-    serve({ draft: true, tests: { replay: null, shadow: { on: true, passes: [{ at: "2026-10-23T13:35:00Z", live: result([idea("A", 71, 1)]), draft: result([idea("A", 71, 1), idea("B", 66, 2)]) }] } } });
+    serve({ draft: true, tests: { replay: null, shadow: { on: true, startedAt: "2026-10-23T13:30:00Z", count: 1, passes: [{ at: "2026-10-23T13:35:00Z", live: result([idea("A", 71, 1)]), draft: result([idea("A", 71, 1), idea("B", 66, 2)]) }] } } });
     on("/api/scan/defs/2/shadow", () => reply({ on: false }));
     wrap();
     fireEvent.click(await screen.findByRole("button", { name: "Live shadow" }));
@@ -277,7 +302,7 @@ describe("Settings, Versions and Data views", () => {
     const prev = meta({ id: 0, version: "option-v0", status: "previous" });
     on("/api/scan/defs?kind=option", () => reply({ active: activeView.meta, draft: draftMeta, versions: [draftMeta, activeView.meta, prev] }));
     on("/api/scan/defs/1", () => reply(activeView));
-    on("/api/scan/defs/2", () => reply(draftView({ replay: { at: "x" }, shadow: null })));
+    on("/api/scan/defs/2", () => reply(draftView({ replay: replayRow(), shadow: noShadow })));
     on("/api/scan/defs/0/rollback", () => reply({ ok: true }));
     wrap();
     await screen.findByLabelText(/Options scan as text/);
