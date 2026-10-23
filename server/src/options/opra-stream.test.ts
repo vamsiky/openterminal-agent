@@ -98,6 +98,8 @@ describe("opra stream", () => {
     socket.frame([{ T: "success", msg: "authenticated" }]);
   };
 
+  const confirm = (occs: string[]) => socket.frame([{ T: "subscription", quotes: occs, trades: occs }]);
+
   it("connects, authenticates in msgpack, then subscribes quotes and trades", () => {
     stream.setTargets([CALL, PUT]);
     stream.start();
@@ -107,7 +109,9 @@ describe("opra stream", () => {
     expect(socket.sent[0]).toEqual({ action: "auth", key: "kid", secret: "sec" });
     socket.frame([{ T: "success", msg: "authenticated" }]);
     expect(socket.sent[1]).toEqual({ action: "subscribe", quotes: [CALL, PUT], trades: [CALL, PUT] });
-    expect(stream.status()).toMatchObject({ connected: true, subscribed: 2, lastError: null });
+    expect(stream.status()).toMatchObject({ connected: true, subscribed: 0, targets: 2, lastError: null });
+    confirm([CALL, PUT]);
+    expect(stream.status()).toMatchObject({ subscribed: 2, limited: null, inWindow: true });
   });
 
   it("sends only the difference when the targets change", () => {
@@ -117,9 +121,10 @@ describe("opra stream", () => {
     stream.setTargets([CALL, "BBB261120C00050000"]);
     expect(socket.sent.slice(1)).toEqual([
       { action: "subscribe", quotes: [CALL, PUT], trades: [CALL, PUT] },
-      { action: "subscribe", quotes: ["BBB261120C00050000"], trades: ["BBB261120C00050000"] },
       { action: "unsubscribe", quotes: [PUT], trades: [PUT] },
+      { action: "subscribe", quotes: ["BBB261120C00050000"], trades: ["BBB261120C00050000"] },
     ]);
+    confirm([CALL, "BBB261120C00050000"]);
     expect(stream.status().subscribed).toBe(2);
   });
 
@@ -175,6 +180,46 @@ describe("opra stream", () => {
     expect(opened).toHaveLength(3);
     vi.advanceTimersByTime(600);
     expect(opened).toHaveLength(4);
+  });
+
+  it("keeps confirmed contracts on a 405, caps later selections, and does not reconnect", () => {
+    const occs = Array.from({ length: 450 }, (_, i) => `AAA261120C${String(i + 1).padStart(8, "0")}`);
+    stream.setTargets(occs);
+    stream.start();
+    authenticate();
+    expect(socket.sent.slice(1).map((m) => m.quotes.length)).toEqual([200, 200, 50]);
+    confirm(occs.slice(0, 200));
+    confirm(occs.slice(0, 400));
+    socket.frame([{ T: "error", code: 405, msg: "symbol limit exceeded" }]);
+    expect(stream.status()).toMatchObject({ subscribed: 400, limited: 400, targets: 450, lastError: "Alpaca symbol limit: streaming 400 of 450" });
+    expect(stream.subscribedContracts()).toEqual(occs.slice(0, 400));
+    vi.advanceTimersByTime(120_000);
+    expect(opened).toHaveLength(1);
+    // A reshuffled selection asks for at most the limit, first targets first.
+    const sentBefore = socket.sent.length;
+    const fresh = ["ZZZ261120C00000001", ...occs.slice(0, 449)];
+    stream.setTargets(fresh);
+    const msgs = socket.sent.slice(sentBefore);
+    const added = msgs.filter((m) => m.action === "subscribe").flatMap((m) => m.quotes);
+    expect(added).toEqual(["ZZZ261120C00000001"]);
+    expect(msgs.filter((m) => m.action === "unsubscribe").flatMap((m) => m.quotes)).toEqual(occs.slice(399, 400));
+    // A new connection tries the full list again.
+    socket.emit("close");
+    vi.advanceTimersByTime(1_001);
+    authenticate();
+    expect(stream.status().limited).toBeNull();
+    expect(socket.sent.slice(1).flatMap((m) => m.quotes)).toHaveLength(450);
+  });
+
+  it("ignores the error event of a socket closed on purpose and clears the last error", () => {
+    stream.start();
+    const first = socket;
+    clock = Date.parse("2026-10-21T21:00:00Z"); // 17:00, outside the window
+    vi.advanceTimersByTime(30_000);
+    expect(first.closed).toBe(true);
+    first.emit("error");
+    first.emit("close");
+    expect(stream.status()).toMatchObject({ lastError: null, connected: false, inWindow: false });
   });
 
   it("does not reconnect when Alpaca refuses the account", () => {

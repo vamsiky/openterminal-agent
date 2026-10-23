@@ -17,6 +17,10 @@ import { upsertOptionBars, type OptionBar } from "./store.js";
 // delta from each quote (at most once a second per contract), and writes
 // minute bars to option_minute_bars.
 //
+// Subscriptions are tracked as requested (sent) and confirmed (Alpaca's
+// "subscription" reply). A 405 means the account's symbol limit was hit: the
+// confirmed set stays and becomes the cap for later selections.
+//
 // Runs from 09:25 to five minutes past the close on trading days; OPTIONS_STREAM=0 opts out.
 
 const STREAM_URL = "wss://stream.data.alpaca.markets/v1beta1";
@@ -27,6 +31,8 @@ const SUBSCRIBE_CHUNK = 200;
 // Five minutes before the open to five after the close (early closes included).
 const WINDOW_BEFORE_MS = 5 * 60_000;
 const WINDOW_AFTER_MS = 5 * 60_000;
+
+const log = (line: string) => console.log(`${new Date().toISOString().slice(11, 19)} ${line}`);
 
 export type ContractQuote = {
   occ: string;
@@ -81,7 +87,10 @@ export function createOpraStream(deps: StreamDeps) {
   const bars = new Map<string, OptionBar>(); // the current minute's bar per contract
   const dirty = new Set<string>();
   let targets = new Set<string>();
+  let requested = new Set<string>();
   let subscribed = new Set<string>();
+  /** Contracts Alpaca confirmed when it answered 405 on this connection; caps later selections. */
+  let limited: number | null = null;
   let ws: SocketLike | null = null;
   let connected = false;
   let refused = false;
@@ -110,17 +119,21 @@ export function createOpraStream(deps: StreamDeps) {
 
   function sendDiff(): void {
     if (!ws || !connected) return;
-    const add = [...targets].filter((o) => !subscribed.has(o));
-    const drop = [...subscribed].filter((o) => !targets.has(o));
-    for (let i = 0; i < add.length; i += SUBSCRIBE_CHUNK) {
-      const chunk = add.slice(i, i + SUBSCRIBE_CHUNK);
-      send({ action: "subscribe", quotes: chunk, trades: chunk });
-    }
+    // Targets are in priority order, so a limit keeps the first contracts.
+    const wanted = limited === null ? [...targets] : [...targets].slice(0, limited);
+    const wantedSet = new Set(wanted);
+    const add = wanted.filter((o) => !requested.has(o));
+    const drop = [...requested].filter((o) => !wantedSet.has(o));
+    // Unsubscribe first so a selection change never holds old plus new.
     for (let i = 0; i < drop.length; i += SUBSCRIBE_CHUNK) {
       const chunk = drop.slice(i, i + SUBSCRIBE_CHUNK);
       send({ action: "unsubscribe", quotes: chunk, trades: chunk });
     }
-    subscribed = new Set(targets);
+    for (let i = 0; i < add.length; i += SUBSCRIBE_CHUNK) {
+      const chunk = add.slice(i, i + SUBSCRIBE_CHUNK);
+      send({ action: "subscribe", quotes: chunk, trades: chunk });
+    }
+    requested = wantedSet;
   }
 
   /** Bring the subscriptions to exactly `contracts`. */
@@ -212,11 +225,22 @@ export function createOpraStream(deps: StreamDeps) {
         connected = true;
         lastError = null;
         subscribed = new Set();
+        requested = new Set();
+        limited = null;
         sendDiff();
-        console.log(`[options] connected to Alpaca option stream (${optionsFeed()}), ${targets.size} contracts`);
+        log(`[options] connected to Alpaca option stream (${optionsFeed()}), ${targets.size} contracts`);
+      } else if (m.T === "subscription") {
+        subscribed = new Set<string>(Array.isArray(m.quotes) ? m.quotes : []);
+      } else if (m.T === "error" && m.code === 405) {
+        // The rejected message left earlier subscriptions unchanged; keep what was confirmed.
+        const known = limited !== subscribed.size;
+        limited = subscribed.size;
+        requested = new Set(subscribed);
+        lastError = `Alpaca symbol limit: streaming ${limited} of ${targets.size}`;
+        if (known) log(`[options] Alpaca symbol limit: streaming ${limited} of ${targets.size} contracts`);
       } else if (m.T === "error") {
         lastError = `stream error ${m.code}: ${m.msg}`;
-        console.error(`[options] ${lastError}`);
+        console.error(`${new Date().toISOString().slice(11, 19)} [options] ${lastError}`);
         // 402 auth failed / 409 insufficient subscription / 412 wrong format: retrying won't help.
         if (m.code === 402 || m.code === 409 || m.code === 412) refused = true;
       } else {
@@ -240,14 +264,15 @@ export function createOpraStream(deps: StreamDeps) {
     socket.addEventListener("close", () => {
       connected = false;
       subscribed = new Set();
+      requested = new Set();
       if (ws !== socket) return;
       ws = null;
       if (refused) {
-        console.warn("[options] Alpaca refused the option stream for this account; not reconnecting");
+        console.warn(`${new Date().toISOString().slice(11, 19)} [options] Alpaca refused the option stream for this account; not reconnecting`);
         return;
       }
       if (!started || !inStreamWindow(now())) return;
-      console.warn(`[options] stream closed; reconnecting in ${reconnectDelay / 1000}s`);
+      console.warn(`${new Date().toISOString().slice(11, 19)} [options] stream closed; reconnecting in ${reconnectDelay / 1000}s`);
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         if (inStreamWindow(now())) connect();
@@ -256,6 +281,7 @@ export function createOpraStream(deps: StreamDeps) {
       reconnectDelay = Math.min(reconnectDelay * 2, 60_000);
     });
     socket.addEventListener("error", () => {
+      if (ws !== socket) return;
       lastError = "stream connection error";
     });
   }
@@ -265,6 +291,8 @@ export function createOpraStream(deps: StreamDeps) {
     ws = null;
     connected = false;
     subscribed = new Set();
+    requested = new Set();
+    lastError = null;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;
     socket?.close();
@@ -327,6 +355,8 @@ export function createOpraStream(deps: StreamDeps) {
       connected,
       subscribed: subscribed.size,
       targets: targets.size,
+      limited,
+      inWindow: inStreamWindow(now()),
       msgsPerMin: msgsPerMin(),
       lastMessageAt: lastMessageAt ? new Date(lastMessageAt).toISOString() : null,
       lastError,

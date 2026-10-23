@@ -99,6 +99,24 @@ describe("IdeasWidget", () => {
     expect(await screen.findByText(/412 contracts streamed/)).toBeTruthy();
   });
 
+  it("describes the stream outside the window and at the symbol limit", async () => {
+    table = [
+      ["/api/scan/ideas", () => reply({ asOf: null, ideas: [] })],
+      ["/api/scan/status", () => reply({ runs: {}, options: { connected: false, subscribed: 0, inWindow: false, lastError: "stream connection error" } })],
+    ];
+    wrap();
+    expect(await screen.findByText(/option stream closed \(market hours only\)/)).toBeTruthy();
+    expect(screen.queryByText(/stream connection error/)).toBeNull();
+    cleanup();
+    table = [
+      ["/api/scan/ideas", () => reply({ asOf: null, ideas: [] })],
+      ["/api/scan/status", () => reply({ runs: {}, options: { connected: true, subscribed: 400, targets: 804, limited: 400, inWindow: true, lastError: "Alpaca symbol limit: streaming 400 of 804" } })],
+    ];
+    wrap();
+    expect(await screen.findByText(/400 of 804 contracts streamed \(Alpaca limit\)/)).toBeTruthy();
+    expect(screen.queryByText(/Alpaca symbol limit:/)).toBeNull();
+  });
+
   it("saves universe settings with POST", async () => {
     const settings = { mode: "watchlists", watchlistIds: null, sectors: [], industries: [], minPrice: 5, minAvgDollarVolume: 20_000_000, requireOptions: true };
     table = [

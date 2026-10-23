@@ -30,6 +30,13 @@ export function lastRun(runs: ScanStatus["runs"] | undefined, jobs: string[]): S
   return hits.sort((a, b) => runTime(b).localeCompare(runTime(a)))[0] ?? null;
 }
 
+function streamText(o: NonNullable<ScanStatus["options"]>): string {
+  if (o.inWindow === false) return "option stream closed (market hours only)";
+  if (!o.connected) return "option stream offline";
+  if (o.limited != null) return `${o.subscribed} of ${o.targets ?? o.subscribed} contracts streamed (Alpaca limit)`;
+  return `${o.subscribed} contracts streamed`;
+}
+
 function StatusLine({ status, agents }: { status: ScanStatus | undefined; agents: AgentsStatus | undefined }) {
   if (!status && !agents) return null;
   const stock = lastRun(status?.runs, ["stock-nightly", "stock-intraday"]);
@@ -39,8 +46,8 @@ function StatusLine({ status, agents }: { status: ScanStatus | undefined; agents
     <div className="px-2 py-0.5 dim text-[10px] border-t border-[var(--border)] break-words">
       {agents && <>{agentsLine(agents)} · </>}
       Stock scan {ago(runTime(stock) || null)} · Options sweep {ago(runTime(opt) || null)} ·{" "}
-      {o ? (o.connected ? `${o.subscribed} contracts streamed` : "option stream offline") : "option stream n/a"}
-      {o?.lastError ? <span className="down"> · {o.lastError}</span> : null}
+      {o ? streamText(o) : "option stream n/a"}
+      {o?.lastError && o.inWindow !== false && o.limited == null ? <span className="down"> · {o.lastError}</span> : null}
     </div>
   );
 }

@@ -57,7 +57,7 @@ export type ScorecardResponse = { stock: Scorecard | null; live: Scorecard | nul
 export type ScanRun = { started_at: string; finished_at: string | null; status: string; symbols: number | null; duration_ms: number | null; error: string | null };
 export type ScanStatus = {
   runs: Record<string, ScanRun | null>;
-  options: { connected: boolean; subscribed: number; lastError: string | null } | null;
+  options: { connected: boolean; subscribed: number; targets?: number; limited?: number | null; inWindow?: boolean; lastError: string | null } | null;
 };
 
 export type Position = { kind: "stock"; symbol: string } | { kind: "option"; occ: string; underlying: string };
