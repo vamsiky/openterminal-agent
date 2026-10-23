@@ -3,27 +3,23 @@ import { calendarFor } from "../estimates/store.js";
 import { nyClock } from "../history/scheduler.js";
 import type { Idea, IdeaKind, OptionStrategy, Scorecard } from "../scan/contracts.js";
 import { allOptionScorecards } from "./option-score.js";
+import type { OptionScorecard } from "../scan/contracts.js";
 import { GROUP_LABELS, factorLabel, getLiveScorecard, isMarketWide, topNightly } from "./stock-score.js";
+import { getActive } from "../scandef/store.js";
+import { screenStocks, type StockCandidate } from "../scandef/stock-engine.js";
+import type { OptionListing } from "../scandef/schema.js";
 
 // Ideas: what the Ideas widget lists. Stock ideas are the universe's best
 // composites, screened nightly and re-scored every 15 minutes. Option ideas
-// are setups scoring 70 or more, refreshed every 5 minutes. A row keeps its
-// first_seen while it stays; it is marked dropped (never deleted) when it
-// falls out, so the widget can show what just left.
+// are setups scoring above the listing bar, refreshed every 5 minutes. A row
+// keeps its first_seen while it stays; it is marked dropped (never deleted)
+// when it falls out, so the widget can show what just left. The listing rules
+// (bars, sizes, misses, near misses) come from the active stock and option
+// definitions; scandef/builtins.ts holds today's numbers.
 
-export const STOCK_IDEAS = 25;
-export const OPTION_IDEAS = 20;
-/** Minimum option setup score to be listed, for underlyings with at least IV_HISTORY_DAYS_FULL days of IV history. */
-export const OPTION_IDEA_MIN_SCORE = 70;
-/** The lower bar while IV history is short, since IV is then judged against realised volatility only. */
-export const OPTION_IDEA_MIN_SCORE_EARLY = 60;
-export const IV_HISTORY_DAYS_FULL = 20;
-export const EARLY_IV_REASON = "IV history < 20 days: IV judged against 20-day realised volatility";
-/** A stock idea needs this share of factors with data. */
-export const MIN_COVERAGE = 0.6;
-/** Consecutive scans an option idea may miss before it is dropped. */
-export const OPTION_MISSES_TO_DROP = 2;
-const EARNINGS_WINDOW_DAYS = 30;
+/** The early-IV reason for a listing; option-v1 gives "IV history < 20 days: ...". */
+export const earlyIvReason = (days: number) => `IV history < ${days} days: IV judged against 20-day realised volatility`;
+export const EARLY_IV_REASON = earlyIvReason(20);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS ideas (
@@ -42,7 +38,20 @@ CREATE TABLE IF NOT EXISTS ideas (
   UNIQUE (kind, symbol, strategy)
 );
 CREATE INDEX IF NOT EXISTS ideas_status ON ideas (kind, status, rank);
+CREATE TABLE IF NOT EXISTS idea_near_misses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  strategy TEXT NOT NULL,
+  contract TEXT,
+  score REAL NOT NULL,
+  rank INTEGER NOT NULL,
+  reasons TEXT NOT NULL,
+  as_of TEXT NOT NULL,
+  definition TEXT
+);
 `);
+if (!(db.prepare("PRAGMA table_info(ideas)").all() as Array<{ name: string }>).some((c) => c.name === "definition")) db.exec("ALTER TABLE ideas ADD COLUMN definition TEXT");
 
 type Row = {
   id: number;
@@ -56,23 +65,36 @@ type Row = {
   first_seen: string;
   last_seen: string;
   status: "active" | "dropped";
+  definition: string | null;
 };
 
 const toIdea = (r: Row): Idea => ({
   id: r.id, kind: r.kind, symbol: r.symbol, strategy: r.strategy, contract: r.contract, score: r.score, rank: r.rank,
-  reasons: JSON.parse(r.reasons), firstSeen: r.first_seen, lastSeen: r.last_seen, status: r.status,
+  reasons: JSON.parse(r.reasons), firstSeen: r.first_seen, lastSeen: r.last_seen, status: r.status, definition: r.definition ?? null,
 });
 
-export function listIdeas(opts: { kind?: IdeaKind; status?: "active" | "dropped"; limit?: number } = {}): Idea[] {
+export function listIdeas(opts: { kind?: IdeaKind; status?: "active" | "dropped" | "near"; limit?: number } = {}): Idea[] {
+  if (opts.status === "near") return listNearMisses(opts.kind, opts.limit);
   const where: string[] = ["status = ?"];
   const args: Array<string | number> = [opts.status ?? "active"];
   if (opts.kind) {
     where.push("kind = ?");
     args.push(opts.kind);
   }
-  args.push(opts.limit ?? STOCK_IDEAS);
+  args.push(opts.limit ?? getActive("stock").definition.listing.top);
   const order = (opts.status ?? "active") === "active" ? "rank, id" : "last_seen DESC, id DESC";
   return (db.prepare(`SELECT * FROM ideas WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ?`).all(...args) as Row[]).map(toIdea);
+}
+
+/** The latest option pass's near misses (setups scoring in the near-miss band that were not listed), best first. */
+export function listNearMisses(kind: IdeaKind = "option", limit = 100): Idea[] {
+  const rows = db.prepare("SELECT * FROM idea_near_misses WHERE kind = ? ORDER BY rank, id LIMIT ?").all(kind, limit) as Array<{
+    id: number; kind: IdeaKind; symbol: string; strategy: Idea["strategy"]; contract: string | null; score: number; rank: number; reasons: string; as_of: string; definition: string | null;
+  }>;
+  return rows.map((r) => ({
+    id: r.id, kind: r.kind, symbol: r.symbol, strategy: r.strategy, contract: r.contract, score: r.score, rank: r.rank,
+    reasons: JSON.parse(r.reasons), firstSeen: r.as_of, lastSeen: r.as_of, status: "near" as const, definition: r.definition,
+  }));
 }
 
 /** When the ideas were last touched, or null before the first screen. */
@@ -98,7 +120,7 @@ export function stockReasons(card: Scorecard, today: string): string[] {
   if (next) {
     const date = new Date(next * 1000).toISOString().slice(0, 10);
     const days = Math.round((next * 1000 - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
-    if (days >= 0 && days < EARNINGS_WINDOW_DAYS) reasons.push(`reports earnings on ${date} (in ${days} day${days === 1 ? "" : "s"})`);
+    if (days >= 0 && days < getActive("stock").definition.listing.earningsFlagDays) reasons.push(`reports earnings on ${date} (in ${days} day${days === 1 ? "" : "s"})`);
   }
   return reasons;
 }
@@ -106,17 +128,18 @@ export function stockReasons(card: Scorecard, today: string): string[] {
 type Candidate = { symbol: string; strategy: "buy" | OptionStrategy; contract: string | null; score: number; reasons: string[] };
 
 const upsert = db.prepare(
-  `INSERT INTO ideas (kind, symbol, strategy, contract, score, rank, reasons, first_seen, last_seen, status, misses)
-   VALUES (@kind, @symbol, @strategy, @contract, @score, @rank, @reasons, @now, @now, 'active', 0)
+  `INSERT INTO ideas (kind, symbol, strategy, contract, score, rank, reasons, first_seen, last_seen, status, misses, definition)
+   VALUES (@kind, @symbol, @strategy, @contract, @score, @rank, @reasons, @now, @now, 'active', 0, @definition)
    ON CONFLICT (kind, symbol, strategy) DO UPDATE SET
      contract = excluded.contract, score = excluded.score, rank = excluded.rank, reasons = excluded.reasons, last_seen = excluded.last_seen,
+     definition = excluded.definition,
      misses = 0,
      first_seen = CASE WHEN ideas.status = 'dropped' THEN excluded.first_seen ELSE ideas.first_seen END,
      status = 'active'`
 );
 
-function place(kind: IdeaKind, ranked: Candidate[], now: string): void {
-  ranked.forEach((c, i) => upsert.run({ kind, symbol: c.symbol, strategy: c.strategy, contract: c.contract, score: Math.round(c.score * 10) / 10, rank: i + 1, reasons: JSON.stringify(c.reasons), now }));
+function place(kind: IdeaKind, ranked: Candidate[], now: string, definition: string): void {
+  ranked.forEach((c, i) => upsert.run({ kind, symbol: c.symbol, strategy: c.strategy, contract: c.contract, score: Math.round(c.score * 10) / 10, rank: i + 1, reasons: JSON.stringify(c.reasons), now, definition }));
 }
 
 /**
@@ -143,24 +166,44 @@ export function onePerCompany<T extends { symbol: string }>(cards: T[]): T[] {
   return cards.filter((c) => keep.has(c.symbol));
 }
 
+/** Candidates for the screen's filters: the cards with the price and days to earnings the catalog offers. */
+function candidatesFor(cards: Scorecard[], today: string): StockCandidate[] {
+  if (cards.length === 0) return [];
+  const symbols = JSON.stringify(cards.map((c) => c.symbol));
+  const prices = new Map((db.prepare("SELECT symbol, price FROM bulk_profiles WHERE symbol IN (SELECT value FROM json_each(?))").all(symbols) as Array<{ symbol: string; price: number | null }>).map((r) => [r.symbol, r.price]));
+  const next = new Map(calendarFor(cards.map((c) => c.symbol), today).map((e) => [e.symbol, e.nextEarningsDate]));
+  const base = Date.parse(`${today}T00:00:00Z`);
+  return cards.map((card) => {
+    const n = next.get(card.symbol);
+    return { card, price: prices.get(card.symbol) ?? null, nextEarningsDays: n ? Math.round((n * 1000 - base) / 86_400_000) : null };
+  });
+}
+
 /**
- * The stock screen: the top 25 composites among `universe` with enough data
- * become (or stay) active; active stock ideas outside them are dropped.
+ * The stock screen: the top composites among `universe` with enough data (and passing the active definition's
+ * filters) become (or stay) active; active stock ideas outside them are dropped.
  */
 export function runStockScreen(universe: string[], now = new Date()): { listed: number; dropped: number } {
   const today = nyClock(now).date;
   const iso = now.toISOString();
-  // Extra candidates, so removing a second share class still leaves 25.
-  const top = onePerCompany(topNightly(universe, MIN_COVERAGE, STOCK_IDEAS * 3)).slice(0, STOCK_IDEAS);
+  const def = getActive("stock");
+  const { top, minCoverage } = def.definition.listing;
+  // Extra candidates, so removing a second share class still leaves `top`. Filters need every card.
+  const cards = topNightly(universe, minCoverage, def.definition.filters.length > 0 ? Number.MAX_SAFE_INTEGER : top * 3);
+  const dedupe = (cs: StockCandidate[]) => {
+    const keep = new Set(onePerCompany(cs.map((c) => c.card)).map((c) => c.symbol));
+    return cs.filter((c) => keep.has(c.card.symbol));
+  };
+  const picked = screenStocks(def.definition, candidatesFor(cards, today), dedupe).picked.map((c) => c.card);
   let dropped = 0;
   db.transaction(() => {
-    place("stock", top.map((c) => ({ symbol: c.symbol, strategy: "buy", contract: null, score: c.composite!, reasons: stockReasons(c, today) })), iso);
-    const keep = JSON.stringify(top.map((c) => c.symbol));
+    place("stock", picked.map((c) => ({ symbol: c.symbol, strategy: "buy", contract: null, score: c.composite!, reasons: stockReasons(c, today) })), iso, def.version);
+    const keep = JSON.stringify(picked.map((c) => c.symbol));
     dropped = db
       .prepare("UPDATE ideas SET status = 'dropped' WHERE kind = 'stock' AND status = 'active' AND symbol NOT IN (SELECT value FROM json_each(?))")
       .run(keep).changes;
   })();
-  return { listed: top.length, dropped };
+  return { listed: picked.length, dropped };
 }
 
 /** The 15-minute update: active stock ideas take the live score and reasons; ranks follow the new order. */
@@ -176,40 +219,72 @@ export function refreshStockIdeas(now = new Date()): number {
     } else updated.push({ symbol: idea.symbol, strategy: "buy", contract: null, score: live.composite, reasons: stockReasons(live, today) });
   }
   updated.sort((a, b) => b.score - a.score);
-  db.transaction(() => place("stock", updated, iso))();
+  db.transaction(() => place("stock", updated, iso, getActive("stock").version))();
   return updated.length;
 }
 
+export type OptionCandidate = { symbol: string; strategy: OptionStrategy; contract: string | null; score: number; reasons: string[] };
+export type OptionListingResult = {
+  /** The best candidates scoring above the bar, best first, capped at maxIdeas. */
+  top: OptionCandidate[];
+  /** Setups at or above `nearMissFrom` that did not make the list, best first. Empty when nearMissFrom is null. */
+  nearMisses: OptionCandidate[];
+};
+
 /**
- * The 5-minute option pass: the best setups scoring 70+ (60+ while IV history is under 20 days; top 20, one per
- * symbol and strategy) are active; one that is missing from two scans in a
- * row is dropped.
+ * Which setups the option pass lists, under a definition's listing rules (pure: no database). A setup is a
+ * candidate at its bar (the early bar while IV history is short); names are ordered by score, then symbol.
+ */
+export function listOptionCandidates(cards: Array<Pick<OptionScorecard, "underlying" | "metrics" | "setups">>, listing: OptionListing): OptionListingResult {
+  const candidates: OptionCandidate[] = [];
+  const misses: OptionCandidate[] = [];
+  for (const card of cards) {
+    const early = (card.metrics?.ivHistoryDays ?? 0) < listing.early.ivHistoryDaysBelow;
+    const bar = early ? listing.early.minScore : listing.minScore;
+    for (const s of card.setups) {
+      const c = { symbol: card.underlying, strategy: s.strategy, contract: s.contract, score: s.score, reasons: early ? [...s.reasons, earlyIvReason(listing.early.ivHistoryDaysBelow)] : s.reasons };
+      if (s.score >= bar) candidates.push(c);
+      else if (listing.nearMissFrom !== null && s.score >= listing.nearMissFrom) misses.push(c);
+    }
+  }
+  const order = (a: OptionCandidate, b: OptionCandidate) => b.score - a.score || a.symbol.localeCompare(b.symbol);
+  candidates.sort(order);
+  const top = candidates.slice(0, listing.maxIdeas);
+  if (listing.nearMissFrom !== null) misses.push(...candidates.slice(listing.maxIdeas));
+  misses.sort(order);
+  return { top, nearMisses: listing.nearMissFrom === null ? [] : misses };
+}
+
+/**
+ * The 5-minute option pass: the best setups above the active definition's listing bar (top maxIdeas, one per
+ * symbol and strategy) are active; one that is missing from `missesToDrop` scans in a row is dropped. Setups in
+ * the near-miss band are kept as the latest pass's near misses (they never become ideas).
  */
 export function updateOptionIdeas(now = new Date()): { listed: number; dropped: number } {
   const iso = now.toISOString();
-  const candidates: Candidate[] = [];
-  for (const card of allOptionScorecards()) {
-    const early = (card.metrics?.ivHistoryDays ?? 0) < IV_HISTORY_DAYS_FULL;
-    for (const s of card.setups) {
-      if (s.score < (early ? OPTION_IDEA_MIN_SCORE_EARLY : OPTION_IDEA_MIN_SCORE)) continue;
-      candidates.push({ symbol: card.underlying, strategy: s.strategy, contract: s.contract, score: s.score, reasons: early ? [...s.reasons, EARLY_IV_REASON] : s.reasons });
-    }
-  }
-  candidates.sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol));
-  const top = candidates.slice(0, OPTION_IDEAS);
+  const def = getActive("option");
+  const listing = def.definition.listing;
+  const { top, nearMisses } = listOptionCandidates(allOptionScorecards(), listing);
   let dropped = 0;
   db.transaction(() => {
-    place("option", top, iso);
+    place("option", top, iso, def.version);
     const present = new Set(top.map((c) => `${c.symbol}|${c.strategy}`));
     const missing = (db.prepare("SELECT id, symbol, strategy, misses FROM ideas WHERE kind = 'option' AND status = 'active'").all() as Array<{ id: number; symbol: string; strategy: string; misses: number }>)
       .filter((r) => !present.has(`${r.symbol}|${r.strategy}`));
     let rank = top.length;
     for (const r of missing) {
-      if (r.misses + 1 >= OPTION_MISSES_TO_DROP) {
+      if (r.misses + 1 >= listing.missesToDrop) {
         db.prepare("UPDATE ideas SET status = 'dropped', misses = misses + 1 WHERE id = ?").run(r.id);
         dropped++;
       } else db.prepare("UPDATE ideas SET misses = misses + 1, rank = ? WHERE id = ?").run(++rank, r.id);
     }
+    // Names still listed as ideas (kept through a miss) are not near misses.
+    const listed = new Set(
+      (db.prepare("SELECT symbol, strategy FROM ideas WHERE kind = 'option' AND status = 'active'").all() as Array<{ symbol: string; strategy: string }>).map((r) => `${r.symbol}|${r.strategy}`)
+    );
+    db.prepare("DELETE FROM idea_near_misses WHERE kind = 'option'").run();
+    const put = db.prepare("INSERT INTO idea_near_misses (kind, symbol, strategy, contract, score, rank, reasons, as_of, definition) VALUES ('option', ?, ?, ?, ?, ?, ?, ?, ?)");
+    nearMisses.filter((c) => !listed.has(`${c.symbol}|${c.strategy}`)).forEach((c, i) => put.run(c.symbol, c.strategy, c.contract, c.score, i + 1, JSON.stringify(c.reasons), iso, def.version));
   })();
   return { listed: top.length, dropped };
 }

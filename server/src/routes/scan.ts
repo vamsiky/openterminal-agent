@@ -4,9 +4,11 @@ import { listIdeas, ideasAsOf } from "../quant/ideas.js";
 import { JOB_NAMES, lastRuns, quantDeps, runJob, type JobName } from "../quant/jobs.js";
 import { getOptionScorecard } from "../quant/option-score.js";
 import { getLiveScorecard, getStockScorecard } from "../quant/stock-score.js";
+import { scanDefsRouter } from "./scan-defs.js";
 import { getUniverseSettings, listSectors, resolveUniverse, setUniverseSettings, universeSchema } from "../quant/universe.js";
 
 export const scanRouter = Router();
+scanRouter.use(scanDefsRouter);
 
 // The scan engine's read side (quant/). Mounted behind requireApiKey.
 
@@ -34,13 +36,19 @@ scanRouter.get("/sectors", (_req, res) => {
 
 const ideasQuery = z.object({
   kind: z.enum(["stock", "option"]).optional(),
-  status: z.enum(["active", "dropped"]).default("active"),
+  status: z.enum(["active", "dropped", "near"]).default("active"),
   limit: z.coerce.number().int().min(1).max(100).default(25),
 });
 
 scanRouter.get("/ideas", (req, res) => {
   const q = ideasQuery.safeParse(req.query);
-  if (!q.success) return res.status(400).json({ error: "kind must be stock or option, status active or dropped, limit 1-100" });
+  if (!q.success) return res.status(400).json({ error: "kind must be stock or option, status active, dropped or near, limit 1-100" });
+  if (q.data.status === "near") {
+    // Near misses exist for options only: setups below the listing bar that the active definition keeps.
+    if (q.data.kind === "stock") return res.status(400).json({ error: "near misses are kept for options only" });
+    const ideas = listIdeas({ ...q.data, kind: "option" });
+    return res.json({ asOf: ideas[0]?.lastSeen ?? null, ideas });
+  }
   res.json({ asOf: ideasAsOf(q.data.kind), ideas: listIdeas(q.data) });
 });
 

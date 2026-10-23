@@ -120,7 +120,7 @@ describe("buildSetups", () => {
     const m = { m5: 80, m15: 82, h1: 68, d1: 14 };
     expect(os.buildSetups(inputs({ momentum: m })).map((s) => s.strategy)).not.toContain("long_call");
     const ok = os.buildSetups(inputs({ momentum: { ...m, d1: 25 } })).find((s) => s.strategy === "long_call")!;
-    expect(ok.reasons[0]).toBe("momentum is strong: 15-minute 82, hourly 68, daily uptrend 25 (at least 25)");
+    expect(ok.reasons.slice(0, 2)).toEqual(["momentum is strong: 15-minute 82, hourly 68", "daily uptrend 25 (at least 25)"]);
   });
 
   it("long call: stretch penalty of 10 per condition, capped at 30, with one reason that names them", () => {
