@@ -178,11 +178,14 @@ describe("replay, compare and promote", () => {
     expect((await post(`/scan/defs/${v1.id}/rollback`)).body.meta).toMatchObject({ version: "option-v1", status: "active" });
     expect(os.runOptionScan(symbols, optionMetrics, now).definition).toBe("option-v1");
     expect(sd.getActive("option").version).toBe("option-v1");
-    expect(sd.listVersions("option").map((v) => `${v.version}:${v.status}`)).toEqual(["option-v3:retired", "option-v2:discarded", "option-v1:active"]);
-
-    // Nothing is left to roll back to.
-    const retired = sd.listVersions("option")[0];
-    expect((await post(`/scan/defs/${retired.id}/rollback`)).status).toBe(409);
+    // Rolling back swaps: the version rolled back from is kept as previous.
+    expect(sd.listVersions("option").map((v) => `${v.version}:${v.status}`)).toEqual(["option-v3:previous", "option-v2:discarded", "option-v1:active"]);
+    const v3 = sd.listVersions("option")[0];
+    expect((await post(`/scan/defs/${v3.id}/rollback`)).body.meta).toMatchObject({ version: "option-v3", status: "active" });
+    expect(sd.listVersions("option").map((v) => `${v.version}:${v.status}`)).toEqual(["option-v3:active", "option-v2:discarded", "option-v1:previous"]);
+    expect((await post(`/scan/defs/${v3.id}/rollback`)).status).toBe(409); // the active one is not a rollback target
+    await post(`/scan/defs/${sd.listVersions("option")[2].id}/rollback`);
+    expect(sd.getActive("option").version).toBe("option-v1");
     expect((await post(`/scan/defs/${sd.getActive("option").id}/rollback`)).status).toBe(409);
   });
 

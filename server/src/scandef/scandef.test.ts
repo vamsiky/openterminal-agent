@@ -333,8 +333,12 @@ describe("the store", () => {
     const prev = sd.listVersions("option").find((v) => v.status === "previous")!;
     sd.setStatus(prev.id, "active");
     expect(sd.getActive("option").version).toBe("option-v1");
-    expect(sd.getById(d2.id)?.status).toBe("retired");
-    expect(events).toEqual(["option:drafted", "option:drafted", "option:activated", "option:activated"]);
+    expect(sd.getById(d2.id)?.status).toBe("previous"); // a swap: switch back is possible
+    sd.setStatus(d2.id, "active");
+    expect(sd.getActive("option").version).toBe("option-v3");
+    expect(sd.listVersions("option").map((v) => [v.version, v.status])).toEqual([["option-v3", "active"], ["option-v2", "discarded"], ["option-v1", "previous"]]);
+    sd.setStatus(prev.id, "active");
+    expect(events).toEqual(["option:drafted", "option:drafted", "option:activated", "option:activated", "option:activated", "option:activated"]);
   });
 
   it("refuses invalid drafts and impossible status changes", () => {

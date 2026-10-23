@@ -177,7 +177,7 @@ export function createDraft(input: DraftInput): DefRecord {
 
 /**
  * Moves a version to a new status. Allowed: draft to active (promote: the old active becomes previous, the old
- * previous retired), previous to active (roll back: the active one is retired), draft to discarded, previous to
+ * previous retired), previous to active (roll back: the two swap, so the active one becomes previous), draft to discarded, previous to
  * retired. Anything else throws.
  */
 export function setStatus(id: number, status: DefStatus): DefRecord {
@@ -191,8 +191,13 @@ export function setStatus(id: number, status: DefStatus): DefRecord {
       if (cur.status === "draft") {
         db.prepare("UPDATE scan_definitions SET status = 'retired' WHERE kind = ? AND status = 'previous'").run(cur.kind);
         if (active) set.run("previous", active.id);
-      } else if (active) set.run("retired", active.id);
-      db.prepare("UPDATE scan_definitions SET status = 'active', promoted_at = ? WHERE id = ?").run(now, id);
+        db.prepare("UPDATE scan_definitions SET status = 'active', promoted_at = ? WHERE id = ?").run(now, id);
+      } else {
+        // Roll back is a swap: the active one becomes previous, so it can be switched back to.
+        if (active) set.run("retired", active.id); // parked while both indexes are rewritten
+        db.prepare("UPDATE scan_definitions SET status = 'active', promoted_at = ? WHERE id = ?").run(now, id);
+        if (active) set.run("previous", active.id);
+      }
     })();
     changed({ kind: cur.kind, event: "activated", id });
   } else if (status === "discarded" && cur.status === "draft") {
