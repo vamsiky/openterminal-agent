@@ -200,19 +200,48 @@ describe("form and diff", () => {
     const items = form.flatMap((s) => s.items);
     expect(items.length).toBe(before + 3 + 2); // points, from, to; points, threshold
     expect(items.find((i) => i.label === "Tight spread: points")).toMatchObject({ value: 5, min: -100, max: 100 });
-    expect(items.find((i) => i.label === "Tight spread: none at")).toMatchObject({ value: 10 });
+    expect(items.find((i) => i.label === "Tight spread · ATM put spread: none at")).toMatchObject({ value: 10 });
     expect(items.find((i) => i.label === "Wide spread: points off")).toMatchObject({ value: 4 });
-    expect(items.find((i) => i.label.startsWith("Wide spread") && i.label.endsWith("above"))).toMatchObject({ value: 15 });
-    // Every numeric or boolean leaf of the scoring JSON (not the wording variants) is a form item.
-    let leafCount = 0;
-    const walk = (x: unknown) => {
-      if (typeof x === "number" || typeof x === "boolean") leafCount++;
-      else if (Array.isArray(x)) x.forEach(walk);
-      else if (x && typeof x === "object") for (const [k, v] of Object.entries(x)) if (k !== "say" && k !== "sayElse") walk(v);
-    };
-    walk(d.strategies);
-    walk({ ...d.listing, nearMissFrom: undefined });
-    expect(items.filter((i) => i.type === "number" || i.type === "boolean").length - 1).toBe(leafCount); // minus the null nearMissFrom item
+    expect(items.find((i) => i.label === "Wide spread: above")).toMatchObject({ value: 15 });
+  });
+
+  it("keeps structural constants out of the form and labels and bounds every row", () => {
+    for (const def of [sd.OPTION_V1_DEF, sd.STOCK_V2_DEF]) {
+      const items = sd.formOf(def).flatMap((s) => s.items);
+      for (const i of items) {
+        expect(i.label).not.toMatch(/^(Options are cheap|Rich IV)$/);
+        expect(i.label).not.toMatch(/: (0|1|above 0)$/);
+        if (i.type === "number" && i.unit !== "points" && i.unit !== "weight" && i.min !== null) {
+          const b = sd.UNIT_BOUNDS[i.unit];
+          if (b) expect([i.label, i.min, i.max]).toEqual([i.label, Math.max(i.min, b.min), Math.min(i.max!, b.max)]);
+          else expect(Math.abs(i.min)).toBeLessThan(1_000_000); // listing counts and the like
+        }
+      }
+    }
+    const labels = sd.formOf(sd.OPTION_V1_DEF).flatMap((s) => s.items).map((i) => i.label);
+    expect(labels).toEqual(expect.arrayContaining([
+      "Options are cheap · IV rank: none at",
+      "Options are cheap · with no IV rank: 30-day IV / 20-day realised volatility: at most",
+      "IV is rich · with no IV rank: 30-day IV / 20-day realised volatility: above",
+      "Momentum average: at least",
+    ]));
+    expect(labels).not.toContain("Options are cheap: 1");
+    expect(labels.filter((l) => l.startsWith("Options are cheap"))).toHaveLength(4); // points, two IV rank ends, the ratio threshold
+    const momentum = sd.formOf(sd.OPTION_V1_DEF).flatMap((s) => s.items).find((i) => i.label === "Momentum average: at least")!;
+    expect([momentum.min, momentum.max]).toEqual([-100, 100]);
+  });
+
+  it("refuses thresholds outside the range of the field they compare", () => {
+    const d = clone(sd.OPTION_V1_DEF);
+    (d.strategies.long_call.gates[2] as { value: number }).value = 500; // daily trend is -100 to 100
+    const r = sd.parseDefinition(d);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join(" ")).toMatch(/threshold 500 is outside -100 to 100/);
+    const e = sd.applyForm(sd.OPTION_V1_DEF, [{ path: "strategies.long_call.gates[0].value", value: 150 }]);
+    expect(e.ok).toBe(false);
+    const f = clone(sd.OPTION_V1_DEF);
+    f.strategies.long_call.terms[3] = { label: "Volume", expr: { scale: { expr: "rel_volume", from: 0, to: 50 } }, points: 5 };
+    expect(sd.parseDefinition(f).ok).toBe(false);
   });
 
   it("marks the contract read-only and refuses to edit it", () => {

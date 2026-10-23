@@ -2,6 +2,7 @@ import { catalogField, type Scope } from "./catalog.js";
 import type { Cond, Expr } from "./dsl.js";
 import { GROUP_LABELS, STOCK_GROUPS } from "./factors.js";
 import { factorBase } from "./stock-engine.js";
+import { exprUnit } from "./units.js";
 import { STRATEGY_KEYS, type Definition, type OptionDefinition, type Penalty, type StockDefinition, type Term } from "./schema.js";
 
 // The text view of a definition: a deterministic function, plain sentences built from labels and
@@ -29,14 +30,6 @@ function valueText(v: number | boolean, unit: string | undefined): string {
   if (unit === "days") return `${num(v)} day${v === 1 ? "" : "s"}`;
   if (unit === "usd") return `$${num(v)}`;
   return num(v);
-}
-
-/** The catalog unit of an expression when it reads a single field, else undefined. */
-export function exprUnit(scope: Scope, e: Expr): string | undefined {
-  if (typeof e === "string") return catalogField(scope, e)?.unit;
-  if (typeof e === "object" && "scale" in e) return exprUnit(scope, e.scale.expr);
-  if (typeof e === "object" && "coalesce" in e) return exprUnit(scope, e.coalesce[0]);
-  return undefined;
 }
 
 /** "15-minute momentum" and "hourly momentum" read as "15-minute and hourly momentum". */
@@ -78,7 +71,7 @@ const MORE_THAN: Record<string, (v: number) => string> = {
 };
 
 /** A condition made only of data checks (known, above zero): it guards an expression without changing its meaning. */
-function isGuard(c: Cond): boolean {
+export function isGuard(c: Cond): boolean {
   if ("all" in c) return c.all.every(isGuard);
   if ("known" in c) return true;
   return "op" in c && c.op === ">" && c.value === 0 && typeof c.expr === "string";

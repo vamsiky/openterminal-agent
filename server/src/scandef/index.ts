@@ -11,3 +11,4 @@ export { render, condText, exprText, gateLine, termLine, penaltyLine } from "./r
 export { leavesOf, formOf, applyForm, diff, type Leaf, type FormItem, type FormSection, type FormEdit, type DiffRow, type LeafValue } from "./leaves.js";
 export * from "./store.js";
 export { GROUP_LABELS, STOCK_GROUPS, BUILTIN_FACTORS, BUILTIN_LIVE_FACTORS } from "./factors.js";
+export { UNIT_BOUNDS, boundsFor, exprUnit, type Bounds } from "./units.js";

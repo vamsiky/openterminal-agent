@@ -46,11 +46,11 @@ const FACTOR_META: Record<string, FactorMeta> = {
   ret_6m: { unit: "pct", description: "Return over the last 6 months (126 trading days), as a fraction.", source: DAILY },
   vs_sma50: { unit: "pct", description: "Price above its 50-day average, as a fraction.", source: DAILY },
   vs_sma200: { unit: "pct", description: "Price above its 200-day average, as a fraction.", source: DAILY },
-  rsi14: { unit: "ratio", description: "14-day RSI (0 to 100).", source: DAILY },
+  rsi14: { unit: "score_0_100", description: "14-day RSI (0 to 100).", source: DAILY },
   rs_spy: { unit: "pct", description: "6-month return minus SPY's, as a fraction.", source: DAILY },
   rs_sector: { unit: "pct", description: "3-month return minus its sector ETF's, as a fraction.", source: DAILY },
   price_vs_vwap: { unit: "pct", description: "Price above today's VWAP, in percent (1 = 1% above).", source: "Minute bars, every 15 min in the session" },
-  rsi_15m: { unit: "ratio", description: "RSI(14) of the 15-minute bars (0 to 100).", source: "Minute bars, every 15 min in the session" },
+  rsi_15m: { unit: "score_0_100", description: "RSI(14) of the 15-minute bars (0 to 100).", source: "Minute bars, every 15 min in the session" },
   rel_volume: { unit: "x", description: "Volume so far today against the normal volume for this time of day.", source: "Minute and daily bars, every 15 min in the session" },
 };
 
@@ -114,7 +114,7 @@ const OPTION_FIELDS: CatalogField[] = [
   option("atm_put_spread_pct", "ATM put spread", "pct", "Put bid-ask spread as a percent of its mid (derived).", NOW5, "Quotes"),
   option("rel_volume", "Relative volume", "x", "Volume so far today against the normal volume for this time of day.", "Minute and daily bars, every 15 min", "Volume"),
   option("vwap_atr_distance", "Distance above VWAP", "x", "Price minus today's VWAP, in 15-minute ATRs.", MOM, "Stretch"),
-  option("rsi_15m", "15-minute RSI", "ratio", "RSI(14) of the 15-minute bars (0 to 100).", MOM, "Stretch"),
+  option("rsi_15m", "15-minute RSI", "score_0_100", "RSI(14) of the 15-minute bars (0 to 100).", MOM, "Stretch"),
   option("day_move_pct", "Today's move", "pct", "Change from the previous close, in percent (3 = up 3%).", MOM, "Stretch"),
   option("usual_day_move_pct", "Usual daily move", "pct", "Normal daily move in percent: 20-day volatility over sqrt(252), else the daily ATR.", MOM, "Stretch"),
   option("day_move_vs_usual", "Today's move vs usual", "x", "Today's move divided by the usual daily move (1.5 = 1.5x its usual size).", MOM, "Stretch"),
