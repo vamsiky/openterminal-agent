@@ -36,7 +36,7 @@ function StatusLine({ status, agents }: { status: ScanStatus | undefined; agents
   const opt = lastRun(status?.runs, ["option-scan"]);
   const o = status?.options ?? null;
   return (
-    <div className="px-2 py-0.5 dim text-[10px] border-t border-[var(--border)]">
+    <div className="px-2 py-0.5 dim text-[10px] border-t border-[var(--border)] break-words">
       {agents && <>{agentsLine(agents)} · </>}
       Stock scan {ago(runTime(stock) || null)} · Options sweep {ago(runTime(opt) || null)} ·{" "}
       {o ? (o.connected ? `${o.subscribed} contracts streamed` : "option stream offline") : "option stream n/a"}
@@ -109,16 +109,16 @@ export default function IdeasWidget() {
   const cols = kind === "option" ? 9 : 5;
 
   return (
-    <div className="flex flex-col h-full text-[11px]">
+    <div className="flex flex-col h-full w-full min-w-0 overflow-x-hidden text-[11px]">
       <div className="flex flex-wrap items-center gap-1 p-1">
         {([["stock", "Stocks"], ["option", "Options"], ["brief", "Brief"], ["earnings", "Earnings"]] as const).map(([id, label]) => (
           <Chip key={id} on={tab === id} onClick={() => { setTab(id); setExpanded(null); }}>{label}</Chip>
         ))}
-        <span className="dim ml-1 flex-1 min-w-[140px] truncate">Candidates only, not orders{ideas.data?.asOf ? ` · as of ${ago(ideas.data.asOf)}` : ""}</span>
+        <span className="dim ml-1 flex-1 basis-[120px] min-w-0 truncate">Candidates only, not orders{ideas.data?.asOf ? ` · as of ${ago(ideas.data.asOf)}` : ""}</span>
         <Chip on={settingsOpen} onClick={() => setSettingsOpen((o) => !o)} title="Universe and positions">Settings</Chip>
       </div>
       {settingsOpen && <IdeasSettings />}
-      <div className="flex-1 overflow-auto" style={{ containerType: "inline-size" }}>
+      <div className="flex-1 min-w-0 overflow-auto" style={{ containerType: "inline-size" }}>
         {tab === "earnings" ? (
           <EarningsTab agents={agents.data} />
         ) : tab === "brief" ? (
