@@ -1,0 +1,26 @@
+STOCK SCAN · stock-v2
+Screens the scan universe at 07:00 and 16:30 ET on weekdays and re-scores the ideas every 15 minutes in market hours. Horizon: holding for months.
+
+FACTORS (each stock is ranked 0 to 100 against its sector peers, unless noted)
+- With fewer than 5 sector peers that have data, the whole market is the comparison.
+- Momentum is skipped when the last daily bar is more than 7 days old.
+- Valuation: P/E (lower is better, losses score worst), EV/EBITDA (lower is better, losses score worst), price/sales (lower is better, losses score worst), free cash flow yield, discount to DCF value.
+- Quality: return on invested capital, return on equity, gross margin, operating margin, net debt/EBITDA (lower is better), current ratio.
+- Growth: revenue growth, EPS growth.
+- Earnings: last earnings surprise, 30-day EPS estimate revision, 90-day EPS estimate revision.
+- Analyst view: share of buy ratings, price-target upside, FMP rating.
+- Momentum: 12-1 month return, 6-month return, price vs 50-day average, price vs 200-day average, RSI(14), 6-month excess return over SPY (ranked against the whole market), 3-month excess return over its sector ETF (ranked against the whole market).
+- In market hours the momentum group also uses price vs VWAP, 15-minute RSI, relative volume.
+
+WEIGHTS (groups with no data drop out and the rest re-normalise)
+- Valuation 20%
+- Quality 20%
+- Growth 15%
+- Earnings 15%
+- Analyst view 10%
+- Momentum 20%
+
+LISTING
+- List the top 25 by stock score, one per company.
+- A stock needs data for at least 60% of its factors.
+- Earnings within 30 days are flagged on the idea.

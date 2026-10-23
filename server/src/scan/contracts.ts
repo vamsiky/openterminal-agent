@@ -60,6 +60,8 @@ export type OptionScorecard = {
   metrics: OptionMetrics | null;
   earningsBeforeExpiry: boolean | null; nextEarnings: string | null;
   setups: OptionSetup[];
+  /** Version of the option definition that produced the setups (absent on cards stored before Scan Lab). */
+  definition?: string;
 };
 
 export type IdeaKind = "stock" | "option";
@@ -68,7 +70,9 @@ export type Idea = {
   strategy: "buy" | OptionStrategy;
   contract: string | null;
   score: number; rank: number; reasons: string[];
-  firstSeen: string; lastSeen: string; status: "active" | "dropped";
+  firstSeen: string; lastSeen: string; status: "active" | "dropped" | "near";
+  /** Option ideas: version of the option definition that produced the idea. */
+  definition?: string | null;
 };
 
 /** Injected by index.ts so quant/ and options/ never import each other. */

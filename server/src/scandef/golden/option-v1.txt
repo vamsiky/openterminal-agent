@@ -1,0 +1,53 @@
+OPTIONS SCAN · option-v1
+Runs every 5 minutes from 09:35 ET to the close on trading days, on the underlyings in your scan universe. Each underlying is judged on its at-the-money call and put at the first expiry far enough out (set by the options sweep). Strategies are fixed: buy calls, sell cash-secured puts, sell covered calls. Never buy puts, spreads or naked calls.
+
+LISTING
+- List a setup when it scores 70 or more.
+- While a name has under 20 days of IV history, list it from 60.
+- Show at most 20 ideas, one per symbol and strategy.
+- Drop an idea after it misses 2 scans in a row.
+- Near misses: not shown.
+
+BUY A CALL
+- Contract: the at-the-money call (set by the options sweep).
+- Gate · Momentum average: 15-minute and hourly momentum average 40 or more.
+- Gate · Both timeframes up: both 15-minute and hourly momentum are above 0.
+- Gate · Daily uptrend: daily trend is 25 or more.
+- Score: starts at 40.
+  - Up to +25 for momentum: the average of 15-minute and hourly momentum from 40 (none) to 100 (full).
+  - Up to +10 for daily trend: daily trend from 0 (none) to 50 (full).
+  - Up to +15 when options are cheap: IV rank from 60 (none) to 30 (full). With no IV rank yet: full when 30-day IV is at most 1.2x 20-day realised volatility, else none.
+  - Up to +5 for volume: relative volume from 0 (none) to 1.5 (full).
+  - +5 when relative volume is 1.5x or more (high volume).
+- Penalties:
+  - -25 when earnings fall before expiry.
+  - -10 for each of these signs (stretched), at most -30: price more than 2 fifteen-minute ATRs above VWAP; 15-minute RSI is above 75; today's move is more than 1.5x its usual size.
+
+SELL A CASH-SECURED PUT
+- Contract: the at-the-money put (set by the options sweep).
+- Gate · Stock worth owning: stock score is 60 or more.
+- Gate · IV is rich: IV rank is 60 or more (no IV rank yet: 30-day IV is above 20-day realised volatility).
+- Gate · Not falling hard: daily trend is above -50.
+- Score: starts at 40.
+  - Up to +25 for rich IV: IV rank from 30 (none) to 100 (full). With no IV rank yet: 30-day IV from 0.8x (none) to 1.6x (full) of 20-day realised volatility.
+  - Up to +20 for stock score: stock score from 60 (none) to 100 (full).
+  - Up to +10 for hourly momentum: hourly momentum (0 when unknown) from -50 (none) to 50 (full).
+- Penalties:
+  - -15 when earnings fall before expiry.
+  - -3 when an ex-dividend date falls before expiry.
+- Note, no points: cash needed, when cash to secure a put is above $0.
+
+SELL A COVERED CALL
+- Contract: the at-the-money call (set by the options sweep).
+- Only against shares you hold, 100 per contract.
+- Gate · Shares held: shares held is 100 or more.
+- Gate · IV is rich: IV rank is 60 or more (no IV rank yet: 30-day IV is above 20-day realised volatility).
+- Gate · 15-minute momentum flat: 15-minute momentum is 20 or less.
+- Gate · Hourly momentum flat: hourly momentum is 20 or less.
+- Score: starts at 40.
+  - Up to +30 for rich IV: IV rank from 30 (none) to 100 (full). With no IV rank yet: 30-day IV from 0.8x (none) to 1.6x (full) of 20-day realised volatility.
+  - Up to +20 for flat or falling momentum: the average of 15-minute and hourly momentum from 20 (none) to -60 (full).
+  - +10 when daily trend is 20 or less (daily trend flat).
+- Penalties:
+  - -10 when earnings fall before expiry.
+  - -30 when an ex-dividend date falls before expiry.

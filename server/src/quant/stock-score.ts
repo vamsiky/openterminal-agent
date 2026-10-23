@@ -9,7 +9,11 @@ import { addDays, revisions } from "../estimates/store.js";
 import type { FactorScore, Scorecard } from "../scan/contracts.js";
 import { isUsListed, listedSymbols } from "./listings.js";
 import { periodReturn, rollup, rsi, vwap, type Bar } from "./indicators.js";
-import { STOCK_WEIGHTS, STOCK_WEIGHTS_VERSION, composite } from "./weights.js";
+import { composite } from "./weights.js";
+import { BUILTIN_FACTORS, BUILTIN_LIVE_FACTORS, GROUP_LABELS as GROUP_NAMES, type FactorBase } from "../scandef/factors.js";
+import { factorBase, factorSpecs, intradayTotal, liveKeys, nightlyTotal } from "../scandef/stock-engine.js";
+import { getActive, onDefinitionChange } from "../scandef/store.js";
+import type { StockDefinition } from "../scandef/schema.js";
 
 // Stock scorecards for a months horizon. Each factor is a percentile (0–100,
 // higher is better) within the stock's FMP sector across every US stock with
@@ -19,67 +23,23 @@ import { STOCK_WEIGHTS, STOCK_WEIGHTS_VERSION, composite } from "./weights.js";
 // the 15-minute pass redoes the momentum group for the universe with live
 // prices and adds intraday factors.
 
-export type FactorDef = {
-  key: string;
-  group: string;
-  label: string;
-  /** Lower raw values score higher (P/E). */
-  lowerBetter?: boolean;
-  /** A zero or negative raw value is the worst possible (a P/E of -5 is not cheap). */
-  positiveOnly?: boolean;
-  /** Ranked against the whole US market, not the stock's sector (cross-sector strength). */
-  market?: boolean;
-};
+export type FactorDef = FactorBase;
 
-export const FACTORS: FactorDef[] = [
-  { key: "pe", group: "valuation", label: "P/E", lowerBetter: true, positiveOnly: true },
-  { key: "ev_to_ebitda", group: "valuation", label: "EV/EBITDA", lowerBetter: true, positiveOnly: true },
-  { key: "price_to_sales", group: "valuation", label: "price/sales", lowerBetter: true, positiveOnly: true },
-  { key: "fcf_yield", group: "valuation", label: "free cash flow yield" },
-  { key: "dcf_gap", group: "valuation", label: "discount to DCF value" },
-  { key: "roic", group: "quality", label: "return on invested capital" },
-  { key: "roe", group: "quality", label: "return on equity" },
-  { key: "gross_margin", group: "quality", label: "gross margin" },
-  { key: "operating_margin", group: "quality", label: "operating margin" },
-  { key: "net_debt_to_ebitda", group: "quality", label: "net debt/EBITDA", lowerBetter: true },
-  { key: "current_ratio", group: "quality", label: "current ratio" },
-  { key: "growth_revenue", group: "growth", label: "revenue growth" },
-  { key: "growth_eps", group: "growth", label: "EPS growth" },
-  { key: "surprise_pct", group: "earnings", label: "last earnings surprise" },
-  { key: "eps_rev_30d", group: "earnings", label: "30-day EPS estimate revision" },
-  { key: "eps_rev_90d", group: "earnings", label: "90-day EPS estimate revision" },
-  { key: "buy_share", group: "analysts", label: "share of buy ratings" },
-  { key: "pt_upside", group: "analysts", label: "price-target upside" },
-  { key: "rating_score", group: "analysts", label: "FMP rating" },
-  { key: "ret_12_1", group: "momentum", label: "12-1 month return" },
-  { key: "ret_6m", group: "momentum", label: "6-month return" },
-  { key: "vs_sma50", group: "momentum", label: "price vs 50-day average" },
-  { key: "vs_sma200", group: "momentum", label: "price vs 200-day average" },
-  { key: "rsi14", group: "momentum", label: "RSI(14)" },
-  { key: "rs_spy", group: "momentum", label: "6-month excess return over SPY", market: true },
-  { key: "rs_sector", group: "momentum", label: "3-month excess return over its sector ETF", market: true },
-];
+/** The built-in factors (stock-v2's baseline); which are scored, and how, comes from the active stock definition. */
+export const FACTORS: FactorDef[] = BUILTIN_FACTORS;
 
 /** Added to the momentum group by the 15-minute pass only; scored with fixed maps, not percentiles. */
-export const LIVE_FACTORS: FactorDef[] = [
-  { key: "price_vs_vwap", group: "momentum", label: "price vs VWAP" },
-  { key: "rsi_15m", group: "momentum", label: "15-minute RSI" },
-  { key: "rel_volume", group: "momentum", label: "relative volume" },
-];
+export const LIVE_FACTORS: FactorDef[] = BUILTIN_LIVE_FACTORS;
 
-export const GROUP_LABELS: Record<string, string> = {
-  valuation: "valuation",
-  quality: "quality",
-  growth: "growth",
-  earnings: "earnings",
-  analysts: "analyst view",
-  momentum: "momentum",
-};
+export const GROUP_LABELS: Record<string, string> = GROUP_NAMES;
+
+/** The active stock definition, and its factors with the definition's direction, ranking and include settings. */
+const activeStock = () => getActive("stock").definition;
 
 const FACTOR_BY_KEY = new Map([...FACTORS, ...LIVE_FACTORS].map((f) => [f.key, f]));
 /** Whether the factor is ranked against the whole market rather than the stock's sector. */
-export const isMarketWide = (key: string) => FACTOR_BY_KEY.get(key)?.market === true;
-export const factorLabel = (key: string) => FACTOR_BY_KEY.get(key)?.label ?? key;
+export const isMarketWide = (key: string) => activeStock().factors.find((f) => f.key === key)?.rankAgainst === "market" || (!activeStock().factors.some((f) => f.key === key) && FACTOR_BY_KEY.get(key)?.market === true);
+export const factorLabel = (key: string) => factorBase(key)?.label ?? key;
 
 /** FMP sector -> SPDR sector ETF. */
 export const SECTOR_ETF: Record<string, string> = {
@@ -96,10 +56,8 @@ export const SECTOR_ETF: Record<string, string> = {
   "Communication Services": "XLC",
 };
 
-const MIN_PEERS = 5; // sector peers with a value needed to score within the sector
 const FACTORS_KEPT_DAYS = 45; // older cards keep composite and groups, not the factor detail
 const CHANGE_DAYS = 28; // calendar days for "20 trading days ago"
-const STALE_BAR_DAYS = 7; // a stock whose last daily bar is older than this has no momentum
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS scorecards (
@@ -144,9 +102,9 @@ function rankValue(def: FactorDef, raw: number | null): number | null {
   return def.lowerBetter ? -raw : raw;
 }
 
-function buildDists(rows: Array<{ sector: string; raw: Record<string, number | null> }>): Dists {
+export function buildDists(specs: FactorDef[], rows: Array<{ sector: string; raw: Record<string, number | null> }>): Dists {
   const dists: Dists = new Map();
-  for (const def of FACTORS) {
+  for (const def of specs) {
     const all: number[] = [];
     const bySector = new Map<string, number[]>();
     for (const r of rows) {
@@ -185,12 +143,12 @@ export function percentile(sorted: number[], x: number): number {
   return Math.max(0, Math.min(100, (rank / (n - 1)) * 100));
 }
 
-function scoreFactor(dists: Dists, def: FactorDef, sector: string, raw: number | null): number | null {
+export function scoreFactor(dists: Dists, def: FactorDef, sector: string, raw: number | null, minPeers: number): number | null {
   const v = rankValue(def, raw);
   const d = dists.get(def.key);
   if (v === null || !d) return null;
   const peers = def.market ? undefined : d.bySector.get(sector);
-  const sample = peers && peers.length >= MIN_PEERS ? peers : d.all;
+  const sample = peers && peers.length >= minPeers ? peers : d.all;
   return sample.length === 0 ? null : percentile(sample, v);
 }
 
@@ -351,44 +309,52 @@ function pack(factors: FactorScore[]): Compact {
 
 function unpack(compact: Compact | null): FactorScore[] {
   if (!compact) return [];
+  const groupOf = new Map(activeStock().factors.map((f) => [f.key, f.group as string]));
   return [...FACTORS, ...LIVE_FACTORS]
     .filter((d) => compact[d.key])
-    .map((d) => ({ key: d.key, group: d.group, value: compact[d.key][0], score: compact[d.key][1], change: compact[d.key][2] }));
+    .map((d) => ({ key: d.key, group: groupOf.get(d.key) ?? d.group, value: compact[d.key][0], score: compact[d.key][1], change: compact[d.key][2] }));
 }
 
-function summarize(factors: FactorScore[], total: number): { groups: Record<string, number | null>; composite: number | null; coverage: number } {
+export function summarize(def: StockDefinition, factors: FactorScore[], total: number): { groups: Record<string, number | null>; composite: number | null; coverage: number } {
   const groups: Record<string, number | null> = {};
-  for (const g of Object.keys(STOCK_WEIGHTS)) {
+  const weights: Record<string, number> = def.groupWeights;
+  for (const g of Object.keys(weights)) {
     const scores = factors.filter((f) => f.group === g && f.score !== null).map((f) => f.score!);
     groups[g] = scores.length > 0 ? mean(scores) : null;
   }
-  return { groups, composite: composite(groups), coverage: factors.filter((f) => f.score !== null).length / total };
+  return { groups, composite: composite(groups, weights), coverage: total > 0 ? factors.filter((f) => f.score !== null).length / total : 0 };
 }
 
-type Cache = { builtAt: number; day: string; dists: Dists; bench: Bench };
+type Cache = { builtAt: number; day: string; version: string; dists: Dists; bench: Bench };
 let cache: Cache | null = null;
+onDefinitionChange((e) => {
+  if (e.kind === "stock") cache = null;
+});
 
 export type Computed = { cards: Scorecard[]; dists: Dists; bench: Bench };
 
 /** Scores every US stock with a profile. Pure reads; nothing is written. */
-export function computeScorecards(day: string): Computed {
+export function computeScorecards(day: string, def: StockDefinition = activeStock()): Computed {
   const funds = loadFundamentals(day);
   const bench = loadBench();
   const spyDays = loadDaily("SPY").days;
   const newest = spyDays[spyDays.length - 1] ?? day;
-  const oldestOk = addDays(newest, -STALE_BAR_DAYS);
+  const oldestOk = addDays(newest, -def.staleBarDays);
+  const specs = factorSpecs(def);
+  const active = specs.filter((f) => f.include);
 
   const rows = funds.map((f) => {
     const daily = loadDaily(f.symbol);
     const fresh = daily.days.length > 0 && daily.days[daily.days.length - 1] >= oldestOk;
     return { f, raw: { ...f.raw, ...(fresh ? momentumRaw(daily.closes, f.sector, bench) : {}) } };
   });
-  const dists = buildDists(rows.map((r) => ({ sector: r.f.sector, raw: r.raw })));
+  const dists = buildDists(specs, rows.map((r) => ({ sector: r.f.sector, raw: r.raw })));
   const asOf = new Date().toISOString();
+  const total = nightlyTotal(def);
   const cards = rows.map(({ f, raw }): Scorecard => {
-    const factors = FACTORS.map((def) => ({ key: def.key, group: def.group, value: raw[def.key] ?? null, score: scoreFactor(dists, def, f.sector, raw[def.key] ?? null), change: null }));
-    const s = summarize(factors, FACTORS.length);
-    return { symbol: f.symbol, asOf, sector: f.sector || null, industry: f.industry, composite: s.composite, groups: s.groups, factors, coverage: s.coverage, weightsVersion: STOCK_WEIGHTS_VERSION };
+    const factors = active.map((spec) => ({ key: spec.key, group: spec.group, value: raw[spec.key] ?? null, score: scoreFactor(dists, spec, f.sector, raw[spec.key] ?? null, def.minPeers), change: null }));
+    const s = summarize(def, factors, total);
+    return { symbol: f.symbol, asOf, sector: f.sector || null, industry: f.industry, composite: s.composite, groups: s.groups, factors, coverage: s.coverage, weightsVersion: def.version };
   });
   return { cards, dists, bench };
 }
@@ -422,7 +388,8 @@ export type NightlyResult = { day: string; scored: number; withComposite: number
 export function runNightlyScorecards(now = new Date()): NightlyResult {
   const started = Date.now();
   const day = nyClock(now).date;
-  const { cards, dists, bench } = computeScorecards(day);
+  const def = activeStock();
+  const { cards, dists, bench } = computeScorecards(day, def);
   addChanges(cards, day);
   db.transaction(() => {
     for (const c of cards) {
@@ -430,7 +397,7 @@ export function runNightlyScorecards(now = new Date()): NightlyResult {
     }
     db.prepare("UPDATE scorecards SET factors = NULL WHERE factors IS NOT NULL AND day < ?").run(addDays(day, -FACTORS_KEPT_DAYS));
   })();
-  cache = { builtAt: Date.now(), day, dists, bench };
+  cache = { builtAt: Date.now(), day, version: def.version, dists, bench };
   return { day, scored: cards.length, withComposite: cards.filter((c) => c.composite !== null).length, durationMs: Date.now() - started };
 }
 
@@ -491,6 +458,19 @@ export function compositeMap(symbols: string[]): Map<string, number> {
   for (const r of db.prepare("SELECT symbol, composite FROM scorecards_live WHERE composite IS NOT NULL AND symbol IN (SELECT value FROM json_each(?))").all(json) as Array<{ symbol: string; composite: number }>) {
     out.set(r.symbol, r.composite);
   }
+  return out;
+}
+
+/** Latest group scores per symbol: the live card if there is one, else the nightly. */
+export function groupScoreMap(symbols: string[]): Map<string, Record<string, number | null>> {
+  const out = new Map<string, Record<string, number | null>>();
+  if (symbols.length === 0) return out;
+  const json = JSON.stringify(symbols);
+  const day = latestScorecardDay();
+  if (day) {
+    for (const r of db.prepare("SELECT symbol, groups FROM scorecards WHERE day = ? AND symbol IN (SELECT value FROM json_each(?))").all(day, json) as Array<{ symbol: string; groups: string }>) out.set(r.symbol, JSON.parse(r.groups));
+  }
+  for (const r of db.prepare("SELECT symbol, groups FROM scorecards_live WHERE symbol IN (SELECT value FROM json_each(?))").all(json) as Array<{ symbol: string; groups: string }>) out.set(r.symbol, JSON.parse(r.groups));
   return out;
 }
 
@@ -579,7 +559,14 @@ function liveInputs(symbol: string, daily: Daily, today: string, now: Date): Liv
   };
 }
 
-export type IntradayResult = { scored: number; durationMs: number };
+export type IntradayResult = {
+  scored: number;
+  durationMs: number;
+  /** What the pass scored, with the nightly day and definition it used, for the Scan Lab's input snapshots. */
+  cards: Scorecard[];
+  nightlyDay: string | null;
+  definition: StockDefinition;
+};
 
 /**
  * The 15-minute pass for the universe: momentum recomputed with live prices
@@ -589,11 +576,15 @@ export type IntradayResult = { scored: number; durationMs: number };
 export function runIntradayStockScan(symbols: string[], now = new Date()): IntradayResult {
   const started = Date.now();
   const today = nyClock(now).date;
-  if (!cache || Date.now() - cache.builtAt > 24 * 3_600_000) {
-    const c = computeScorecards(today);
-    cache = { builtAt: Date.now(), day: today, dists: c.dists, bench: c.bench };
+  const def = activeStock();
+  if (!cache || cache.version !== def.version || Date.now() - cache.builtAt > 24 * 3_600_000) {
+    const c = computeScorecards(today, def);
+    cache = { builtAt: Date.now(), day: today, version: def.version, dists: c.dists, bench: c.bench };
   }
   const { dists } = cache;
+  const specs = factorSpecs(def);
+  const includedKeys = new Set(specs.filter((f) => f.include).map((f) => f.key));
+  const live = liveKeys(def);
   // Benchmarks move intraday too.
   const livePrice = (s: string, daily: Daily) => liveQuote(s, s, now)?.price ?? daily.closes[daily.closes.length - 1];
   const bench: Bench = { spy6m: null, etf3m: new Map() };
@@ -620,30 +611,31 @@ export function runIntradayStockScan(symbols: string[], now = new Date()): Intra
     const sector = row.sector ?? "";
     const daily = loadDaily(symbol);
     const li = liveInputs(symbol, daily, today, now);
-    const factors = unpack(JSON.parse(row.factors));
+    const factors = unpack(JSON.parse(row.factors)).filter((f) => includedKeys.has(f.key) || !specs.some((sp) => sp.key === f.key));
     const byKey = new Map(factors.map((f) => [f.key, f]));
     if (li.price !== null && daily.closes.length > 0) {
       const closes = daily.days[daily.days.length - 1] >= today ? [...daily.closes.slice(0, -1), li.price] : [...daily.closes, li.price];
       const raw = momentumRaw(closes, sector, bench);
-      for (const def of FACTORS.filter((f) => f.group === "momentum")) {
-        const f = byKey.get(def.key);
+      for (const spec of specs.filter((f) => f.include && f.group === "momentum")) {
+        const f = byKey.get(spec.key);
         if (!f) continue;
-        f.value = raw[def.key] ?? null;
-        f.score = scoreFactor(dists, def, sector, f.value);
+        f.value = raw[spec.key] ?? null;
+        f.score = scoreFactor(dists, spec, sector, f.value, def.minPeers);
         f.change = null;
       }
     }
     // Fixed maps: a 2% gap to VWAP spans the range, RSI is its own scale, volume only counts in the direction of the day.
     const up = li.prevClose !== null && li.price !== null ? li.price >= li.prevClose : true;
-    const extra: FactorScore[] = [
+    const allExtra: FactorScore[] = [
       { key: "price_vs_vwap", group: "momentum", value: round(li.vwapPct, 4), score: li.vwapPct === null ? null : clamp(50 + 25 * li.vwapPct), change: null },
       { key: "rsi_15m", group: "momentum", value: round(li.rsi15, 4), score: li.rsi15, change: null },
       { key: "rel_volume", group: "momentum", value: round(li.relVolume, 4), score: li.relVolume === null ? null : clamp(50 + (up ? 1 : -1) * (Math.min(li.relVolume, 3) - 1) * 25), change: null },
     ];
-    const all = [...factors.filter((f) => !extra.some((e) => e.key === f.key)), ...extra];
-    const s = summarize(all, FACTORS.length + LIVE_FACTORS.length);
+    const extra = allExtra.filter((e) => live.has(e.key));
+    const all = [...factors.filter((f) => !allExtra.some((e) => e.key === f.key)), ...extra];
+    const s = summarize(def, all, intradayTotal(def));
     out.push({
-      card: { symbol, asOf: now.toISOString(), sector: row.sector, industry: row.industry, composite: s.composite, groups: s.groups, factors: all, coverage: s.coverage, weightsVersion: STOCK_WEIGHTS_VERSION },
+      card: { symbol, asOf: now.toISOString(), sector: row.sector, industry: row.industry, composite: s.composite, groups: s.groups, factors: all, coverage: s.coverage, weightsVersion: def.version },
     });
   }
 
@@ -659,5 +651,5 @@ export function runIntradayStockScan(symbols: string[], now = new Date()): Intra
       put.run(c.symbol, c.asOf, c.sector, c.industry, round(c.composite, 5), JSON.stringify(c.groups), JSON.stringify(pack(c.factors)), round(c.coverage, 3), c.weightsVersion, rank.get(c.symbol) ?? null);
     }
   })();
-  return { scored: out.length, durationMs: Date.now() - started };
+  return { scored: out.length, durationMs: Date.now() - started, cards: out.map((o) => o.card), nightlyDay: day, definition: def };
 }

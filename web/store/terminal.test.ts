@@ -87,14 +87,17 @@ describe("persist migrate", () => {
       layout: [{ i: "w-chart", x: 0, y: 0, w: 7, h: 12 }],
     };
     const out = migrate(st, 1);
-    expect(out).toEqual({ activeSymbol: "IBM", watchlists: st.watchlists, watchlist: ["X"] });
+    expect(out).toEqual({ activeSymbol: "IBM", watchlists: st.watchlists, watchlist: ["X"], nearMissOpen: true });
     expect(out.widgets).toBeUndefined();
   });
 
-  it("version 2 state passes through, and null state is tolerated", () => {
+  it("version 2 state gains the near-miss group, open; version 3 state passes through; null is tolerated", () => {
     const st = { watchlists: [{ name: "A", symbols: [] }], watchlist: [] };
-    expect(migrate(st, 2)).toEqual(st);
-    expect(migrate(null, 0)).toEqual({});
+    expect(migrate(st, 2)).toEqual({ ...st, nearMissOpen: true });
+    const v3 = { ...st, nearMissOpen: false };
+    expect(migrate(v3, 3)).toEqual(v3);
+    expect(migrate(v3, 2)).toEqual(v3);
+    expect(migrate(null, 0)).toEqual({ nearMissOpen: true });
   });
 });
 

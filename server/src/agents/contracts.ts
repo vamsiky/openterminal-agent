@@ -1,6 +1,6 @@
 // Types shared by the agents (server), their routes and the web thesis view.
 
-export type AgentName = "macro" | "bull" | "bear" | "judge" | "brief" | "earnings";
+export type AgentName = "macro" | "bull" | "bear" | "judge" | "brief" | "earnings" | "scanlab";
 export type Evidence = { claim: string; source: string; asOf: string | null }; // source = tool name + section, e.g. "fundamentals:estimates"
 
 export type RegimeFlags = {
