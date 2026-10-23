@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { NUMERIC_UNITS, catalogField, type Scope } from "./catalog.js";
 import { condDepth, condKeys, condSchema, exprDepth, exprKeys, exprSchema, saySchema, FORMAT_NAMES, SAY_EXTRAS, type Cond, type Expr, type Say } from "./dsl.js";
+import { conditionBounds, expressionBounds } from "./units.js";
 import { BUILTIN_FACTORS, BUILTIN_LIVE_FACTORS, STOCK_GROUPS } from "./factors.js";
 
 // Option and stock definitions: zod shapes with a min and max on every number, plus the semantic
@@ -123,6 +124,7 @@ function checkSay(scope: Scope, say: Say | undefined, where: string, errors: str
 
 function checkCond(scope: Scope, c: Cond, where: string, errors: string[]): void {
   checkKeys(scope, condKeys(c), where, errors);
+  conditionBounds(scope, c, where, errors);
   if (condDepth(c) > MAX_DEPTH) errors.push(`${where}: condition nests deeper than ${MAX_DEPTH}`);
   const walk = (x: Cond) => {
     checkSay(scope, x.say, where, errors);
@@ -135,6 +137,7 @@ function checkCond(scope: Scope, c: Cond, where: string, errors: string[]): void
 
 function checkExpr(scope: Scope, e: Expr, where: string, errors: string[]): void {
   checkKeys(scope, exprKeys(e), where, errors);
+  expressionBounds(scope, e, where, errors);
   if (exprDepth(e) > MAX_DEPTH) errors.push(`${where}: expression nests deeper than ${MAX_DEPTH}`);
 }
 

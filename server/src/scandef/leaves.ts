@@ -1,7 +1,8 @@
 import { catalogField, type Scope } from "./catalog.js";
 import type { Cond, Expr } from "./dsl.js";
 import { GROUP_LABELS, STOCK_GROUPS } from "./factors.js";
-import { gateLine, opWords, penaltyLine, termLine, condText, exprUnit, factorNote } from "./render.js";
+import { gateLine, opWords, penaltyLine, termLine, condText, exprText, isGuard, isNote, factorNote } from "./render.js";
+import { boundsFor, exprUnit } from "./units.js";
 import { factorBase } from "./stock-engine.js";
 import { STRATEGY_KEYS, parseDefinition, type Definition, type StockDefinition } from "./schema.js";
 
@@ -29,31 +30,26 @@ export type Leaf = {
   item: { key: string; label: string; line?: string };
 };
 
-type Bounds = { min: number; max: number; step: number };
-const UNIT_BOUNDS: Record<string, Bounds> = {
-  score_0_100: { min: 0, max: 100, step: 1 },
-  score_pm100: { min: -100, max: 100, step: 1 },
-  pct: { min: -1000, max: 1000, step: 0.01 },
-  ratio: { min: -1000, max: 1000, step: 0.1 },
-  x: { min: -100, max: 100, step: 0.1 },
-  usd: { min: 0, max: 10_000_000, step: 1 },
-  days: { min: 0, max: 3650, step: 1 },
-  count: { min: 0, max: 1_000_000, step: 1 },
-  bool: { min: 0, max: 1, step: 1 },
-};
-const GENERIC: Bounds = { min: -1_000_000, max: 1_000_000, step: 0.1 };
-const boundsFor = (unit: string | undefined): Bounds => (unit ? (UNIT_BOUNDS[unit] ?? GENERIC) : GENERIC);
-
 type Walker = { scope: Scope; emit: (rel: string, relKey: string, leaf: Omit<Leaf, "path" | "key" | "section" | "item">) => void };
 
-function walkExpr(w: Walker, e: Expr, path: string, key: string, label: string, unit: string | undefined): void {
-  if (typeof e === "string") return;
-  if (typeof e === "number") {
-    const b = boundsFor(unit);
-    w.emit(path, key, { label, value: e, type: "number", unit: unit ?? "", ...b });
-    return;
-  }
-  const arr = (xs: Expr[], name: string) => xs.forEach((x, i) => walkExpr(w, x, `${path}.${name}[${i}]`, `${key}.${name}[${i}]`, label, unit));
+/** What a threshold is compared with, for its label: a field's name, "15-minute and hourly momentum average", "30-day IV / 20-day realised volatility". */
+function subjectLabel(scope: Scope, e: Expr): string {
+  if (typeof e === "string") return catalogField(scope, e)?.label ?? e;
+  if (typeof e === "object" && "ratio" in e) return e.ratio.map((x) => subjectLabel(scope, x)).join(" / ");
+  if (typeof e === "object" && "coalesce" in e) return subjectLabel(scope, e.coalesce[0]);
+  const t = exprText(scope, e).replace(/^the average of (.*)$/, "$1 average").replace(/^the (lower|higher|lowest|highest) of (.*)$/, "$2 ($1)");
+  return t[0].toUpperCase() + t.slice(1);
+}
+
+/** "Label · subject: what" - the subject is left out when it only repeats the label. */
+const named = (label: string, subject: string, what: string): string =>
+  subject.toLowerCase() === label.toLowerCase() || label.toLowerCase().endsWith(` · ${subject.toLowerCase()}`) ? `${label}: ${what}` : `${label} · ${subject}: ${what}`;
+
+// Numeric literals inside expressions (the 1 and 0 of an if, a coalesce default) and data guards ("known", "above 0")
+// inside an any or an if are structure, not settings: the form leaves them out.
+function walkExpr(w: Walker, e: Expr, path: string, key: string, label: string, prefix = ""): void {
+  if (typeof e === "string" || typeof e === "number") return;
+  const arr = (xs: Expr[], name: string) => xs.forEach((x, i) => walkExpr(w, x, `${path}.${name}[${i}]`, `${key}.${name}[${i}]`, label, prefix));
   if ("avg" in e) arr(e.avg, "avg");
   else if ("min" in e) arr(e.min, "min");
   else if ("max" in e) arr(e.max, "max");
@@ -61,16 +57,21 @@ function walkExpr(w: Walker, e: Expr, path: string, key: string, label: string, 
   else if ("diff" in e) arr(e.diff, "diff");
   else if ("ratio" in e) arr(e.ratio, "ratio");
   else if ("scale" in e) {
-    const u = exprUnit(w.scope, e.scale.expr) ?? unit;
+    const u = exprUnit(w.scope, e.scale.expr);
     const b = boundsFor(u);
-    w.emit(`${path}.scale.from`, `${key}.scale.from`, { label: `${label}: none at`, value: e.scale.from, type: "number", unit: u ?? "", ...b });
-    w.emit(`${path}.scale.to`, `${key}.scale.to`, { label: `${label}: full at`, value: e.scale.to, type: "number", unit: u ?? "", ...b });
-    walkExpr(w, e.scale.expr, `${path}.scale.expr`, `${key}.scale.expr`, label, u);
+    const subject = `${prefix}${subjectLabel(w.scope, e.scale.expr)}`;
+    w.emit(`${path}.scale.from`, `${key}.scale.from`, { label: named(label, subject, "none at"), value: e.scale.from, type: "number", unit: u ?? "", ...b });
+    w.emit(`${path}.scale.to`, `${key}.scale.to`, { label: named(label, subject, "full at"), value: e.scale.to, type: "number", unit: u ?? "", ...b });
+    walkExpr(w, e.scale.expr, `${path}.scale.expr`, `${key}.scale.expr`, label, prefix);
   } else if ("if" in e) {
-    walkCond(w, e.if.cond, `${path}.if.cond`, `${key}.if.cond`, label);
-    walkExpr(w, e.if.then, `${path}.if.then`, `${key}.if.then`, label, unit);
-    if (e.if.else !== undefined) walkExpr(w, e.if.else, `${path}.if.else`, `${key}.if.else`, label, unit);
-  } else arr(e.coalesce, "coalesce");
+    walkCond(w, e.if.cond, `${path}.if.cond`, `${key}.if.cond`, label, { prefix, guardZone: true });
+    walkExpr(w, e.if.then, `${path}.if.then`, `${key}.if.then`, label, prefix);
+    if (e.if.else !== undefined) walkExpr(w, e.if.else, `${path}.if.else`, `${key}.if.else`, label, prefix);
+  } else {
+    const first = e.coalesce[0];
+    const lead = typeof first === "object" && "scale" in first && typeof first.scale.expr === "string" ? first.scale.expr : null;
+    e.coalesce.forEach((x, i) => walkExpr(w, x, `${path}.coalesce[${i}]`, `${key}.coalesce[${i}]`, label, i > 0 && lead ? `with no ${subjectLabel(w.scope, lead)}: ` : prefix));
+  }
 }
 
 function condName(scope: Scope, c: Cond, fallback: string): string {
@@ -80,23 +81,37 @@ function condName(scope: Scope, c: Cond, fallback: string): string {
   return fallback;
 }
 
-function walkCond(w: Walker, c: Cond, path: string, key: string, label: string): void {
-  if ("all" in c) c.all.forEach((x, i) => walkCond(w, x, `${path}.all[${i}]`, `${key}.all[${i}]`, `${label} · ${condName(w.scope, x, String(i + 1))}`));
-  else if ("any" in c) c.any.forEach((x, i) => walkCond(w, x, `${path}.any[${i}]`, `${key}.any[${i}]`, `${label} · ${condName(w.scope, x, String(i + 1))}`));
-  else if ("not" in c) walkCond(w, c.not, `${path}.not`, `${key}.not`, label);
-  else if ("known" in c) walkExpr(w, c.known, `${path}.known`, `${key}.known`, label, undefined);
+type CondOpts = { prefix?: string; guardZone?: boolean; root?: boolean };
+
+function walkCond(w: Walker, c: Cond, path: string, key: string, label: string, o: CondOpts = {}): void {
+  const prefix = o.prefix ?? "";
+  if ("all" in c || "any" in c) {
+    const kids = "all" in c ? c.all : c.any;
+    const name = "all" in c ? "all" : "any";
+    // An alternative that starts "X is unknown" is the fallback for X.
+    const lead = "all" in c && kids[0] && "not" in kids[0] && "known" in kids[0].not ? kids[0].not.known : null;
+    const sub: CondOpts = { prefix: lead ? `with no ${subjectLabel(w.scope, lead)}: ` : prefix, guardZone: "any" in c ? true : o.guardZone };
+    kids.forEach((x, i) => {
+      if (o.guardZone && isGuard(x)) return;
+      walkCond(w, x, `${path}.${name}[${i}]`, `${key}.${name}[${i}]`, x.label ? `${label} · ${x.label}` : label, sub);
+    });
+  } else if ("not" in c) walkCond(w, c.not, `${path}.not`, `${key}.not`, label, { prefix, guardZone: o.guardZone });
+  else if ("known" in c) return;
   else {
     const unit = exprUnit(w.scope, c.expr);
+    const b = boundsFor(unit);
+    const subject = `${prefix}${subjectLabel(w.scope, c.expr)}`;
+    const nested = o.guardZone === true || o.prefix !== undefined;
+    const name = (what: string) => (nested ? named(label, subject, what) : `${label}: ${what}`);
     if (c.op === "between") {
-      const b = boundsFor(unit);
-      w.emit(`${path}.min`, `${key}.min`, { label: `${label}: from`, value: c.min, type: "number", unit: unit ?? "", ...b });
-      w.emit(`${path}.max`, `${key}.max`, { label: `${label}: to`, value: c.max, type: "number", unit: unit ?? "", ...b });
+      w.emit(`${path}.min`, `${key}.min`, { label: name("from"), value: c.min, type: "number", unit: unit ?? "", ...b });
+      w.emit(`${path}.max`, `${key}.max`, { label: name("to"), value: c.max, type: "number", unit: unit ?? "", ...b });
     } else if (typeof c.value === "boolean") {
-      w.emit(`${path}.value`, `${key}.value`, { label: `${label}: ${c.op === "==" ? "is" : "is not"}`, value: c.value, type: "boolean", unit: "bool" });
+      // "when this fact is true" is the rule itself, not a number to tune.
     } else {
-      w.emit(`${path}.value`, `${key}.value`, { label: `${label}: ${opWords(c.op)}`, value: c.value, type: "number", unit: unit ?? "", ...boundsFor(unit) });
+      w.emit(`${path}.value`, `${key}.value`, { label: name(opWords(c.op)), value: c.value, type: "number", unit: unit ?? "", ...b });
     }
-    walkExpr(w, c.expr, `${path}.expr`, `${key}.expr`, label, unit);
+    walkExpr(w, c.expr, `${path}.expr`, `${key}.expr`, label, prefix);
   }
 }
 
@@ -127,13 +142,14 @@ export function leavesOf(def: Definition): Leaf[] {
         const name = g.label ?? `Gate ${i + 1}`;
         const item = { key: `${base}.gates[${name}]`, label: `${sec} › Gate: ${name}`, line: gateLine(g) };
         const w: Walker = { scope: "option", emit: (rel, relKey, leaf) => at(sec, item, rel, relKey, leaf) };
-        walkCond(w, g, `${base}.gates[${i}]`, `${base}.gates[${name}]`, name);
+        walkCond(w, g, `${base}.gates[${i}]`, `${base}.gates[${name}]`, name, { root: true });
       });
       s.terms.forEach((t, i) => {
+        if (isNote(t)) return; // a note adds no points: nothing to set
         const item = { key: `${base}.terms[${t.label}]`, label: `${sec} › Score: ${t.label}`, line: termLine(t) };
         const w: Walker = { scope: "option", emit: (rel, relKey, leaf) => at(sec, item, rel, relKey, leaf) };
         w.emit(`${base}.terms[${i}].points`, `${base}.terms[${t.label}].points`, { label: `${t.label}: points`, value: t.points, type: "number", unit: "points", min: -100, max: 100, step: 1 });
-        if ("expr" in t) walkExpr(w, t.expr, `${base}.terms[${i}].expr`, `${base}.terms[${t.label}].expr`, t.label, undefined);
+        if ("expr" in t) walkExpr(w, t.expr, `${base}.terms[${i}].expr`, `${base}.terms[${t.label}].expr`, t.label);
         else walkCond(w, t.cond, `${base}.terms[${i}].cond`, `${base}.terms[${t.label}].cond`, t.label);
       });
       s.penalties.forEach((p, i) => {
