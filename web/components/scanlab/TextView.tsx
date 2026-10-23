@@ -4,7 +4,7 @@ import { Btn, H, NOTE } from "./ui";
 export type BuildState =
   | { phase: "idle" }
   | { phase: "running" }
-  | { phase: "failed"; message: string };
+  | { phase: "failed"; message: string; refused?: boolean };
 
 export default function TextView({
   kind, text, onText, edited, draftBuilt, build, onBuild, onDiscardEdits,
@@ -40,7 +40,12 @@ export default function TextView({
         <Btn disabled={!edited || running} onClick={onDiscardEdits}>Discard edits</Btn>
       </div>
       {running && <p role="status" className={`${NOTE} amber`}>Claude is reading your text…</p>}
-      {build.phase === "failed" && <p role="alert" className={`${NOTE} down`}>{build.message}</p>}
+      {build.phase === "failed" && (
+        <p role="alert" className={`${NOTE} ${build.refused ? "amber" : "down"}`}>
+          {build.refused ? "Claude can't build that. " : ""}{build.message}
+          {build.refused ? " Scan Lab only sells cash-secured puts and covered calls and buys calls; it never places orders." : ""}
+        </p>
+      )}
     </div>
   );
 }
