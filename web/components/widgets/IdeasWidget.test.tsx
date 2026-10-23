@@ -291,3 +291,47 @@ describe("IdeasWidget at narrow widths", () => {
     expect(container.innerHTML).not.toMatch(/min-w-\[(?:[4-9]\d\d|\d{4})px\]|min-width:\s*[4-9]\d\d/);
   });
 });
+
+describe("IdeasWidget near misses", () => {
+  const defs = { active: { id: 3, kind: "option", version: "option-v2", status: "active" }, draft: null, versions: [] };
+  const nearIdea = (id: number, symbol: string, score: number) => ({ ...optIdea, id, symbol, score, status: "near", reasons: ["Almost"] });
+  const serveNear = (nearMissFrom: number | null) => {
+    table = [
+      ["/api/scan/ideas?kind=option&status=near", () => reply({ asOf: null, ideas: [nearIdea(10, "ISRG", 63.5), nearIdea(11, "CART", 61.0)] })],
+      ["/api/scan/ideas", () => reply({ asOf: null, ideas: [optIdea] })],
+      ["/api/scan/defs/3", () => reply({ meta: defs.active, definition: { listing: { minScore: 65, nearMissFrom } }, text: "", form: [], diff: [] })],
+      ["/api/scan/defs", () => reply(defs)],
+      ["/api/scan/scorecard", () => reply(card)],
+    ];
+  };
+  beforeEach(() => useTerminal.setState({ nearMissOpen: true }));
+
+  it("shows the dimmed near-miss group open by default, and the definition version in the status line", async () => {
+    serveNear(55);
+    wrap();
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    const toggle = await screen.findByRole("button", { name: /Near misses · scored 55 to 65 · 2/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("ISRG")).toBeTruthy();
+    expect(document.querySelectorAll("tr[data-near]")).toHaveLength(2);
+    await waitFor(() => expect(screen.getByText(/definition option-v2/)).toBeTruthy());
+  });
+
+  it("collapses and remembers it in the store", async () => {
+    serveNear(55);
+    wrap();
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Near misses/ }));
+    expect(screen.queryByText("ISRG")).toBeNull();
+    expect(useTerminal.getState().nearMissOpen).toBe(false);
+  });
+
+  it("shows no group when the active definition keeps no near misses", async () => {
+    serveNear(null);
+    wrap();
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    await screen.findByText("AAPL");
+    expect(screen.queryByRole("button", { name: /Near misses/ })).toBeNull();
+    expect(calls.some((c) => c.url.includes("status=near"))).toBe(false);
+  });
+});

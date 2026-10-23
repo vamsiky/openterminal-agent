@@ -7,6 +7,7 @@ import { ago, contractLabel, GROUP_LABELS, strategyLabel, type Idea, type ScanRu
 import { useTerminal } from "../../store/terminal";
 import ErrorNote from "../ErrorNote";
 import Chip from "../ui/Chip";
+import { nearMissRange, nearMissTitle, type DefsResponse, type DefView } from "../../lib/scanlab";
 import { agentsLine, type AgentsStatus } from "../../lib/agents";
 import EarningsTab from "./EarningsTab";
 import BriefView from "./BriefView";
@@ -37,7 +38,7 @@ function streamText(o: NonNullable<ScanStatus["options"]>): string {
   return `${o.subscribed} contracts streamed`;
 }
 
-function StatusLine({ status, agents }: { status: ScanStatus | undefined; agents: AgentsStatus | undefined }) {
+function StatusLine({ status, agents, optionVersion }: { status: ScanStatus | undefined; agents: AgentsStatus | undefined; optionVersion?: string }) {
   if (!status && !agents) return null;
   const stock = lastRun(status?.runs, ["stock-nightly", "stock-intraday"]);
   const opt = lastRun(status?.runs, ["option-scan"]);
@@ -47,6 +48,7 @@ function StatusLine({ status, agents }: { status: ScanStatus | undefined; agents
       {agents && <>{agentsLine(agents)} · </>}
       Stock scan {ago(runTime(stock) || null)} · Options sweep {ago(runTime(opt) || null)} ·{" "}
       {o ? streamText(o) : "option stream n/a"}
+      {optionVersion ? ` · definition ${optionVersion}` : ""}
       {o?.lastError && o.inWindow !== false && o.limited == null ? <span className="down"> · {o.lastError}</span> : null}
     </div>
   );
@@ -106,6 +108,21 @@ export default function IdeasWidget() {
   const agents = useQuery({ queryKey: ["agents-status"], queryFn: () => apiGet<AgentsStatus>("/api/agents/status"), refetchInterval: 30_000, retry: false });
   const status = useQuery({ queryKey: ["scan-status"], queryFn: () => apiGet<ScanStatus>("/api/scan/status"), refetchInterval: 60_000 });
 
+  const optionDefs = useQuery({ queryKey: ["scanlab", "defs", "option"], queryFn: () => apiGet<DefsResponse>("/api/scan/defs?kind=option"), enabled: kind === "option", staleTime: 60_000, retry: false });
+  const optionDefId = optionDefs.data?.active?.id;
+  const optionDef = useQuery({ queryKey: ["scanlab", "def", optionDefId], queryFn: () => apiGet<DefView>(`/api/scan/defs/${optionDefId}`), enabled: optionDefId != null, staleTime: 60_000, retry: false });
+  const nearRange = nearMissRange(optionDef.data?.definition);
+  const nearMisses = useQuery({
+    queryKey: ["ideas", "near"],
+    queryFn: () => apiGet<IdeasResponse>("/api/scan/ideas?kind=option&status=near&limit=100"),
+    refetchInterval: REFRESH.option,
+    enabled: tab === "option" && nearRange !== null,
+    retry: false,
+  });
+  const nearOpen = useTerminal((s) => s.nearMissOpen);
+  const setNearOpen = useTerminal((s) => s.setNearMissOpen);
+  const near = kind === "option" && nearRange ? nearMisses.data?.ideas ?? [] : [];
+
   const rows = ideas.data?.ideas ?? [];
   const optionSymbols = kind === "option" ? [...new Set(rows.map((r) => r.symbol))] : [];
   const cards = useQueries({
@@ -134,7 +151,7 @@ export default function IdeasWidget() {
           <div className="p-2 dim">Loading ideas…</div>
         ) : ideas.error ? (
           <ErrorNote error={ideas.error} />
-        ) : rows.length === 0 ? (
+        ) : rows.length === 0 && near.length === 0 ? (
           <div className="p-2 dim">
             No {kind} ideas yet. {kind === "stock" ? "The stock screen runs at 07:00 and 16:30 ET." : "Option setups appear in market hours once the sweep has run."}
           </div>
@@ -198,11 +215,51 @@ export default function IdeasWidget() {
                   </Fragment>
                 );
               })}
+              {near.length > 0 && nearRange && (
+                <>
+                  <tr>
+                    <td colSpan={10} style={{ textAlign: "left", padding: 0 }}>
+                      <button
+                        className="flex w-full items-center gap-2 px-2 py-2 text-left"
+                        aria-expanded={nearOpen}
+                        onClick={() => setNearOpen(!nearOpen)}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path d={nearOpen ? "M6 9l6 6 6-6" : "M9 6l6 6-6 6"} />
+                        </svg>
+                        <span>{nearMissTitle(near.length, nearRange.from, nearRange.to)}</span>
+                        <span className="flex-1" />
+                        <span className="dim">not listed as ideas</span>
+                      </button>
+                    </td>
+                  </tr>
+                  {nearOpen && near.map((r) => {
+                    return (
+                      <tr key={`near-${r.id}`} data-near style={{ opacity: 0.62 }}>
+                        <td>{r.rank}</td>
+                        <td>
+                          <button className="amber" onClick={() => setActiveSymbol(r.symbol)} title={`Select ${r.symbol}`}>{r.symbol}</button>
+                        </td>
+                        <td>{fmt(r.score, 0)}</td>
+                        <td>{strategyLabel(r.strategy)}</td>
+                        <td>{contractLabel(r.contract)}</td>
+                        <td className="dim">—</td>
+                        <td className="dim">—</td>
+                        <td className="dim">—</td>
+                        <td style={{ textAlign: "left", whiteSpace: "nowrap", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}>
+                          <Reasons reasons={r.reasons} open={false} />
+                        </td>
+                        <td className="dim">{ago(r.firstSeen)}</td>
+                      </tr>
+                    );
+                  })}
+                </>
+              )}
             </tbody>
           </table>
         )}
       </div>
-      <StatusLine status={status.data} agents={agents.data} />
+      <StatusLine status={status.data} agents={agents.data} optionVersion={kind === "option" ? optionDefs.data?.active?.version : undefined} />
     </div>
   );
 }

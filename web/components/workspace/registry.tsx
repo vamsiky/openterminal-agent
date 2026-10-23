@@ -21,6 +21,7 @@ import TvWidget from "../widgets/TvWidget";
 import RecapWidget from "../widgets/RecapWidget";
 import DetailsWidget from "../widgets/DetailsWidget";
 import ResearchWidget from "../widgets/ResearchWidget";
+import ScanLabWidget from "../widgets/ScanLabWidget";
 
 export type WidgetGroup = "Markets" | "Research" | "Ideas & trading" | "Tools";
 
@@ -57,6 +58,7 @@ export const WIDGETS: Record<WidgetType, WidgetDef> = {
   options: def("Option chain", "M2 4.5h12M2 8h12M2 11.5h12M8 2.5v11", "Ideas & trading", "options", OptionsWidget, "7"),
   screener: def("Screener", "M2 3h12l-4.5 5.5V13l-3-1.5V8.5z", "Ideas & trading", "screener", ScreenerWidget, "4"),
   portfolio: def("Portfolio", "M2 5h12v8H2zM6 5V3h4v2M2 8.5h12", "Ideas & trading", "portfolio", PortfolioWidget, "8"),
+  scanlab: def("Scan Lab", "M6 2h4M6.8 2v4L3.5 12a1.2 1.2 0 0 0 1.1 1.8h6.8A1.2 1.2 0 0 0 12.5 12L9.2 6V2M5 10h6", "Ideas & trading", "scanlab", ScanLabWidget),
   ai: def("AI assist", "M8 2l1.4 3.6L13 7l-3.6 1.4L8 12l-1.4-3.6L3 7l3.6-1.4z", "Tools", "ai", AiWidget, "9"),
   tv: def("Live TV", "M2 3.5h12v8H2zM6 14h4M8 11.5V14", "Tools", "tv", TvWidget),
 };
@@ -64,7 +66,7 @@ export const WIDGETS: Record<WidgetType, WidgetDef> = {
 export const GROUPS: Array<{ name: WidgetGroup; types: WidgetType[] }> = [
   { name: "Markets", types: ["chart", "quote", "watchlist", "heatmap", "macro", "crypto"] },
   { name: "Research", types: ["details", "research", "news", "fundamentals", "insider", "calendar", "recap"] },
-  { name: "Ideas & trading", types: ["ideas", "options", "screener", "portfolio"] },
+  { name: "Ideas & trading", types: ["ideas", "scanlab", "options", "screener", "portfolio"] },
   { name: "Tools", types: ["ai", "tv"] },
 ];
 
