@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   barWidth, buildFailure, changesLine, draftNotes, formatItem, formEdits, ideaTag, inputValue, inRange, isEdited, isStale,
-  mergeFunnel, mergeSpread, nearMissRange, nearMissTitle, parseInput, rangeHint, seedText, usedKeys, versionStatus,
-  type DefMeta, type FormItem, type FormSection, type ResultIdea,
+  groupFunnel, mergeFunnel, mergeSpread, nearMissRange, nearMissTitle, parseInput, rangeHint, seedText, usedKeys, versionStatus,
+  type DefMeta, type FormItem, type RankChange, type FormSection, type ResultIdea,
 } from "./scanlab";
 
 const item = (over: Partial<FormItem> = {}): FormItem => ({ path: "listing.minScore", label: "Bar", value: 70, type: "number", min: 0, max: 100, step: 1, unit: "score_0_100", options: null, readOnly: false, note: null, ...over });
 const weight = item({ path: "groupWeights.valuation", value: 0.2, min: 0, max: 1, unit: "weight" });
-const idea = (symbol: string, strategy = "long_call", score = 70, rank = 1): ResultIdea => ({ symbol, strategy, score, rank });
+const idea = (symbol: string, strategy: ResultIdea["strategy"] = "long_call", score = 70, rank = 1): ResultIdea => ({ symbol, strategy, contract: null, score, rank });
 const meta = (over: Partial<DefMeta> = {}): DefMeta => ({ id: 1, kind: "option", version: "option-v2", status: "draft", parentId: 0, author: "claude", sourceText: "hello", notes: null, createdAt: "2026-10-23T12:00:00Z", promotedAt: null, ...over });
 
 describe("edited and stale detection", () => {
@@ -38,13 +38,27 @@ describe("bars", () => {
     expect(barWidth(5, 0)).toBe(0);
     expect(barWidth(500, 431)).toBe(100);
   });
-  it("lines the funnels up by step, keeping a step only one side has", () => {
-    const rows = mergeFunnel([{ step: "Scanned", count: 431 }, { step: "Listed", count: 2 }], [{ step: "Scanned", count: 431 }, { step: "Listed", count: 4 }, { step: "Near", count: 13 }]);
+  it("lines the funnels up by strategy and step, keeping a step only one side has", () => {
+    const rows = mergeFunnel(
+      [{ step: "With data", count: 431, strategy: "long_call" }, { step: "Listed", count: 2, strategy: "long_call" }],
+      [{ step: "With data", count: 431, strategy: "long_call" }, { step: "Listed", count: 4, strategy: "long_call" }, { step: "Listed", count: 5, strategy: "short_put" }],
+    );
     expect(rows).toEqual([
-      { step: "Scanned", live: 431, draft: 431 },
-      { step: "Listed", live: 2, draft: 4 },
-      { step: "Near", live: null, draft: 13 },
+      { strategy: "long_call", step: "With data", live: 431, draft: 431 },
+      { strategy: "long_call", step: "Listed", live: 2, draft: 4 },
+      { strategy: "short_put", step: "Listed", live: null, draft: 5 },
     ]);
+  });
+  it("does not merge a step two strategies share", () => {
+    const f = [{ step: "IV is rich", count: 112, strategy: "short_put" as const }, { step: "IV is rich", count: 40, strategy: "covered_call" as const }];
+    expect(mergeFunnel(f, f)).toHaveLength(2);
+  });
+  it("groups funnel rows by strategy, and stock steps into one headingless group", () => {
+    const groups = groupFunnel(mergeFunnel(undefined, [{ step: "With data", count: 5, strategy: "long_call" }, { step: "With data", count: 4, strategy: "short_put" }, { step: "Listed", count: 1, strategy: "long_call" }]));
+    expect(groups.map((g) => [g.strategy, g.rows.length])).toEqual([["long_call", 2], ["short_put", 1]]);
+    const stock = groupFunnel(mergeFunnel([{ step: "Scored", count: 408 }], [{ step: "Scored", count: 408 }, { step: "Top 25", count: 25 }]));
+    expect(stock).toHaveLength(1);
+    expect(stock[0].strategy).toBeNull();
   });
   it("lines the spread buckets up, counting a missing bucket as zero", () => {
     expect(mergeSpread([{ bucket: "70+", count: 3 }], [{ bucket: "70+", count: 3 }, { bucket: "65-70", count: 6 }])).toEqual([
@@ -57,7 +71,7 @@ describe("bars", () => {
 describe("compare", () => {
   it("tags new ideas and rank moves", () => {
     const added = [idea("D")];
-    const moves = [{ symbol: "MU", strategy: "long_call", from: 2, to: 5 }, { symbol: "ESTC", strategy: "long_call", from: 9, to: 4 }];
+    const moves: RankChange[] = [{ symbol: "MU", strategy: "long_call" as const, from: 2, to: 5, scoreFrom: 70, scoreTo: 69 }, { symbol: "ESTC", strategy: "long_call" as const, from: 9, to: 4, scoreFrom: 66, scoreTo: 71 }];
     expect(ideaTag(idea("D"), added, moves)).toEqual({ text: "new", tone: "new" });
     expect(ideaTag(idea("MU"), added, moves)).toEqual({ text: "↓3", tone: "down" });
     expect(ideaTag(idea("ESTC"), added, moves)).toEqual({ text: "↑5", tone: "up" });

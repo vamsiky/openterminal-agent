@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Fragment } from "react";
 import { fmt } from "../../lib/api";
-import { barWidth, changesLine, ideaTag, mergeFunnel, mergeSpread, type Compare, type ResultIdea } from "../../lib/scanlab";
+import { barWidth, changesLine, ideaTag, groupFunnel, mergeFunnel, mergeSpread, STRATEGY_HEADING, type Compare, type ResultIdea } from "../../lib/scanlab";
 import { contractLabel, strategyLabel } from "../../lib/ideas";
 import Segmented from "../ui/Segmented";
 import { H, NOTE, ROW, Tag } from "./ui";
@@ -12,7 +12,7 @@ function IdeaRow({ i, cols, tag, dim }: { i: ResultIdea; cols: string; tag?: { t
   return (
     <div className={`${ROW} ${cols} ${dim ? "opacity-60" : ""}`}>
       <span className="font-semibold font-[family-name:var(--font-mono)]">{i.symbol}</span>
-      <span className="dim truncate" title={i.contract ? contractLabel(i.contract) : undefined}>{strategyLabel(i.strategy as never)}</span>
+      <span className="dim truncate" title={i.contract ? contractLabel(i.contract) : undefined}>{strategyLabel(i.strategy)}</span>
       <span className="text-right font-[family-name:var(--font-mono)]">{fmt(i.score, 1)}</span>
       {tag && <Tag tone={tag.tone}>{tag.text}</Tag>}
     </div>
@@ -59,18 +59,25 @@ function Bars({ live, draft, max }: { live: number | null; draft: number | null;
 
 function Gates({ c }: { c: Compare }) {
   const rows = mergeFunnel(c.live.funnel, c.draft.funnel);
+  const groups = groupFunnel(rows);
   const max = Math.max(1, ...rows.flatMap((r) => [r.live ?? 0, r.draft ?? 0]));
+  const cols = "grid-cols-[minmax(0,1.6fr)_44px_44px_minmax(40px,1fr)]";
   return (
     <div className="border border-[var(--border)] rounded-md pb-1.5">
-      <div className={`${ROW} grid-cols-[minmax(0,1.6fr)_44px_44px_minmax(40px,1fr)] !border-t-0`}>
+      <div className={`${ROW} ${cols} !border-t-0`}>
         <span className={H}>Step</span><span className={`${H} text-right`}>Live</span><span className={`${H} text-right amber`}>Draft</span><span />
       </div>
-      {rows.map((r) => (
-        <div key={r.step} className={`${ROW} grid-cols-[minmax(0,1.6fr)_44px_44px_minmax(40px,1fr)]`}>
-          <span>{r.step}</span>
-          <span className="text-right dim font-[family-name:var(--font-mono)]">{r.live ?? "—"}</span>
-          <span className={`text-right font-[family-name:var(--font-mono)] ${r.live !== r.draft ? "amber" : "dim"}`}>{r.draft ?? "—"}</span>
-          <Bars live={r.live} draft={r.draft} max={max} />
+      {groups.map((g) => (
+        <div key={g.strategy ?? "all"} role="group" aria-label={g.strategy ? STRATEGY_HEADING[g.strategy] : "Steps"}>
+          {g.strategy && <div className="px-3 pt-2 pb-0.5 text-[11px] font-semibold">{STRATEGY_HEADING[g.strategy]}</div>}
+          {g.rows.map((r) => (
+            <div key={r.step} className={`${ROW} ${cols}`}>
+              <span>{r.step}</span>
+              <span className="text-right dim font-[family-name:var(--font-mono)]">{r.live ?? "—"}</span>
+              <span className={`text-right font-[family-name:var(--font-mono)] ${r.live !== r.draft ? "amber" : "dim"}`}>{r.draft ?? "—"}</span>
+              <Bars live={r.live} draft={r.draft} max={max} />
+            </div>
+          ))}
         </div>
       ))}
       {rows.length === 0 && <p className="dim px-3 py-1 m-0">No steps recorded.</p>}
