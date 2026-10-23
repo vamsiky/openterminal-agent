@@ -6,7 +6,9 @@ The scan engine scores stocks and option contracts on a schedule and keeps short
 
 Contents: [What it does](#what-it-does) · [Universe](#universe) · [Stock scorecard](#stock-scorecard) · [Options scorecard](#options-scorecard) · [Ideas](#ideas) · [Schedule](#schedule) · [API](#api) · [Settings](#settings) · [Limitations](#limitations)
 
-Related: [positions CSV](positions-csv.md) (what you hold) and [options data](options-data.md) (the option quotes, IV and metrics the options scorecard uses).
+Related: [positions CSV](positions-csv.md) (what you hold), [options data](options-data.md) (the option quotes, IV and metrics the options scorecard uses) and [Scan Lab](scan-lab.md) (the rules these scans run: setups, weights, thresholds and filters, which you can read, test and change).
+
+The numbers in this document are the values of the built-in definitions, `option-v1` and `stock-v2`. The active definition is the source of truth. Scan Lab shows the active version and any draft. Where a value below is named as a setting, it is read from the active definition at each scan.
 
 ## What it does
 
@@ -120,6 +122,8 @@ The sector ETF for each FMP sector:
 
 ### Composite and weights
 
+The weights below are the `stock-v2` values. They are part of the active stock definition; see [Scan Lab](scan-lab.md).
+
 The composite is the weighted mean of the group scores that have a value. A group with no data drops out, and the remaining weights are scaled to sum to 1.
 
 | Group | Weight (`stock-v2`) |
@@ -135,7 +139,7 @@ Every stored scorecard records its `weightsVersion`. Cards from before `stock-v2
 
 ### Coverage
 
-`coverage` is the share of the 26 stock factors that have a score, from 0 to 1. The stock ideas screen requires at least 0.6.
+`coverage` is the share of the 26 stock factors that have a score, from 0 to 1. The stock ideas screen requires at least 0.6 (the `stock-v2` value of `listing.minCoverage`).
 
 ### Change
 
@@ -179,6 +183,8 @@ A score needs at least 22 bars.
 
 ### Setups
 
+The setup rules below are the `option-v1` values. They are the gates, terms, penalties and bars of the active option definition. See [Scan Lab](scan-lab.md) for how to read and change them.
+
 The engine checks three setups for each underlying. Each setup gets a score from 0 to 100, rounded to one decimal, and a list of reasons in words. The option score is the best setup's score. The engine sells puts and calls, and buys calls. It never buys puts. It sells a call only against at least 100 shares you hold.
 
 **Buy call (`long_call`)**
@@ -217,6 +223,8 @@ Definitions used above:
 The score and reasons are stored in `option_scorecards`, which is replaced on each scan. A history of each scan is kept for 30 days in `option_scorecards_history`.
 
 ## Ideas
+
+The list sizes, thresholds and drop rules below are the `stock-v2` and `option-v1` listing settings. They change through [Scan Lab](scan-lab.md), not in code.
 
 Ideas are stored in the `ideas` table. Each idea has a `status` of `active` or `dropped`. Dropped ideas stay in the table. When an idea becomes active again after being dropped, its `firstSeen` is reset.
 
@@ -272,7 +280,7 @@ Jobs never overlap. Each run is recorded in `scan_runs`. If a run is still going
 
 ## API
 
-Every route is under `/api/scan` (or `/api/positions`) and needs the `x-api-key` header, as in the [research API](research-api.md#auth). Errors use 400 for bad input and 401 when the key is missing.
+Every route is under `/api/scan` (or `/api/positions`) and needs the `x-api-key` header, as in the [research API](research-api.md#auth). Errors use 400 for bad input and 401 when the key is missing. The Scan Lab routes (definitions, tests, builds and code requests) are in [Scan Lab API](scan-lab.md#api).
 
 ### Universe
 

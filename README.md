@@ -293,6 +293,14 @@ The API also scores the stock and option universe on a schedule and lists the be
 
 <br/>
 
+## Scan Lab
+
+Scan Lab is where you change the rules the scans use, without code. Each scan (options and stocks) runs a versioned definition: its gates, scoring terms, penalties, weights, thresholds and filters. You can read the rules as plain text, change them in words with Claude, test a draft on the last 10 trading days of stored scans or on live passes, and then promote it. Rollback is one step. Scan Lab never places orders and never edits code.
+
+- [Scan Lab](docs/scan-lab.md): the definitions and their versions, the data catalog, the text view, building a draft with Claude, the Settings form, replay, live shadow, promote and roll back, near misses, the API, and the limits.
+
+<br/>
+
 ## Analysis agents
 
 Agents read the scan engine's ideas and the terminal's data, weigh the case for and against each one, and write a thesis: a verdict (act, wait or pass), a plan and the evidence behind it. They also write a macro report each morning and evening and a pre-market brief. The agents never place orders and never size positions. They only sell puts, never buy them.
