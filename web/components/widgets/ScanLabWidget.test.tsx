@@ -149,6 +149,57 @@ describe("Text view and Build", () => {
   });
 });
 
+describe("Your edits", () => {
+  const notes = {
+    notes: ["Set the bar to 65."],
+    needsCode: [{ request: "Short-interest filter", reason: "Needs new data." }],
+    lines: [
+      { n: 1, action: "applied", explanation: "Bar is now 65.", text: "- List a setup when it scores 65 or more." },
+      { n: 2, action: "needs_code", explanation: "Short interest isn't in the catalog.", text: "- Skip names with short interest above 20%." },
+      { n: 3, action: "no_change", explanation: "Already how it works." },
+      { n: 4, action: "refused", explanation: "Spreads aren't allowed.", text: "- Add a spread." },
+    ],
+  };
+
+  it("lists one row per edited line with its tag, and requests code inline on the needs-code row", async () => {
+    serve({ draft: true });
+    on("/api/scan/defs/2", () => reply({ ...draftView(), meta: { ...draftMeta, notes } }));
+    on("/api/scan/code-requests", () => reply({ id: 1 }, 201));
+    wrap();
+    const list = within(await screen.findByRole("list", { name: "Your edits" }));
+    const rows = list.getAllByRole("listitem");
+    expect(rows).toHaveLength(4);
+    expect(within(rows[0]).getByText("applied")).toBeTruthy();
+    expect(within(rows[0]).getByText("- List a setup when it scores 65 or more.")).toBeTruthy();
+    expect(within(rows[1]).getByText("needs code")).toBeTruthy();
+    expect(within(rows[2]).getByText("Line 3")).toBeTruthy();
+    expect(rows[2].className).toMatch(/opacity-60/);
+    expect(within(rows[3]).getByText("refused")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Request as a code change" })).toHaveLength(1);
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Request as a code change" }));
+    await waitFor(() => expect(JSON.parse(String(posts("/api/scan/code-requests")[0].init?.body))).toMatchObject({ request: "Short-interest filter" }));
+  });
+
+  it("still works for older drafts without lines", async () => {
+    serve({ draft: true });
+    on("/api/scan/defs/2", () => reply({ ...draftView(), meta: { ...draftMeta, notes: { notes: ["Old note."], needsCode: [] } } }));
+    wrap();
+    expect(await screen.findByText("Old note.")).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Your edits" })).toBeNull();
+  });
+
+  it("says plainly when the text matches the active scan", async () => {
+    serve();
+    on("/api/scan/defs/build", (init) => (init?.method === "POST" ? reply({ jobId: "j4" }, 202) : reply({ status: "error", draftId: null, notes: [], needsCode: [], error: "Claude found nothing to change in your text.", refused: false, lines: [] })));
+    wrap();
+    const box = (await screen.findByLabelText(/Options scan as text/)) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: box.value + " " + "\n" } });
+    fireEvent.change(box, { target: { value: box.value.replace("70", "70.0") } });
+    fireEvent.click(screen.getByRole("button", { name: "Build draft with Claude" }));
+    expect(await screen.findByText("Your text matches the active scan; nothing to build.")).toBeTruthy();
+  });
+});
+
 describe("Refused builds", () => {
   it("reads a refusal as a refusal, with the fixed rules", async () => {
     serve();

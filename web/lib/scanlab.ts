@@ -47,7 +47,10 @@ export type DiffRow = { path: string; label: string; from: string | null; to: st
 export type FormEdit = { path: string; value: LeafValue };
 
 export type NeedsCode = { request: string; reason: string };
-export type DraftNotes = { notes: string[]; needsCode: NeedsCode[] };
+export type LineAction = "applied" | "needs_code" | "no_change" | "refused";
+/** What Claude did with one changed line of the text; `text` is shown when the server sends it. */
+export type LineOutcome = { n: number; action: LineAction; explanation: string; text?: string; change?: "added" | "removed" | "changed"; was?: string };
+export type DraftNotes = { notes: string[]; needsCode: NeedsCode[]; lines: LineOutcome[] };
 
 /** What one scored pass looks like: replay, each shadow pass and live all use it. */
 export type ResultIdea = { symbol: string; strategy: "buy" | OptionStrategy; contract: string | null; score: number; rank: number };
@@ -97,6 +100,7 @@ export type BuildJob = {
   error: string | null;
   /** The text asked for something the fixed rules forbid (long puts, spreads, naked calls, orders). */
   refused: boolean;
+  lines?: LineOutcome[];
 };
 
 export const KIND_LABEL: Record<ScanKind, string> = { stock: "Stock scan", option: "Options scan" };
@@ -300,6 +304,20 @@ export function buildFailure(status: number | undefined, message: string): Build
   return { kind: "other", message };
 }
 
+export const LINE_TAG: Record<LineAction, { text: string; tone: "chg" | "gone" | "kept" }> = {
+  applied: { text: "applied", tone: "chg" },
+  needs_code: { text: "needs code", tone: "gone" },
+  no_change: { text: "no change", tone: "kept" },
+  refused: { text: "refused", tone: "gone" },
+};
+
+/** A failed build job's error in plain words; "nothing to change" becomes a sentence about the text. */
+export function buildJobError(error: string | null): string {
+  if (!error) return "Claude couldn't build a draft from that text.";
+  if (/nothing to change|found nothing/i.test(error)) return "Your text matches the active scan; nothing to build.";
+  return error;
+}
+
 /** True when a build job is polled again. */
 export const buildRunning = (j: Pick<BuildJob, "status"> | undefined) => j?.status === "running";
 
@@ -310,6 +328,7 @@ export function draftNotes(meta: Pick<DefMeta, "notes"> | null): DraftNotes {
   const strings = Array.isArray(n) ? n : Array.isArray(o.notes) ? o.notes : [];
   const needs = Array.isArray(o.needsCode) ? o.needsCode : [];
   return {
+    lines: (Array.isArray(o.lines) ? o.lines : []).filter((l): l is LineOutcome => !!l && typeof (l as LineOutcome).n === "number" && ["applied", "needs_code", "no_change", "refused"].includes((l as LineOutcome).action)),
     notes: strings.filter((x): x is string => typeof x === "string"),
     needsCode: needs.filter((x): x is NeedsCode => !!x && typeof (x as NeedsCode).request === "string").map((x) => ({ request: x.request, reason: String(x.reason ?? "") })),
   };

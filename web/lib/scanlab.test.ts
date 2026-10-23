@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  barWidth, buildFailure, changesLine, draftNotes, formatItem, formEdits, ideaTag, inputValue, inRange, isEdited, isStale,
+  barWidth, buildFailure, buildJobError, changesLine, draftNotes, formatItem, formEdits, ideaTag, inputValue, inRange, isEdited, isStale,
   groupFunnel, mergeFunnel, mergeSpread, nearMissRange, nearMissTitle, parseInput, rangeHint, seedText, usedKeys, versionStatus,
   type DefMeta, type FormItem, type RankChange, type FormSection, type ResultIdea,
 } from "./scanlab";
@@ -134,8 +134,18 @@ describe("builds and versions", () => {
   it("reads saved notes in either shape", () => {
     expect(draftNotes(meta({ notes: ["a", "b"] })).notes).toEqual(["a", "b"]);
     expect(draftNotes(meta({ notes: { notes: ["a"], needsCode: [{ request: "short interest", reason: "not in the catalog" }] } })).needsCode).toHaveLength(1);
-    expect(draftNotes(meta({ notes: 5 }))).toEqual({ notes: [], needsCode: [] });
-    expect(draftNotes(null)).toEqual({ notes: [], needsCode: [] });
+    expect(draftNotes(meta({ notes: 5 }))).toEqual({ notes: [], needsCode: [], lines: [] });
+    expect(draftNotes(null)).toEqual({ notes: [], needsCode: [], lines: [] });
+  });
+  it("reads per-line outcomes, dropping malformed ones; older notes have none", () => {
+    const n = draftNotes(meta({ notes: { notes: [], needsCode: [], lines: [{ n: 1, action: "applied", explanation: "x" }, { n: 2, action: "bogus", explanation: "y" }, null] } }));
+    expect(n.lines.map((l) => l.n)).toEqual([1]);
+    expect(draftNotes(meta({ notes: { notes: ["a"], needsCode: [] } })).lines).toEqual([]);
+  });
+  it("turns the nothing-to-change error into a sentence about the text", () => {
+    expect(buildJobError("Claude found nothing to change in your text.")).toBe("Your text matches the active scan; nothing to build.");
+    expect(buildJobError("Weights must add up to 1.")).toBe("Weights must add up to 1.");
+    expect(buildJobError(null)).toMatch(/couldn't build/);
   });
   it("words the version status", () => {
     const now = Date.parse("2026-10-23T18:00:00Z");
