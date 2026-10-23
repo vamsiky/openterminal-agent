@@ -17,6 +17,8 @@ Related: [scan engine](scan-engine.md) (the scorecards and ideas that use these 
 
 Streaming every option is not possible. The OPRA feed takes at most 1,000 quote subscriptions (`OPTIONS_STREAM_MAX`), so the stream follows a fixed selection rule. The selection is rebuilt after every sweep.
 
+Alpaca can answer a subscribe with 405 "symbol limit exceeded" and then rejects the whole message, leaving earlier subscriptions unchanged. The stream treats Alpaca's `subscription` reply as the truth for what is streamed, and on a 405 keeps the confirmed contracts, logs `[options] Alpaca symbol limit: streaming N of M contracts`, and caps later selections at N (the first N, so held options and top-ranked underlyings stay). It does not reconnect; the next connection tries the full list once. `/api/scan/status` reports `options.subscribed` (confirmed), `targets`, `limited` (N, or null) and `inWindow` (whether the stream should be connected now). The Ideas status line shows "option stream closed (market hours only)" outside the window and "N of M contracts streamed (Alpaca limit)" when limited.
+
 **Priority order of underlyings:**
 
 1. The underlyings of your holdings, stocks and options alike.
