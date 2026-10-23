@@ -64,7 +64,11 @@ const meta = (r: Row): DefMeta => ({
   id: r.id, kind: r.kind, version: r.version, status: r.status, parentId: r.parent_id, author: r.author,
   sourceText: r.source_text, notes: r.notes ? JSON.parse(r.notes) : null, createdAt: r.created_at, promotedAt: r.promoted_at,
 });
-const record = (r: Row): DefRecord => ({ ...meta(r), definition: JSON.parse(r.definition) as Definition, text: r.text });
+/** The text is always rendered from the definition at read time; the stored `text` column is only a record of what was shown when the row was written. */
+const record = (r: Row): DefRecord => {
+  const definition = JSON.parse(r.definition) as Definition;
+  return { ...meta(r), definition, text: render(definition) };
+};
 
 export class DefinitionError extends Error {
   constructor(public errors: string[]) {

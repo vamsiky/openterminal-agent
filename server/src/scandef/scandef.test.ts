@@ -307,6 +307,17 @@ describe("the store", () => {
     expect(sd.getActive("option").definition).toEqual(sd.OPTION_V1_DEF);
   });
 
+  it("serves text rendered from the definition, not the stored column", () => {
+    const active = sd.getActive("option");
+    db.prepare("UPDATE scan_definitions SET text = 'OLD WORDING' WHERE id = ?").run(active.id);
+    const draft = sd.createDraft({ kind: "stock", definition: sd.STOCK_V2_DEF, author: "form", sourceText: "my edited text" });
+    db.prepare("UPDATE scan_definitions SET text = 'OLD WORDING' WHERE id = ?").run(draft.id);
+    expect(sd.getById(active.id)?.text).toBe(sd.render(sd.OPTION_V1_DEF));
+    expect(sd.getDraft("stock")?.text).toBe(sd.render(draft.definition));
+    expect(sd.getById(draft.id)?.sourceText).toBe("my edited text"); // source_text stays as stored
+    sd.setStatus(draft.id, "discarded");
+  });
+
   it("creates drafts with the next version, replacing the open one, and promotes and rolls back", () => {
     const events: string[] = [];
     sd.onDefinitionChange((e) => events.push(`${e.kind}:${e.event}`));
@@ -346,7 +357,7 @@ describe("the store", () => {
     expect(() => sd.createDraft({ kind: "stock", baseId: sd.getActive("option").id, definition: sd.STOCK_V2_DEF, author: "form" })).toThrow(/no stock definition/);
     expect(() => sd.setStatus(sd.getActive("option").id, "discarded")).toThrow(/cannot move/);
     const d = sd.createDraft({ kind: "stock", definition: sd.STOCK_V2_DEF, author: "form" });
-    expect(d.version).toBe("stock-v3");
+    expect(d.version).toBe("stock-v4"); // v3 went to the draft in the text test
     sd.setStatus(d.id, "discarded");
     expect(sd.getById(d.id)?.status).toBe("discarded");
     expect(sd.getActive("stock").version).toBe("stock-v2");
