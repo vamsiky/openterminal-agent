@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiPost, ApiError } from "../../lib/api";
 import {
-  buildFailure, draftNotes, isEdited, isStale, KIND_LABEL, SCHEDULE, seedText,
+  buildFailure, buildJobError, draftNotes, isEdited, isStale, KIND_LABEL, SCHEDULE, seedText,
   type DefMeta, type FormEdit, type ScanKind,
 } from "../../lib/scanlab";
 import ErrorNote from "../ErrorNote";
@@ -84,7 +84,7 @@ export default function ScanLabWidget() {
       : build.error
         ? { phase: "failed", message: buildFailure(build.error instanceof ApiError ? build.error.status : undefined, build.error.message).message }
         : jobStatus === "error"
-          ? { phase: "failed", message: job.data?.error ?? "Claude couldn't build a draft from that text.", refused: job.data?.refused === true }
+          ? { phase: "failed", message: buildJobError(job.data?.error ?? null), refused: job.data?.refused === true }
           : job.error
             ? { phase: "failed", message: `Lost track of the build: ${job.error.message}` }
             : { phase: "idle" };
@@ -92,6 +92,7 @@ export default function ScanLabWidget() {
   const saved = draftNotes(draftView.data?.meta ?? draft);
   const fromJob = job.data?.status === "done" && draft && job.data.draftId === draft.id;
   const notes = fromJob && job.data?.notes ? job.data.notes : saved.notes;
+  const lines = fromJob && job.data?.lines?.length ? job.data.lines : saved.lines;
   const needsCode = fromJob && job.data?.needsCode ? job.data.needsCode : saved.needsCode;
 
   const draftTested = !!draftView.data?.tests?.replay;
@@ -186,6 +187,7 @@ export default function ScanLabWidget() {
               error={draftView.error}
               notes={notes}
               needsCode={needsCode}
+              lines={lines}
               stale={stale}
               confirm={confirm && !!draft}
               onConfirm={setConfirm}

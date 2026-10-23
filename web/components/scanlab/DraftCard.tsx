@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiPost } from "../../lib/api";
 import {
-  DIFF_TAG, onlyInDraft, passTime, type DefMeta, type DefView, type DiffRow, type NeedsCode, type ScanKind,
+  DIFF_TAG, LINE_TAG, onlyInDraft, passTime, type DefMeta, type DefView, type DiffRow, type LineOutcome, type NeedsCode, type ScanKind,
 } from "../../lib/scanlab";
 import Segmented from "../ui/Segmented";
 import ErrorNote from "../ErrorNote";
@@ -34,7 +34,7 @@ function Diff({ rows }: { rows: DiffRow[] }) {
 }
 
 export default function DraftCard({
-  kind, active, draft, view, loading, error, notes, needsCode, stale, confirm, onConfirm, onPromoted, promotedMessage, onRollback, rollbackName,
+  kind, active, draft, view, loading, error, notes, needsCode, lines, stale, confirm, onConfirm, onPromoted, promotedMessage, onRollback, rollbackName,
 }: {
   kind: ScanKind;
   active: DefMeta | null;
@@ -44,6 +44,7 @@ export default function DraftCard({
   error: unknown;
   notes: string[];
   needsCode: NeedsCode[];
+  lines: LineOutcome[];
   stale: boolean;
   confirm: boolean;
   onConfirm: (open: boolean) => void;
@@ -101,6 +102,22 @@ export default function DraftCard({
     }
   };
 
+  // needs_code lines take the code requests in order; any left over are listed on their own.
+  const needsCodeIndex = new Map<number, number>();
+  lines.filter((l) => l.action === "needs_code").forEach((l, k) => { if (k < needsCode.length) needsCodeIndex.set(l.n, k); });
+  const usedRequests = new Set(needsCodeIndex.values());
+
+  const RequestButton = ({ n, i }: { n: NeedsCode; i: number }) => (
+    <>
+      {requested[i] === "sent" ? (
+        <span className="up text-[12px]">Requested</span>
+      ) : (
+        <Btn disabled={requested[i] === "sending"} onClick={() => void requestCode(n, i)}>Request as a code change</Btn>
+      )}
+      {requested[i] && requested[i] !== "sent" && requested[i] !== "sending" && <span role="alert" className="down text-[11px] basis-full">{requested[i]}</span>}
+    </>
+  );
+
   const status = !draft ? "" : stale ? "out of date" : hasReplay ? "tested by replay" : "not tested yet";
 
   return (
@@ -134,21 +151,37 @@ export default function DraftCard({
           {stale && <p className={`${NOTE} amber mx-3.5 m-0`}>The text changed after this draft was built. Build again to update it.</p>}
           <Diff rows={view.diff} />
 
-          {(notes.length > 0 || needsCode.length > 0) && (
+          {(notes.length > 0 || needsCode.length > 0 || lines.length > 0) && (
             <div className="px-3.5 flex flex-col gap-2">
               <h3 className={H}>Claude&apos;s notes</h3>
               {notes.map((n, i) => <p key={i} className={`${NOTE} m-0`}>{n}</p>)}
-              {needsCode.map((n, i) => (
+              {lines.length > 0 && (
+                <div role="list" aria-label="Your edits" className="flex flex-col gap-1.5">
+                  <h4 className={`${H} mt-1`}>Your edits</h4>
+                  {lines.map((l) => {
+                    const idx = needsCodeIndex.get(l.n);
+                    const req = idx === undefined ? undefined : needsCode[idx];
+                    return (
+                      <div key={l.n} role="listitem" className={`flex gap-2.5 items-start flex-wrap ${l.action === "no_change" ? "opacity-60" : ""}`}>
+                        <Tag tone={LINE_TAG[l.action].tone}>{LINE_TAG[l.action].text}</Tag>
+                        <div className="flex-1 basis-[240px] min-w-0">
+                          {l.section && <div className={`${H} !text-[9.5px]`}>{l.section}</div>}
+                          {l.kind === "changed" && l.before && <div className="dim font-[family-name:var(--font-mono)] text-[11px] break-words line-through">{l.before}</div>}
+                          <div className={`font-[family-name:var(--font-mono)] text-[11.5px] break-words ${l.kind === "removed" ? "line-through dim" : ""}`}>{l.text || `Line ${l.n}`}</div>
+                          {l.explanation && <div className={`${NOTE} dim`}>{l.explanation}</div>}
+                        </div>
+                        {req && idx !== undefined && <RequestButton n={req} i={idx} />}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {needsCode.map((n, i) => (usedRequests.has(i) ? null : (
                 <div key={`c${i}`} className="flex gap-2.5 items-start flex-wrap">
                   <p className={`${NOTE} m-0 flex-1 basis-[240px]`}>{n.request}{n.reason ? ` ${n.reason}` : ""}</p>
-                  {requested[i] === "sent" ? (
-                    <span className="up text-[12px]">Requested</span>
-                  ) : (
-                    <Btn disabled={requested[i] === "sending"} onClick={() => void requestCode(n, i)}>Request as a code change</Btn>
-                  )}
-                  {requested[i] && requested[i] !== "sent" && requested[i] !== "sending" && <span role="alert" className="down text-[11px] basis-full">{requested[i]}</span>}
+                  <RequestButton n={n} i={i} />
                 </div>
-              ))}
+              )))}
             </div>
           )}
 
