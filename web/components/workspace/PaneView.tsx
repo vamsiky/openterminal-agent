@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { SNAP_PRESETS, HANDLES, type Handle, type Rect } from "../../lib/layout";
 import { useTerminal, type Pane } from "../../store/terminal";
 import DropdownMenu from "../ui/DropdownMenu";
@@ -39,6 +40,30 @@ export default function PaneView({
   const popOut = useTerminal((s) => s.popOut);
 
   const active = pane.tabs.find((t) => t.id === pane.activeTab) ?? pane.tabs[0];
+  const strip = useRef<HTMLDivElement>(null);
+
+  // Wheel / trackpad scroll the tab strip sideways (React's onWheel is passive, so attach natively).
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaX !== 0 || e.deltaY === 0) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Keep the active tab visible.
+  useEffect(() => {
+    const el = strip.current;
+    const tab = el?.querySelector<HTMLElement>('[aria-selected="true"]')?.parentElement;
+    if (!el || !tab) return;
+    if (tab.offsetLeft < el.scrollLeft) el.scrollLeft = tab.offsetLeft;
+    else if (tab.offsetLeft + tab.offsetWidth > el.scrollLeft + el.clientWidth)
+      el.scrollLeft = tab.offsetLeft + tab.offsetWidth - el.clientWidth;
+  }, [active?.id, pane.tabs.length]);
   const activeDef = active ? WIDGETS[active.type] : undefined;
   const maximized = !!pane.restore;
   const title = active ? `${activeDef?.label ?? active.type} pane` : "Empty pane";
@@ -59,7 +84,7 @@ export default function PaneView({
       }}
     >
       <div className="pane-head">
-        <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto py-0.5" role="tablist">
+        <div ref={strip} className="tab-strip flex items-center gap-1.5 min-w-0 overflow-x-auto py-0.5" role="tablist">
           {pane.tabs.map((t) => {
             const def = WIDGETS[t.type];
             return (

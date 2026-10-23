@@ -35,6 +35,16 @@ describe("Workspace", () => {
     expect(useTerminal.getState().focusedPane).toBe("p-quote");
   });
 
+  it("scrolls the tab strip sideways on wheel", () => {
+    const { container } = wrap(<Workspace />);
+    const strip = container.querySelector('[data-pane="p-research"] .tab-strip') as HTMLElement;
+    Object.defineProperty(strip, "scrollLeft", { value: 0, writable: true, configurable: true });
+    const ev = new WheelEvent("wheel", { deltaY: 40, cancelable: true });
+    strip.dispatchEvent(ev);
+    expect(strip.scrollLeft).toBe(40);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
   it("closing a tab removes it, and the tab strip shows each tab as its own control", () => {
     wrap(<Workspace />);
     expect(screen.getAllByRole("tab").length).toBe(5);

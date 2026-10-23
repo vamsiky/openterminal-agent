@@ -616,3 +616,10 @@ a:hover {
   background: #1c1408;
   box-shadow: inset 2px 0 var(--amber);
 }
+
+.tab-strip {
+  scrollbar-width: none;
+}
+.tab-strip::-webkit-scrollbar {
+  display: none;
+}
