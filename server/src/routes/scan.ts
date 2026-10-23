@@ -4,11 +4,13 @@ import { listIdeas, ideasAsOf } from "../quant/ideas.js";
 import { JOB_NAMES, lastRuns, quantDeps, runJob, type JobName } from "../quant/jobs.js";
 import { getOptionScorecard } from "../quant/option-score.js";
 import { getLiveScorecard, getStockScorecard } from "../quant/stock-score.js";
+import { scanBuildRouter } from "./scan-build.js";
 import { scanDefsRouter } from "./scan-defs.js";
 import { getUniverseSettings, listSectors, resolveUniverse, setUniverseSettings, universeSchema } from "../quant/universe.js";
 
 export const scanRouter = Router();
 scanRouter.use(scanDefsRouter);
+scanRouter.use(scanBuildRouter);
 
 // The scan engine's read side (quant/). Mounted behind requireApiKey.
 
