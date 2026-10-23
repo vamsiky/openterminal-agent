@@ -40,6 +40,7 @@ function marketStateNY(): { label: string; open: boolean } {
 export default function TopBar() {
   const setCommandOpen = useTerminal((s) => s.setCommandOpen);
   const activeSymbol = useTerminal((s) => s.activeSymbol);
+  const tilePanes = useTerminal((s) => s.tilePanes);
   const { data: status } = useQuery({
     queryKey: ["status"],
     queryFn: () => apiGet<Status>("/api/status"),
@@ -62,6 +63,9 @@ export default function TopBar() {
         onClick={() => setCommandOpen(true)}
       >
         {activeSymbol} — search symbol… <span className="float-right">⌘K</span>
+      </button>
+      <button className="chip" title="Arrange all panes in an even grid" onClick={tilePanes}>
+        Tile panes
       </button>
       <span className="dim ml-auto">
         feeds:{" "}

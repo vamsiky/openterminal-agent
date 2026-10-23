@@ -1,8 +1,9 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
+import { syncStoreAcrossWindows } from "../store/terminal";
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [client] = useState(
@@ -18,5 +19,6 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         },
       })
   );
+  useEffect(() => syncStoreAcrossWindows(), []);
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
