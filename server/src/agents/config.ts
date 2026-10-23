@@ -24,9 +24,10 @@ export const CAP_ENV: Record<AgentName, [env: string, fallback: number]> = {
   judge: ["AGENTS_CAP_JUDGE_USD", 0.4],
   brief: ["AGENTS_CAP_BRIEF_USD", 0.15],
   earnings: ["EARNINGS_REVIEW_MAX_USD", 0.15],
+  scanlab: ["AGENTS_CAP_SCANLAB_USD", 0.2],
 };
 export const capUsd = (agent: AgentName): number => num(CAP_ENV[agent][0], CAP_ENV[agent][1]);
 /** What one full analysis (bull, bear, judge) may cost at most. */
 export const analysisCapUsd = (): number => capUsd("bull") + capUsd("bear") + capUsd("judge");
 
-export const MAX_TURNS: Record<AgentName, number> = { macro: 12, bull: 12, bear: 12, judge: 3, brief: 3, earnings: 6 };
+export const MAX_TURNS: Record<AgentName, number> = { macro: 12, bull: 12, bear: 12, judge: 3, brief: 3, earnings: 6, scanlab: 2 };
