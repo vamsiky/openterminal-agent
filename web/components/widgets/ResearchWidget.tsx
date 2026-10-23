@@ -81,7 +81,7 @@ function SetupCard({ symbol }: { symbol: string }) {
             const s = setups.find((x) => x.horizon === h);
             return s ? [{ k: label, v: `${fmt(s.score, 0)} · ${s.verdict}`, cls: verdictCls(s.verdict) }] : [];
           }),
-          ...(u.time ? [{ k: "Reports", v: TIME_LABEL[u.time] }] : []),
+          ...(u.time ? [{ k: "Report time", v: TIME_LABEL[u.time] }] : []),
         ]}
       />
       {u.epsEstimate != null && (
