@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SNAP_PRESETS, HANDLES, type Handle, type Rect } from "../../lib/layout";
 import { useTerminal, type Pane } from "../../store/terminal";
 import DropdownMenu from "../ui/DropdownMenu";
@@ -41,6 +41,31 @@ export default function PaneView({
 
   const active = pane.tabs.find((t) => t.id === pane.activeTab) ?? pane.tabs[0];
   const strip = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState({ left: false, right: false });
+
+  const measure = () => {
+    const el = strip.current;
+    if (!el) return;
+    const left = el.scrollLeft > 1;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setOverflow((o) => (o.left === left && o.right === right ? o : { left, right }));
+  };
+  const nudge = (dir: -1 | 1) => {
+    const el = strip.current;
+    if (el) el.scrollBy({ left: dir * Math.max(80, el.clientWidth * 0.6), behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return;
+    el.addEventListener("scroll", measure, { passive: true });
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      ro?.disconnect();
+    };
+  }, []);
 
   // Wheel / trackpad scroll the tab strip sideways (React's onWheel is passive, so attach natively).
   useEffect(() => {
@@ -63,6 +88,7 @@ export default function PaneView({
     if (tab.offsetLeft < el.scrollLeft) el.scrollLeft = tab.offsetLeft;
     else if (tab.offsetLeft + tab.offsetWidth > el.scrollLeft + el.clientWidth)
       el.scrollLeft = tab.offsetLeft + tab.offsetWidth - el.clientWidth;
+    measure();
   }, [active?.id, pane.tabs.length]);
   const activeDef = active ? WIDGETS[active.type] : undefined;
   const maximized = !!pane.restore;
@@ -84,6 +110,10 @@ export default function PaneView({
       }}
     >
       <div className="pane-head">
+        <div className="relative flex items-center min-w-0">
+        {overflow.left && (
+          <button className="tab-nav left-0" aria-label="Scroll tabs left" onClick={() => nudge(-1)}>‹</button>
+        )}
         <div ref={strip} className="tab-strip flex items-center gap-1.5 min-w-0 overflow-x-auto py-0.5" role="tablist">
           {pane.tabs.map((t) => {
             const def = WIDGETS[t.type];
@@ -101,6 +131,10 @@ export default function PaneView({
               </div>
             );
           })}
+        </div>
+        {overflow.right && (
+          <button className="tab-nav right-0 !justify-end" aria-label="Scroll tabs right" onClick={() => nudge(1)}>›</button>
+        )}
         </div>
         <button
           className="grab"

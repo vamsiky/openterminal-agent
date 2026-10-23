@@ -6,12 +6,13 @@
 export type PillTab = { id: string; label: string; count?: number };
 
 export default function PillTabs({
-  tabs, value, onChange, ariaLabel, className = "",
+  tabs, value, onChange, ariaLabel, size = "md", className = "",
 }: {
   tabs: PillTab[];
   value: string;
   onChange: (id: string) => void;
   ariaLabel?: string;
+  size?: "md" | "sm";
   className?: string;
 }) {
   return (
@@ -21,7 +22,7 @@ export default function PillTabs({
           key={t.id}
           role="tab"
           aria-selected={t.id === value}
-          className={`dtab ${t.id === value ? "on" : ""}`}
+          className={`dtab ${size === "sm" ? "sm" : ""} ${t.id === value ? "on" : ""}`}
           onClick={() => onChange(t.id)}
         >
           {t.label}

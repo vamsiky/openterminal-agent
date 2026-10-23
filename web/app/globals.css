@@ -623,3 +623,31 @@ a:hover {
 .tab-strip::-webkit-scrollbar {
   display: none;
 }
+
+/* Chevron + fade at a clipped edge of the pane tab strip. */
+.tab-nav {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 4px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--amber-hi);
+  cursor: pointer;
+  background: linear-gradient(to right, #0f0f10 55%, transparent);
+}
+.tab-nav.right-0 {
+  background: linear-gradient(to left, #0f0f10 55%, transparent);
+}
+.tab-nav:hover {
+  color: #ffcf8a;
+}
+.dtab.sm {
+  padding: 2px 9px;
+  font-size: 11px;
+}
