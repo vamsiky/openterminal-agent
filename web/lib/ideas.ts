@@ -23,7 +23,7 @@ export type Idea = {
   reasons: string[];
   firstSeen: string;
   lastSeen: string;
-  status: "active" | "dropped";
+  status: "active" | "dropped" | "near";
 };
 
 export type FactorScore = { key: string; group: string; value: number | null; score: number | null; change: number | null };

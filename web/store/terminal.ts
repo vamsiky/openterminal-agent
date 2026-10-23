@@ -25,7 +25,8 @@ export type WidgetType =
   | "recap"
   | "ideas"
   | "details"
-  | "research";
+  | "research"
+  | "scanlab";
 
 export type WidgetInstance = {
   id: string;
@@ -67,10 +68,13 @@ type TerminalState = {
   watchlistOpen: boolean;
   watchlistWidth: number;
   commandOpen: boolean;
+  /** Ideas › Options: whether the near-miss group is expanded. */
+  nearMissOpen: boolean;
   setActiveSymbol: (s: string) => void;
   /** Sets the active symbol, records it in `recent`, and makes sure a chart and a quote are open. */
   openSymbol: (s: string) => void;
   setCommandOpen: (open: boolean) => void;
+  setNearMissOpen: (open: boolean) => void;
   /** Focuses an existing tab of `type`, otherwise adds one by `mode`. 'window' always targets a window. */
   openOrFocus: (type: WidgetType, mode: OpenMode) => void;
   /** Always creates a new tab (in `paneId`, default the focused pane). Alias: addWidget(type, symbol). */
@@ -260,6 +264,7 @@ export const useTerminal = create<TerminalState>()(
       watchlistOpen: true,
       watchlistWidth: WATCHLIST_WIDTH.initial,
       commandOpen: false,
+      nearMissOpen: true,
       setActiveSymbol: (s) => {
         const sym = normalizeSymbol(s);
         if (sym) set({ activeSymbol: sym });
@@ -273,6 +278,7 @@ export const useTerminal = create<TerminalState>()(
         }
       },
       setCommandOpen: (open) => set({ commandOpen: open }),
+      setNearMissOpen: (nearMissOpen) => set({ nearMissOpen }),
       openOrFocus: (type, mode) => {
         const st = get();
         if (mode === "window") {
@@ -402,7 +408,7 @@ export const useTerminal = create<TerminalState>()(
     }),
     {
       name: "openterminal-workspace",
-      version: 2,
+      version: 3,
       // Transient UI state stays out of storage (and out of cross-window sync).
       partialize: (st) => {
         const persisted: Record<string, unknown> = {};
@@ -422,6 +428,8 @@ export const useTerminal = create<TerminalState>()(
           delete st.widgets;
           delete st.layout;
         }
+        // Version 3 added the Ideas near-miss group's open state, open by default.
+        if (version < 3 && typeof st.nearMissOpen !== "boolean") st = { ...st, nearMissOpen: true };
         return st as TerminalState;
       },
     }
