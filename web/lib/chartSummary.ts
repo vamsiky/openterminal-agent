@@ -142,20 +142,29 @@ function sessionOhlc(s: { day: string; bars: Candle[] }, daily: DailyBar[] | und
   return ohlc(regular.length > 0 ? regular : s.bars);
 }
 
+export const INTRADAY_RANGES = new Set(["1D", "5D", "1M"]);
+
+const utcDay = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
+const dayTime = (day: string) => Date.parse(`${day}T00:00:00Z`) / 1000;
+
+/** First trading day (YYYY-MM-DD) the candles cover, for the daily-bars request. */
+export function firstDayOf(candles: Candle[], range: string): string | null {
+  if (candles.length === 0) return null;
+  return INTRADAY_RANGES.has(range) ? etDay(candles[0].time) : utcDay(candles[0].time);
+}
+
 /**
- * The line above the plot. 1D and 5D use the official daily open/close/high/low of the sessions shown
- * (the intraday candles include pre-market and after hours); longer ranges use the candles themselves.
+ * The line above the plot, from the official daily bars over the range's dates. Where a day has no stored
+ * bar yet (today), the regular-session candles stand in. Without daily bars the candles themselves are used.
  */
 export function rangeSummary(candles: Candle[], range: string, daily?: DailyBar[], now = Date.now() / 1000): RangeSummary | null {
   if (candles.length === 0) return null;
-  const intradayRange = range === "1D" || range === "5D";
-  const withYear = spansYears(candles, !intradayRange && range === "1M");
   let o: { open: number; close: number; high: number; low: number };
   let openWhen: string;
   let closeWhen: string;
   let label = range;
 
-  if (intradayRange) {
+  if (INTRADAY_RANGES.has(range)) {
     const ss = sessions(candles);
     const per = ss.map((s) => sessionOhlc(s, daily));
     o = {
@@ -167,10 +176,9 @@ export function rangeSummary(candles: Candle[], range: string, daily?: DailyBar[
     const first = ss[0];
     const last = ss[ss.length - 1];
     const lastBar = last.bars[last.bars.length - 1];
-    const over = !(last.day === etDay(now) && etMinutes(now) < REGULAR_CLOSE);
     if (range === "1D") {
       openWhen = "09:30";
-      closeWhen = over ? "16:00" : "now";
+      closeWhen = !(last.day === etDay(now) && etMinutes(now) < REGULAR_CLOSE) ? "16:00" : "now";
       if (last.day === etDay(now)) label = "Today";
     } else {
       const y = first.day.slice(0, 4) !== last.day.slice(0, 4);
@@ -178,10 +186,23 @@ export function rangeSummary(candles: Candle[], range: string, daily?: DailyBar[
       closeWhen = fmtDay(lastBar.time, true, y);
     }
   } else {
-    o = ohlc(candles);
-    const intraday = range === "1M";
-    openWhen = fmtDay(candles[0].time, intraday, withYear);
-    closeWhen = fmtDay(candles[candles.length - 1].time, intraday, withYear);
+    const firstDay = utcDay(candles[0].time);
+    const ds = daily?.filter((d) => d.day >= firstDay) ?? [];
+    // Days after the last stored daily bar (today) come from the candles.
+    const tail = ds.length > 0 ? candles.filter((c) => utcDay(c.time) > ds[ds.length - 1].day) : candles;
+    const days = [
+      ...ds.map((d) => ({ time: dayTime(d.day), open: d.open, high: d.high, low: d.low, close: d.close })),
+      ...tail,
+    ];
+    o = {
+      open: days[0].open,
+      close: days[days.length - 1].close,
+      high: Math.max(...days.map((d) => d.high)),
+      low: Math.min(...days.map((d) => d.low)),
+    };
+    const withYear = parts(days[0].time, false).year !== parts(days[days.length - 1].time, false).year;
+    openWhen = fmtDay(days[0].time, false, withYear);
+    closeWhen = fmtDay(days[days.length - 1].time, false, withYear);
   }
   const change = o.close - o.open;
   return { label, change, pct: o.open ? (change / o.open) * 100 : null, ...o, openWhen, closeWhen };
@@ -189,25 +210,47 @@ export function rangeSummary(candles: Candle[], range: string, daily?: DailyBar[
 
 export type Extreme = { index: number; value: number; time: number };
 
-/** Highest high and lowest low among the bars with index from..to (inclusive, clamped). */
-export function extremes(candles: Candle[], from = 0, to = candles.length - 1): { high: Extreme; low: Extreme } | null {
+/**
+ * Which bars the markers may sit on, so marker prices match the summary's High/Low: 1D and 5D bars from
+ * the regular session; 1M's hourly bars from 09:00 to 16:00 ET (the 09:00 bar holds the open).
+ */
+export function markerFilter(range: string): ((c: Candle) => boolean) | undefined {
+  if (range === "1D" || range === "5D") return (c) => isRegularSession(c.time);
+  if (range === "1M") return (c) => etMinutes(c.time) >= 9 * 60 && etMinutes(c.time) < REGULAR_CLOSE;
+  return undefined;
+}
+
+/** Highest high and lowest low among the bars with index from..to (inclusive, clamped); `include` limits which bars count. */
+export function extremes(
+  candles: Candle[], from = 0, to = candles.length - 1, include?: (c: Candle) => boolean
+): { high: Extreme; low: Extreme } | null {
   const a = Math.max(0, Math.round(from));
   const b = Math.min(candles.length - 1, Math.round(to));
-  if (candles.length === 0 || a > b) return null;
-  let hi = a;
-  let lo = a;
+  let hi = -1;
+  let lo = -1;
   for (let i = a; i <= b; i++) {
-    if (candles[i].high > candles[hi].high) hi = i;
-    if (candles[i].low < candles[lo].low) lo = i;
+    if (include && !include(candles[i])) continue;
+    if (hi < 0 || candles[i].high > candles[hi].high) hi = i;
+    if (lo < 0 || candles[i].low < candles[lo].low) lo = i;
   }
+  if (hi < 0) return include ? extremes(candles, from, to) : null;
   return {
     high: { index: hi, value: candles[hi].high, time: candles[hi].time },
     low: { index: lo, value: candles[lo].low, time: candles[lo].time },
   };
 }
 
-/** "H 189.88 · Oct 21 09:30" (intraday, New York time) or "L 161.00 · Oct 20" (daily). */
-export function extremeLabel(kind: "H" | "L", e: Extreme, intraday: boolean, withYear: boolean): string {
+/** True when a bar sits within `fraction` of either edge of the visible range. */
+export function nearEdge(index: number, from: number, to: number, fraction = 0.15): boolean {
+  const span = to - from;
+  if (span <= 0) return false;
+  const at = (index - from) / span;
+  return at < fraction || at > 1 - fraction;
+}
+
+/** "H 189.88 · Oct 21 09:30" (intraday, New York time), "L 161.00 · Oct 20" (daily), or just "H 189.88" when `short`. */
+export function extremeLabel(kind: "H" | "L", e: Extreme, intraday: boolean, withYear: boolean, short = false): string {
+  if (short) return `${kind} ${fmt(e.value)}`;
   const day = fmtDay(e.time, intraday, withYear);
   return `${kind} ${fmt(e.value)} · ${intraday ? `${day} ${etClock(e.time)}` : day}`;
 }

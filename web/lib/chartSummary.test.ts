@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Candle } from "./api";
-import { barWhen, etDay, extremeLabel, extremes, fmtMove, rangeSummary, readout, sessionVwap, sliceMonths, spansYears } from "./chartSummary";
+import { barWhen, etDay, extremeLabel, extremes, firstDayOf, markerFilter, nearEdge, fmtMove, rangeSummary, readout, sessionVwap, sliceMonths, spansYears } from "./chartSummary";
 
 const utc = (iso: string) => Date.parse(iso) / 1000;
 const c = (iso: string, o: number, h: number, l: number, cl: number, volume = 100): Candle => ({ time: utc(iso), open: o, high: h, low: l, close: cl, volume });
@@ -60,6 +60,27 @@ describe("rangeSummary", () => {
     const y = rangeSummary([c("2025-12-30T00:00:00Z", 1, 1, 1, 1), c("2026-01-05T00:00:00Z", 1, 2, 1, 2)], "1Y")!;
     expect(y.openWhen).toBe("Dec 30, 2025");
   });
+  it("1M takes its numbers from the official daily bars, not the hourly candles", () => {
+    const daily = [
+      { day: "2026-10-20", open: 100.5, high: 111, low: 98.5, close: 104.5, volume: 1 },
+      { day: "2026-10-21", open: 104, high: 108.5, low: 92, close: 96, volume: 1 },
+    ];
+    const s = rangeSummary(intraday, "1M", daily, utc("2026-10-22T18:00:00Z"))!;
+    expect([s.open, s.close, s.high, s.low]).toEqual([100.5, 96, 111, 92]);
+    expect(firstDayOf(intraday, "1M")).toBe("2026-10-20");
+  });
+  it("6M and longer use daily bars over the range, with candles for days not stored yet", () => {
+    const candles = [c("2026-01-05T00:00:00Z", 10, 12, 9, 11), c("2026-03-05T00:00:00Z", 11, 15, 10, 14), c("2026-03-06T00:00:00Z", 14, 16, 13, 15)];
+    const daily = [
+      { day: "2026-01-04", open: 1, high: 99, low: 0.5, close: 1, volume: 1 }, // before the range
+      { day: "2026-01-05", open: 10.5, high: 12.5, low: 9.5, close: 11, volume: 1 },
+      { day: "2026-03-05", open: 11, high: 15, low: 8, close: 14, volume: 1 },
+    ];
+    const s = rangeSummary(candles, "6M", daily)!;
+    expect([s.open, s.close, s.high, s.low]).toEqual([10.5, 15, 16, 8]);
+    expect(s.closeWhen).toBe("Mar 6");
+    expect(firstDayOf(candles, "6M")).toBe("2026-01-05");
+  });
   it("returns null for no candles", () => {
     expect(rangeSummary([], "1M")).toBeNull();
   });
@@ -89,6 +110,22 @@ describe("extremes", () => {
     expect(view.high).toMatchObject({ index: 1, value: 110 });
     expect(view.low).toMatchObject({ index: 1, value: 99 });
     expect(extremes(intraday, 4, 2)).toBeNull();
+  });
+  it("on 1D/5D markers use regular-session bars only, matching the summary", () => {
+    const reg = extremes(intraday, 0, 5, markerFilter("5D"))!;
+    expect(reg.high).toMatchObject({ index: 1, value: 110 }); // not the 130 after-hours print
+    expect(reg.low).toMatchObject({ index: 4, value: 90 });
+    expect(extremes(intraday, 0, 3, markerFilter("5D"))!.low.value).toBe(99); // pre-market 98 ignored
+    expect(extremes(intraday, 3, 3, markerFilter("5D"))!.high.value).toBe(130); // nothing regular in view: all bars
+    expect(markerFilter("6M")).toBeUndefined();
+  });
+  it("shortens a label near an edge of the visible range", () => {
+    expect(nearEdge(2, 0, 100)).toBe(true);
+    expect(nearEdge(50, 0, 100)).toBe(false);
+    expect(nearEdge(90, 0, 100)).toBe(true);
+    expect(nearEdge(15, 0, 100)).toBe(false);
+    const e = extremes(intraday, 4, 5)!;
+    expect(extremeLabel("H", e.high, true, false, true)).toBe("H 108.00");
   });
   it("labels with value, date and time", () => {
     const e = extremes(intraday, 4, 5)!;

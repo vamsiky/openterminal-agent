@@ -19,7 +19,7 @@ import {
 } from "lightweight-charts";
 import { apiGet, fmt, type Candle, type Quote } from "../../lib/api";
 import {
-  etClock, etDay, extremeLabel, extremes, fmtDay, fmtMove, fmtVolume, rangeSummary, readout,
+  etClock, extremeLabel, extremes, firstDayOf, markerFilter, nearEdge, fmtDay, fmtMove, fmtVolume, rangeSummary, readout,
   sessionVwap, sliceMonths, spansYears, type DailyBar,
 } from "../../lib/chartSummary";
 import { sma, ema, rsi, macd, bollinger, type Point } from "../../lib/indicators";
@@ -86,8 +86,8 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
   });
   const candles = useMemo(() => (history && range === "3M" ? sliceMonths(history, 3) : history), [history, range]);
 
-  // Intraday candles include pre-market and after hours; the official daily bars give the day's real open/close/high/low.
-  const firstDay = (range === "1D" || range === "5D") && candles && candles.length > 0 ? etDay(candles[0].time) : null;
+  // Official daily bars over the range's dates give the real open/close/high/low (intraday candles include extended hours).
+  const firstDay = candles ? firstDayOf(candles, range) : null;
   const { data: daily } = useQuery({
     queryKey: ["bars-daily", symbol, firstDay],
     queryFn: () => apiGet<DailyBar[]>(`/api/bars/daily/${encodeURIComponent(symbol)}?from=${firstDay}`),
@@ -245,11 +245,16 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
     // High and low of the bars in view, drawn as series markers so nothing sits over the plot.
     const markers = createSeriesMarkers(main, []);
     const refreshMarkers = (r: LogicalRange | null) => {
-      const e = r ? extremes(candles, r.from, r.to) : extremes(candles);
+      const include = markerFilter(range);
+      const from = r ? r.from : 0;
+      const to = r ? r.to : candles.length - 1;
+      const e = extremes(candles, from, to, include);
       if (!e) return markers.setMarkers([]);
+      // Near an edge the label would be clipped, so it drops the date and time.
+      const label = (kind: "H" | "L", x: typeof e.high) => extremeLabel(kind, x, intraday, withYear, nearEdge(x.index, from, to));
       const list: SeriesMarker<Time>[] = [
-        { time: ts(e.high.time), position: "aboveBar", shape: "circle", color: "#ededed", text: extremeLabel("H", e.high, intraday, withYear) },
-        { time: ts(e.low.time), position: "belowBar", shape: "circle", color: "#ededed", text: extremeLabel("L", e.low, intraday, withYear) },
+        { time: ts(e.high.time), position: "aboveBar", shape: "circle", color: "#ededed", text: label("H", e.high) },
+        { time: ts(e.low.time), position: "belowBar", shape: "circle", color: "#ededed", text: label("L", e.low) },
       ];
       markers.setMarkers(list.sort((a, b) => asNum(a.time) - asNum(b.time)));
     };
