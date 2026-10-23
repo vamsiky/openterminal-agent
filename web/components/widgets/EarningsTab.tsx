@@ -6,12 +6,13 @@ import { ApiError, fmt, fmtBig } from "../../lib/api";
 import { budgetSpent, type AgentsStatus } from "../../lib/agents";
 import { ago, contractLabel } from "../../lib/ideas";
 import {
-  HORIZON_CHOICES, TIME_LABEL, countLine, defaultFilters, estimateReviewCost, eventReactionPct, fetchEvents, fetchReviews, fetchScreen,
+  HORIZON_CHOICES, TIME_LABEL, type HorizonChoice, countLine, defaultFilters, estimateReviewCost, eventReactionPct, fetchEvents, fetchReviews, fetchScreen,
   horizonOf, latestReviews, loadFilters, passesGates, reviewAll, reviewSymbol, saveFilters, screenQuery, sortSetups, surprisePct,
   type Dist, type EarningsFilters, type EarningsReview, type EarningsSetup, type EventStats, type Sort, type SortKey, type TimeFilter, type Verdict,
 } from "../../lib/earningsScreen";
 import { useTerminal } from "../../store/terminal";
 import ErrorNote from "../ErrorNote";
+import Segmented from "../ui/Segmented";
 
 const PAGE = 100;
 const pct = (n: number | null | undefined, d = 1) => (typeof n === "number" ? `${n > 0 ? "+" : ""}${fmt(n, d)}%` : "—");
@@ -255,11 +256,7 @@ export default function EarningsTab({ agents }: { agents: AgentsStatus | undefin
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 p-1 border-b border-[var(--border)]">
         <Field label="From"><input type="date" aria-label="From date" value={f.from} onChange={(e) => edit({ from: e.target.value, to: e.target.value > f.to ? e.target.value : f.to, customRange: true })} /></Field>
         <Field label="To"><input type="date" aria-label="To date" value={f.to} min={f.from} onChange={(e) => edit({ to: e.target.value, customRange: true })} /></Field>
-        <span className="flex gap-1">
-          {HORIZON_CHOICES.map(([k, label]) => (
-            <button key={k} className={`term-btn ${f.horizon === k ? "active" : ""}`} onClick={() => setHorizon(k)}>{label}</button>
-          ))}
-        </span>
+        <Segmented ariaLabel="Horizon" value={f.horizon} onChange={(k) => setHorizon(k as HorizonChoice)} options={HORIZON_CHOICES.map(([id, label]) => ({ id, label }))} />
         <Field label="Time">
           <select aria-label="Report time" value={f.time} onChange={(e) => edit({ time: e.target.value as TimeFilter })}>
             <option value="any">Any</option><option value="bmo">Before open</option><option value="amc">After close</option><option value="dmh">During market</option>
@@ -289,7 +286,7 @@ export default function EarningsTab({ agents }: { agents: AgentsStatus | undefin
         )}
         {note && <span className="dim">{note}</span>}
       </div>
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto" style={{ containerType: "inline-size" }}>
         {!hydrated || screen.isLoading ? <div className="p-2 dim">Loading earnings…</div>
           : screen.error ? <ErrorNote error={screen.error} />
           : rows.length === 0 ? <div className="p-2 dim">No reports match these filters.</div>
@@ -332,7 +329,9 @@ export default function EarningsTab({ agents }: { agents: AgentsStatus | undefin
                       {open && (
                         <tr style={{ cursor: "default" }}>
                           <td colSpan={COLUMNS.length + 1} style={{ textAlign: "left", whiteSpace: "normal" }}>
-                            <Detail s={s} review={reviewFor(s)} reviewState={rs} blocked={blocked} onReview={() => reviewOne(s)} />
+                            <div style={{ position: "sticky", left: 0, width: "min(100cqw, 720px)" }}>
+                              <Detail s={s} review={reviewFor(s)} reviewState={rs} blocked={blocked} onReview={() => reviewOne(s)} />
+                            </div>
                           </td>
                         </tr>
                       )}

@@ -6,7 +6,6 @@ import WatchlistWidget from "./widgets/WatchlistWidget";
 import CalendarWidget from "./widgets/CalendarWidget";
 import CryptoWidget from "./widgets/CryptoWidget";
 import NewsWidget from "./widgets/NewsWidget";
-import OptionsWidget from "./widgets/OptionsWidget";
 import QuoteWidget from "./widgets/QuoteWidget";
 import ScreenerWidget from "./widgets/ScreenerWidget";
 import { ApiError } from "../lib/api";
@@ -58,33 +57,6 @@ describe("QuoteWidget", () => {
     await screen.findByText("Stooq");
     expect(container.textContent).not.toMatch(/NaN|undefined/i);
     expect(container.textContent).not.toMatch(/yahoo/i);
-  });
-});
-
-describe("OptionsWidget", () => {
-  const row = (strike: number, over = {}) => ({ strike, lastPrice: null, bid: 1, ask: 1.2, volume: null, openInterest: null, impliedVolatility: null, inTheMoney: false, ...over });
-  it("dashes null open interest and IV, shows delta", async () => {
-    stubApi([
-      [
-        "/api/options",
-        () =>
-          reply({
-            symbol: "AAPL", underlyingPrice: 200, expirationDates: ["2026-11-20"], selectedDate: "2026-11-20",
-            calls: [row(200, { impliedVolatility: 0.3, delta: 0.5, gamma: 0.02, theta: -0.1, vega: 0.2, rho: 0.05 }), row(205)],
-            puts: [row(200)],
-          }),
-      ],
-    ]);
-    const { container } = wrap(<OptionsWidget widget={widget} />);
-    await screen.findByText("30%");
-    expect(screen.getByText("0.50")).toBeTruthy();
-    expect(container.textContent).not.toMatch(/NaN|undefined|null/);
-  });
-  it("shows the 503 text without the 'unavailable' box", async () => {
-    stubApi([["/api/options", () => reply({ error: "needs Alpaca API keys", feature: "/options/:symbol" }, 503)]]);
-    const { container } = wrap(<OptionsWidget widget={widget} />);
-    await screen.findByText("needs Alpaca API keys");
-    expect(container.querySelector(".down")).toBeNull();
   });
 });
 

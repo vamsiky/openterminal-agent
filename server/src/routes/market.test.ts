@@ -412,6 +412,23 @@ describe("options, search and the economic calendar", () => {
     expect(body).toEqual(chain);
   });
 
+  it("caches a chain for 15 seconds", async () => {
+    const chain = { symbol: "TTLX", underlyingPrice: 1, expirationDates: [], selectedDate: null, calls: [], puts: [] };
+    vi.mocked(options.chain).mockReset().mockResolvedValue(chain);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      await call("/options/:symbol", { params: { symbol: "ttlx" } });
+      vi.setSystemTime(Date.now() + 14_000);
+      await call("/options/:symbol", { params: { symbol: "ttlx" } });
+      expect(options.chain).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + 2_000);
+      await call("/options/:symbol", { params: { symbol: "ttlx" } });
+      expect(options.chain).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("searches the listings", async () => {
     const hits = [{ symbol: "AAPL", name: "Apple Inc. - Common Stock", exchange: "Nasdaq", type: "stock" }];
     vi.mocked(assets.search).mockResolvedValue(hits);

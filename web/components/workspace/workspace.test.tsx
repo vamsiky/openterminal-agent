@@ -36,10 +36,12 @@ describe("Workspace", () => {
   });
 
   it("closing a tab removes it, and the tab strip shows each tab as its own control", () => {
-    wrap(<Workspace />);
-    expect(screen.getAllByRole("tab").length).toBe(5);
+    const { container } = wrap(<Workspace />);
+    // Only the pane strips: widgets (details) have their own tab rows.
+    const paneTabs = () => container.querySelectorAll('.ptab [role="tab"]').length;
+    expect(paneTabs()).toBe(5);
     fireEvent.click(screen.getByLabelText("Close Ideas"));
-    expect(screen.getAllByRole("tab").length).toBe(4);
+    expect(paneTabs()).toBe(4);
   });
 });
 
