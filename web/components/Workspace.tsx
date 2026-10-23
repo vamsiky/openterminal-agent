@@ -1,163 +1,93 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import GridLayout, { WidthProvider } from "react-grid-layout";
-import "react-grid-layout/css/styles.css";
-import "react-resizable/css/styles.css";
-import { normalizeSymbol } from "../lib/symbol";
-import { useTerminal, type WidgetInstance } from "../store/terminal";
-import QuoteWidget from "./widgets/QuoteWidget";
-import ChartWidget from "./widgets/ChartWidget";
-import WatchlistWidget from "./widgets/WatchlistWidget";
-import NewsWidget from "./widgets/NewsWidget";
-import HeatmapWidget from "./widgets/HeatmapWidget";
-import ScreenerWidget from "./widgets/ScreenerWidget";
-import CryptoWidget from "./widgets/CryptoWidget";
-import MacroWidget from "./widgets/MacroWidget";
-import OptionsWidget from "./widgets/OptionsWidget";
-import PortfolioWidget from "./widgets/PortfolioWidget";
-import AiWidget from "./widgets/AiWidget";
-import CalendarWidget from "./widgets/CalendarWidget";
-import InsiderWidget from "./widgets/InsiderWidget";
-import IdeasWidget from "./widgets/IdeasWidget";
-import FundamentalsWidget from "./widgets/FundamentalsWidget";
-import TvWidget from "./widgets/TvWidget";
-import RecapWidget from "./widgets/RecapWidget";
-import WidgetErrorBoundary from "./WidgetErrorBoundary";
-
-const Grid = WidthProvider(GridLayout);
-
-function WidgetBody({ widget }: { widget: WidgetInstance }) {
-  switch (widget.type) {
-    case "quote": return <QuoteWidget widget={widget} />;
-    case "chart": return <ChartWidget widget={widget} />;
-    case "watchlist": return <WatchlistWidget />;
-    case "news": return <NewsWidget widget={widget} />;
-    case "heatmap": return <HeatmapWidget />;
-    case "screener": return <ScreenerWidget />;
-    case "crypto": return <CryptoWidget />;
-    case "macro": return <MacroWidget />;
-    case "options": return <OptionsWidget widget={widget} />;
-    case "portfolio": return <PortfolioWidget />;
-    case "ai": return <AiWidget />;
-    case "calendar": return <CalendarWidget />;
-    case "insider": return <InsiderWidget widget={widget} />;
-    case "fundamentals": return <FundamentalsWidget widget={widget} />;
-    case "tv": return <TvWidget />;
-    case "recap": return <RecapWidget />;
-    case "ideas": return <IdeasWidget />;
-  }
-}
-
-function SymbolTag({ widget, activeSymbol }: { widget: WidgetInstance; activeSymbol: string }) {
-  const setWidgetSymbol = useTerminal((s) => s.setWidgetSymbol);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-  const shown = widget.linked ? activeSymbol : widget.symbol ?? activeSymbol;
-
-  useEffect(() => {
-    if (!editing) return;
-    setDraft(shown);
-    requestAnimationFrame(() => inputRef.current?.select());
-  }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value.toUpperCase())}
-        onMouseDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            const v = normalizeSymbol(draft);
-            if (v) setWidgetSymbol(widget.id, v);
-            setEditing(false);
-          }
-          if (e.key === "Escape") setEditing(false);
-        }}
-        onBlur={() => setEditing(false)}
-        className="ml-2 w-16 !border-0 !border-b !border-[var(--amber-dim)] bg-transparent text-[var(--text)] px-0 py-0 text-[13px] leading-none"
-      />
-    );
-  }
-
-  return (
-    <span
-      className="ml-2 text-[var(--text)] cursor-pointer hover:text-[var(--amber)]"
-      title="Click to set this widget's ticker"
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={() => setEditing(true)}
-    >
-      {shown}
-    </span>
-  );
-}
-
-const TITLES: Record<string, string> = {
-  quote: "Quote", chart: "Chart", watchlist: "Watchlist", news: "News",
-  heatmap: "Heatmap", screener: "Screener", crypto: "Crypto",
-  macro: "Macro / Indexes", options: "Option Chain", portfolio: "Portfolio", ai: "AI Assistant",
-  calendar: "Calendar", insider: "Insider Transactions", fundamentals: "Fundamentals", tv: "Live TV", recap: "Market Recap", ideas: "Ideas",
-};
+import { useCallback, useRef, useState } from "react";
+import {
+  clampMove, magnetMove, magnetResize, resizeRect, snapZone, toFrac, toPx, type Rect,
+} from "../lib/layout";
+import { useTerminal } from "../store/terminal";
+import PaneView, { type BeginGesture } from "./workspace/PaneView";
 
 export default function Workspace() {
-  const widgets = useTerminal((s) => s.widgets);
-  const layout = useTerminal((s) => s.layout);
-  const setLayout = useTerminal((s) => s.setLayout);
-  const removeWidget = useTerminal((s) => s.removeWidget);
-  const toggleLinked = useTerminal((s) => s.toggleLinked);
-  const activeSymbol = useTerminal((s) => s.activeSymbol);
+  const panes = useTerminal((s) => s.panes);
+  const focusedPane = useTerminal((s) => s.focusedPane);
+  const ref = useRef<HTMLDivElement>(null);
+  const [live, setLive] = useState<{ id: string; rect: Rect } | null>(null);
+  const [preview, setPreview] = useState<Rect | null>(null);
 
-  const symbolAware = new Set(["quote", "chart", "news", "options", "insider", "fundamentals"]);
+  const begin = useCallback<BeginGesture>((e, paneId, mode) => {
+    const host = ref.current;
+    const target = e.currentTarget;
+    if (e.button !== 0 || !host) return;
+    const st = useTerminal.getState();
+    const pane = st.panes.find((p) => p.id === paneId);
+    if (!pane || pane.restore) return;
+    e.preventDefault();
+    st.focusPane(paneId);
+
+    const box = host.getBoundingClientRect();
+    const ws = { w: box.width, h: box.height };
+    const start = toPx(pane.rect, ws);
+    const others = st.panes.filter((p) => p.id !== paneId).map((p) => toPx(p.rect, ws));
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let last = pane.rect;
+    let zone: Rect | null = null;
+    let moved = false;
+    target.setPointerCapture(e.pointerId);
+
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - x0;
+      const dy = ev.clientY - y0;
+      if (!moved && Math.abs(dx) + Math.abs(dy) < 3) return;
+      moved = true;
+      let r: Rect;
+      if (mode === "move") {
+        r = clampMove(magnetMove(clampMove({ ...start, x: start.x + dx, y: start.y + dy }, ws), others, ws), ws);
+        zone = snapZone({ x: ev.clientX - box.left, y: ev.clientY - box.top }, ws);
+      } else {
+        r = magnetResize(resizeRect(start, mode, dx, dy, ws), mode, others, ws);
+      }
+      last = toFrac(r, ws);
+      setLive({ id: paneId, rect: last });
+      setPreview(zone);
+    };
+    const finish = (commit: boolean) => {
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      target.removeEventListener("pointercancel", onCancel);
+      try { target.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+      setLive(null);
+      setPreview(null);
+      if (commit && moved) useTerminal.getState().setPaneRect(paneId, zone ?? last);
+    };
+    const onUp = () => finish(true);
+    const onCancel = () => finish(false);
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+    target.addEventListener("pointercancel", onCancel);
+  }, []);
 
   return (
-    <Grid
-      className="layout"
-      layout={layout}
-      cols={12}
-      rowHeight={30}
-      margin={[4, 4]}
-      draggableHandle=".panel-title"
-      onLayoutChange={(l) => setLayout(l.map(({ i, x, y, w, h }) => ({ i, x, y, w, h })))}
-    >
-      {widgets.map((w) => (
-        <div key={w.id}>
-          <div className="terminal-panel">
-            <div className="panel-title">
-              <span>
-                {TITLES[w.type]}
-                {symbolAware.has(w.type) && <SymbolTag widget={w} activeSymbol={activeSymbol} />}
-              </span>
-              <span className="flex gap-2 items-center">
-                {symbolAware.has(w.type) && (
-                  <button
-                    title={w.linked ? "Linked to active symbol (click to unlink)" : "Unlinked (click to link)"}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={() => toggleLinked(w.id)}
-                    className={w.linked ? "text-[var(--amber)]" : "dim"}
-                  >
-                    ⛓
-                  </button>
-                )}
-                <button
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() => removeWidget(w.id)}
-                  className="dim hover:text-[var(--down)]"
-                >
-                  ✕
-                </button>
-              </span>
-            </div>
-            <div className="flex-1 overflow-auto min-h-0">
-              <WidgetErrorBoundary name={TITLES[w.type]}>
-                <WidgetBody widget={w} />
-              </WidgetErrorBoundary>
-            </div>
-          </div>
-        </div>
+    <div ref={ref} className="ws absolute inset-0 overflow-hidden" data-workspace>
+      {panes.map((p) => (
+        <PaneView
+          key={p.id}
+          pane={p}
+          rect={live?.id === p.id ? live.rect : p.rect}
+          focused={p.id === focusedPane}
+          begin={begin}
+        />
       ))}
-    </Grid>
+      {preview && (
+        <div
+          aria-hidden="true"
+          className="absolute pointer-events-none rounded-md border-2 border-[var(--amber)] bg-[rgba(255,153,0,0.14)]"
+          style={{
+            left: `${preview.x * 100}%`, top: `${preview.y * 100}%`,
+            width: `${preview.w * 100}%`, height: `${preview.h * 100}%`, zIndex: 100000,
+          }}
+        />
+      )}
+    </div>
   );
 }

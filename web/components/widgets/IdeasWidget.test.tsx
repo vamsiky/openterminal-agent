@@ -262,3 +262,14 @@ describe("brief tab and footer", () => {
     expect(await screen.findByText("No brief yet: it is written at 07:00 ET on trading days.")).toBeTruthy();
   });
 });
+
+describe("IdeasWidget at narrow widths", () => {
+  it("wraps its header and scrolls tables inside the pane instead of forcing a width", async () => {
+    table = [["/api/scan/ideas", () => reply({ asOf: null, ideas: [stockIdea] })]];
+    const { container } = wrap();
+    await screen.findByRole("button", { name: "NVDA" });
+    expect(container.querySelector(".flex-wrap")?.textContent).toContain("Stocks");
+    expect(container.querySelector(".overflow-auto table")).toBeTruthy();
+    expect(container.innerHTML).not.toMatch(/min-w-\[(?:[4-9]\d\d|\d{4})px\]|min-width:\s*[4-9]\d\d/);
+  });
+});

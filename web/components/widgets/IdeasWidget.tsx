@@ -6,6 +6,7 @@ import { apiGet, fmt } from "../../lib/api";
 import { ago, contractLabel, GROUP_LABELS, strategyLabel, type Idea, type ScanRun, type ScanStatus, type ScorecardResponse } from "../../lib/ideas";
 import { useTerminal } from "../../store/terminal";
 import ErrorNote from "../ErrorNote";
+import Chip from "../ui/Chip";
 import { agentsLine, type AgentsStatus } from "../../lib/agents";
 import EarningsTab from "./EarningsTab";
 import BriefView from "./BriefView";
@@ -35,7 +36,7 @@ function StatusLine({ status, agents }: { status: ScanStatus | undefined; agents
   const opt = lastRun(status?.runs, ["option-scan"]);
   const o = status?.options ?? null;
   return (
-    <div className="px-2 py-0.5 dim text-[10px] border-t border-[var(--border)]">
+    <div className="px-2 py-0.5 dim text-[10px] border-t border-[var(--border)] break-words">
       {agents && <>{agentsLine(agents)} · </>}
       Stock scan {ago(runTime(stock) || null)} · Options sweep {ago(runTime(opt) || null)} ·{" "}
       {o ? (o.connected ? `${o.subscribed} contracts streamed` : "option stream offline") : "option stream n/a"}
@@ -108,17 +109,16 @@ export default function IdeasWidget() {
   const cols = kind === "option" ? 9 : 5;
 
   return (
-    <div className="flex flex-col h-full text-[11px]">
-      <div className="flex items-center gap-1 p-1">
-        <button className={`term-btn ${tab === "stock" ? "active" : ""}`} onClick={() => { setTab("stock"); setExpanded(null); }}>Stocks</button>
-        <button className={`term-btn ${tab === "option" ? "active" : ""}`} onClick={() => { setTab("option"); setExpanded(null); }}>Options</button>
-        <button className={`term-btn ${tab === "brief" ? "active" : ""}`} onClick={() => { setTab("brief"); setExpanded(null); }}>Brief</button>
-        <button className={`term-btn ${tab === "earnings" ? "active" : ""}`} onClick={() => { setTab("earnings"); setExpanded(null); }}>Earnings</button>
-        <span className="dim ml-1 flex-1 truncate">Candidates only, not orders{ideas.data?.asOf ? ` · as of ${ago(ideas.data.asOf)}` : ""}</span>
-        <button className={`term-btn ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen((o) => !o)} title="Universe and positions">Settings</button>
+    <div className="flex flex-col h-full w-full min-w-0 overflow-x-hidden text-[11px]">
+      <div className="flex flex-wrap items-center gap-1 p-1">
+        {([["stock", "Stocks"], ["option", "Options"], ["brief", "Brief"], ["earnings", "Earnings"]] as const).map(([id, label]) => (
+          <Chip key={id} on={tab === id} onClick={() => { setTab(id); setExpanded(null); }}>{label}</Chip>
+        ))}
+        <span className="dim ml-1 flex-1 basis-[120px] min-w-0 truncate">Candidates only, not orders{ideas.data?.asOf ? ` · as of ${ago(ideas.data.asOf)}` : ""}</span>
+        <Chip on={settingsOpen} onClick={() => setSettingsOpen((o) => !o)} title="Universe and positions">Settings</Chip>
       </div>
       {settingsOpen && <IdeasSettings />}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 min-w-0 overflow-auto" style={{ containerType: "inline-size" }}>
         {tab === "earnings" ? (
           <EarningsTab agents={agents.data} />
         ) : tab === "brief" ? (
@@ -168,7 +168,7 @@ export default function IdeasWidget() {
                           {oc?.earningsBeforeExpiry == null ? "—" : oc.earningsBeforeExpiry ? "Yes" : "No"}
                         </td>
                       )}
-                      <td style={{ textAlign: "left", whiteSpace: open ? "normal" : "nowrap" }}>
+                      <td style={{ textAlign: "left", whiteSpace: open ? "normal" : "nowrap", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}>
                         <Reasons reasons={r.reasons} open={open} />
                       </td>
                       <td className="dim">{ago(r.firstSeen)}</td>
@@ -176,6 +176,7 @@ export default function IdeasWidget() {
                     {open && (
                       <tr>
                         <td colSpan={cols + 2} style={{ textAlign: "left", whiteSpace: "normal" }}>
+                          <div style={{ position: "sticky", left: 0, width: "min(100cqw, 640px)" }}>
                           {r.reasons.length > 1 && (
                             <ul className="p-1 list-disc pl-4">
                               {r.reasons.map((x, i) => <li key={i}>{x}</li>)}
@@ -183,6 +184,7 @@ export default function IdeasWidget() {
                           )}
                           <ScoreBars symbol={r.symbol} />
                           <ThesisView idea={r} agents={agents.data} />
+                          </div>
                         </td>
                       </tr>
                     )}

@@ -11,7 +11,7 @@ type SearchResult = { symbol: string; name: string | null; exchange: string | nu
 export default function CommandPalette() {
   const open = useTerminal((s) => s.commandOpen);
   const setOpen = useTerminal((s) => s.setCommandOpen);
-  const setActiveSymbol = useTerminal((s) => s.setActiveSymbol);
+  const openSymbol = useTerminal((s) => s.openSymbol);
   const addToWatchlist = useTerminal((s) => s.addToWatchlist);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
@@ -37,7 +37,7 @@ export default function CommandPalette() {
   if (!open) return null;
 
   const pick = (r: SearchResult, watch = false) => {
-    setActiveSymbol(r.symbol);
+    openSymbol(r.symbol);
     if (watch) addToWatchlist(r.symbol);
     setOpen(false);
   };

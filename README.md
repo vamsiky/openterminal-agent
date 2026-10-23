@@ -15,7 +15,7 @@ Dark. Dense. Keyboard‑driven. Runs on your machine with your own Alpaca market
 
 <br/>
 
-<img src="docs/screenshots/dashboard.png" alt="OpenTerminal dashboard — live chart, quote panel, watchlist, news and macro indexes" width="100%" />
+<img src="docs/screenshots/dashboard.png" alt="OpenTerminal workspace: panels rail, watchlist, chart with range summary and high/low markers, quote, stock details and research &amp; reports panes" width="100%" />
 
 <sub>⭐ If this is useful to you, consider starring the repo — it genuinely helps other people find it.</sub>
 
@@ -33,21 +33,24 @@ OpenTerminal takes a different approach: it combines **Alpaca's market‑data AP
 
 ## ✨ Features
 
-- 🖥️ **Widget-based workspace** — drag, resize, add, and remove panels (`react-grid-layout`); your layout is saved locally and restored on reload
+- 🖥️ **Pane workspace** — tabbed panes you move, resize, and snap to the edges or corners. The Panels rail adds a panel as a tab, in a new pane, or in its own browser window. Your layout is saved locally and restored on reload. See [the workspace guide](docs/workspace.md).
 - ⌘K **global command palette** — instantly search stocks, ETFs, and crypto and jump straight to them
 - 📈 **Professional charting** (via [`lightweight-charts`](https://github.com/tradingview/lightweight-charts)) — candlesticks, bars, line, area, volume, 8 timeframes (1D → MAX), and SMA / EMA / VWAP / Bollinger Bands / RSI / MACD indicators, each with a live hover legend showing OHLC, volume, and every active indicator's value under your cursor
 - 💹 **Quote panel** — last / bid / ask / OHLC, volume, market cap, P/E, EPS, dividend yield, 52‑week range, beta, shares outstanding
+- 📋 **Watchlists** — a Webull-style aside with named lists, sorting, and extended-hours prices beside each symbol
+- 🧾 **Stock details** — one tabbed panel with news, financials and estimates, analyst and short-volume data, SEC filings and press releases, insider trades, dividends, and the company profile
+- 🔬 **Research & reports** — the earnings setup for the active symbol, AI analysis, and the earnings track record
 - 📰 **News feed** — Benzinga headlines through Alpaca News, per‑symbol or global
 - 🔎 **Large‑cap screener** — filter the S&P 500 and Nasdaq‑100 by sector, market cap, % change, and volume, sortable on every column
 - 🗺️ **Live sector heatmap** — treemap sized by market cap, colored by daily % change, refreshing every few seconds
-- ⛓️ **Options chain** — calls and puts side‑by‑side with strike, bid/ask, volume, implied volatility, greeks, and ITM highlighting
+- ⛓️ **Options chain** — a full chain with calls and puts side‑by‑side, an expiry picker, a ±10–30% strike range, IV, greeks, and ITM shading, refreshed every 15 s. Stock details has a compact 10-strike version.
 - 🪙 **Crypto board** — top assets with 7‑day sparklines, BTC/ETH dominance, and full OHLCV charting for any listed coin
 - 🏦 **Macro dashboard** — live US Treasury yield curve, VIX, and major index/commodity proxies
 - 💼 **Portfolio tracker** — log buy/sell transactions, track average cost, realized & unrealized P&L (persisted in SQLite)
 - 📅 **Calendar** — the next two weeks of official US releases (FOMC, CPI, jobs, GDP and more) from the agencies' own schedules, with forecast, previous and actual from FMP when keyed; plus a per‑watchlist earnings calendar (FMP) with click‑through history showing forecast vs. actual EPS for the last several quarters and the stock's next‑day price move
 - 🤖 **AI assistant** (optional) — ask questions about the symbol you're looking at, powered by Claude, fully context‑aware of the terminal's current data
 - ⚡ **Near real‑time updates** — quotes and indexes refresh every second with a subtle flash on change, so you always know what just moved
-- ⌨️ **Keyboard shortcuts** everywhere — `⌘K` to search, `⌥1`–`⌥9` to add any widget
+- ⌨️ **Keyboard shortcuts** everywhere — `⌘K` to search, `⌥1`–`⌥9` to add a panel as a tab in the focused pane
 
 <br/>
 
@@ -159,7 +162,7 @@ Every problem in a run is logged as it happens and stored per symbol with its re
 
 The stored bars are served read-only at `/api/bars/daily/:symbol?from=YYYY-MM-DD&to=YYYY-MM-DD`, `/api/bars/minute/:symbol?from=YYYY-MM-DD` and `/api/bars/status`.
 
-**Watchlists.** The watchlist widget holds any number of named lists (pick one from its menu, or New / Del). Import brings in a Webull export (Watchlists → ⋯ → Export, a CSV with every list): each list is saved under its Webull name, replacing a list with the same name and leaving the rest alone. From the command line: `npm run watchlists -w server -- import path/to/webull_watchlists.csv`, and `-- list` to see what is stored. Every symbol on any list gets live prices and minute history.
+**Watchlists.** The watchlist (the aside, or the Watchlist grid panel) holds any number of named lists (pick one from its menu, or New / Del). Import brings in a Webull export (Watchlists → ⋯ → Export, a CSV with every list): each list is saved under its Webull name, replacing a list with the same name and leaving the rest alone. From the command line: `npm run watchlists -w server -- import path/to/webull_watchlists.csv`, and `-- list` to see what is stored. Every symbol on any list gets live prices and minute history.
 
 **Live prices.** With the Alpaca keys set, the API also keeps real-time prices in memory, so clicking a ticker doesn't wait on the web:
 
@@ -230,8 +233,10 @@ Portfolio data persists in the `terminal-data` volume (SQLite, WAL mode). Ports 
 │       └── db.ts            # SQLite (better-sqlite3, WAL)
 ├── mcp/                     # Read-only MCP server over the research API (stdio)
 └── web/                      # Next.js 15 + React 19 + Tailwind 4
-    ├── components/           # TopBar, Sidebar, Workspace, CommandPalette
-    ├── components/widgets/   # Chart, Quote, Watchlist, News, Screener, Heatmap, Crypto, Options, Macro, Portfolio, Calendar, AI
+    ├── components/           # TopBar, Workspace, Rail (Panels), WatchlistContainer, CommandPalette
+    ├── components/widgets/   # Chart, Quote, Details, Research, Options, Ideas, Watchlist, News, Screener, Heatmap, Crypto, Macro, Portfolio, Calendar, AI
+    ├── components/details/   # Stock details tabs, compact option chain
+    ├── components/workspace/ # Panes, Panels rail, pop-out window route, widget registry
     ├── lib/                  # API client, technical indicators
     └── store/                # Zustand store (workspace layout, persisted)
 ```
