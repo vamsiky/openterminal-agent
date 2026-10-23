@@ -17,6 +17,8 @@ import { createDraft, getActive, getById, nextVersion, type DefRecord } from "./
 
 export const LINE_ACTIONS = ["applied", "needs_code", "no_change", "refused"] as const;
 export type LineOutcome = { n: number; action: (typeof LINE_ACTIONS)[number]; explanation: string };
+/** A line outcome joined with the investor's own line it answers; `text` and `before` are user text, to render as plain text. */
+export type EditedLine = LineOutcome & { kind: ChangedLine["change"]; section: string; text: string; before?: string };
 export type NeedsCode = { request: string; reason: string };
 export type BuildJob = {
   id: string;
@@ -29,7 +31,7 @@ export type BuildJob = {
   /** True when the text asked for something the fixed rules forbid. */
   refused: boolean;
   /** One outcome per changed line of the text. */
-  lines: LineOutcome[];
+  lines: EditedLine[];
 };
 export type StartResult = { jobId: string } | "busy" | "budget" | "disabled";
 
@@ -136,6 +138,16 @@ const changedLinesText = (lines: ChangedLine[]): string =>
     .map((l) => `${l.n}. [${l.section || "top"}] ${l.change.toUpperCase()}: ${l.text}${l.was !== undefined ? `\n   (was: ${l.was})` : ""}`)
     .join("\n");
 
+/** The model's outcomes joined to the changed lines by number; entries for unknown numbers are dropped. */
+export function enrichLines(changed: ChangedLine[], outcomes: LineOutcome[]): EditedLine[] {
+  const byN = new Map(changed.map((l) => [l.n, l]));
+  return outcomes.flatMap((o) => {
+    const c = byN.get(o.n);
+    if (!c) return [];
+    return [{ n: o.n, kind: c.change, section: c.section, text: c.text, ...(c.was !== undefined ? { before: c.was } : {}), action: o.action, explanation: o.explanation }];
+  });
+}
+
 /** Problems with the model's per-line outcomes: a missing or repeated line, or an "applied" line with no change in the definition. */
 export function checkLines(lines: LineOutcome[], expected: number, changedStructure: boolean): string[] {
   const errors: string[] = [];
@@ -212,7 +224,8 @@ const budgetMessage = "daily AI budget reached";
 async function produce(base: DefRecord, text: string, job: BuildJob): Promise<{ output: BuildOutput; def: ReturnType<typeof parseDefinition> & { ok: true } } | null> {
   const system = loadPrompt("scanlab");
   const prompt = buildPrompt(base, text);
-  const changed = changedLines(render(base.definition), text).length;
+  const changedList = changedLines(render(base.definition), text);
+  const changed = changedList.length;
   const version = nextVersion(base.kind);
   let extra = "";
   let lastErrors: string[] = [];
@@ -248,7 +261,7 @@ async function produce(base: DefRecord, text: string, job: BuildJob): Promise<{ 
     const parsed = parseDefinition(candidate);
     const lineErrors = checkLines(out.lines, changed, parsed.ok && diff(base.definition, parsed.def).length > 0);
     if (out.lines.some((l) => l.action === "needs_code") && out.needsCode.length === 0) lineErrors.push("lines: a line is marked needs_code but needsCode is empty; add the request there");
-    job.lines = out.lines;
+    job.lines = enrichLines(changedList, out.lines);
     if (parsed.ok && lineErrors.length === 0) return { output: out, def: parsed };
     lastErrors = [...(parsed.ok ? [] : parsed.errors), ...lineErrors];
     extra = `\n\nYour previous definition was rejected by validation:\n${lastErrors.slice(0, 12).map((e) => `- ${e}`).join("\n")}\nReturn the complete corrected output, with one \`lines\` entry per numbered changed line; use only catalog keys of the ${base.kind} scope and stay inside the schema bounds.`;
@@ -265,7 +278,7 @@ async function run(job: BuildJob, base: DefRecord, text: string): Promise<void> 
     if (diff(base.definition, def.def).length === 0) {
       return fail(job, output.needsCode.length ? "Nothing in your text could be built; the rest needs a code change." : "Claude found nothing to change in your text.");
     }
-    const draft = createDraft({ kind: base.kind, baseId: base.id, definition: def.def, author: "claude", sourceText: text, notes: { notes: output.notes, needsCode: output.needsCode, lines: output.lines } });
+    const draft = createDraft({ kind: base.kind, baseId: base.id, definition: def.def, author: "claude", sourceText: text, notes: { notes: output.notes, needsCode: output.needsCode, lines: job.lines } });
     Object.assign(job, { status: "done", draftId: draft.id });
   } catch (err) {
     fail(job, err instanceof Error ? err.message : String(err));

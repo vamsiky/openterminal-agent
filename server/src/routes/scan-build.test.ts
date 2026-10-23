@@ -283,8 +283,18 @@ describe("per-line outcomes", () => {
     runAgent.mockResolvedValueOnce(ok(answer(gated(), { lines: both, needsCode: [{ request: "short interest", reason: "not in the catalog" }] })));
     const r = await start(edited());
     const j = await job(r.body.jobId);
-    expect(j).toMatchObject({ status: "done", lines: both });
-    expect((sd.getDraft("option")!.notes as any).lines).toEqual(both);
+    const full = [
+      { n: 1, kind: "added", section: "BUY A CALL", text: GATE, action: "applied", explanation: "new gate" },
+      { n: 2, kind: "added", section: "SELL A CASH-SECURED PUT", text: SI, action: "needs_code", explanation: "no short interest field" },
+    ];
+    expect(j.lines).toEqual(full);
+    expect((sd.getDraft("option")!.notes as any).lines).toEqual(full);
+  });
+
+  it("adds the earlier text of a changed line and drops unknown numbers", () => {
+    const base = sd.render(sd.getActive("option").definition);
+    const lines = build.enrichLines(build.changedLines(base, LOWER()), [{ n: 1, action: "applied", explanation: "x" }, { n: 7, action: "applied", explanation: "y" }]);
+    expect(lines).toEqual([{ n: 1, kind: "changed", section: "LISTING", text: "- List a setup when it scores 65 or more.", before: "- List a setup when it scores 70 or more.", action: "applied", explanation: "x" }]);
   });
 
   it("retries with the missing line numbers", async () => {
