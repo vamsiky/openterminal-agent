@@ -15,7 +15,7 @@ Dark. Dense. Keyboard‑driven. Runs on your machine with your own Alpaca market
 
 <br/>
 
-<img src="docs/screenshots/dashboard.png" alt="OpenTerminal dashboard — live chart, quote panel, watchlist, news and macro indexes" width="100%" />
+<img src="docs/screenshots/dashboard.png" alt="OpenTerminal workspace: panels rail, watchlist, chart with range summary and high/low markers, quote, stock details and research &amp; reports panes" width="100%" />
 
 <sub>⭐ If this is useful to you, consider starring the repo — it genuinely helps other people find it.</sub>
 
