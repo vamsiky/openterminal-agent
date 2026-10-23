@@ -307,6 +307,17 @@ describe("the store", () => {
     expect(sd.getActive("option").definition).toEqual(sd.OPTION_V1_DEF);
   });
 
+  it("serves text rendered from the definition, not the stored column", () => {
+    const active = sd.getActive("option");
+    db.prepare("UPDATE scan_definitions SET text = 'OLD WORDING' WHERE id = ?").run(active.id);
+    const draft = sd.createDraft({ kind: "stock", definition: sd.STOCK_V2_DEF, author: "form", sourceText: "my edited text" });
+    db.prepare("UPDATE scan_definitions SET text = 'OLD WORDING' WHERE id = ?").run(draft.id);
+    expect(sd.getById(active.id)?.text).toBe(sd.render(sd.OPTION_V1_DEF));
+    expect(sd.getDraft("stock")?.text).toBe(sd.render(draft.definition));
+    expect(sd.getById(draft.id)?.sourceText).toBe("my edited text"); // source_text stays as stored
+    sd.setStatus(draft.id, "discarded");
+  });
+
   it("creates drafts with the next version, replacing the open one, and promotes and rolls back", () => {
     const events: string[] = [];
     sd.onDefinitionChange((e) => events.push(`${e.kind}:${e.event}`));
@@ -333,8 +344,12 @@ describe("the store", () => {
     const prev = sd.listVersions("option").find((v) => v.status === "previous")!;
     sd.setStatus(prev.id, "active");
     expect(sd.getActive("option").version).toBe("option-v1");
-    expect(sd.getById(d2.id)?.status).toBe("retired");
-    expect(events).toEqual(["option:drafted", "option:drafted", "option:activated", "option:activated"]);
+    expect(sd.getById(d2.id)?.status).toBe("previous"); // a swap: switch back is possible
+    sd.setStatus(d2.id, "active");
+    expect(sd.getActive("option").version).toBe("option-v3");
+    expect(sd.listVersions("option").map((v) => [v.version, v.status])).toEqual([["option-v3", "active"], ["option-v2", "discarded"], ["option-v1", "previous"]]);
+    sd.setStatus(prev.id, "active");
+    expect(events).toEqual(["option:drafted", "option:drafted", "option:activated", "option:activated", "option:activated", "option:activated"]);
   });
 
   it("refuses invalid drafts and impossible status changes", () => {
@@ -342,7 +357,7 @@ describe("the store", () => {
     expect(() => sd.createDraft({ kind: "stock", baseId: sd.getActive("option").id, definition: sd.STOCK_V2_DEF, author: "form" })).toThrow(/no stock definition/);
     expect(() => sd.setStatus(sd.getActive("option").id, "discarded")).toThrow(/cannot move/);
     const d = sd.createDraft({ kind: "stock", definition: sd.STOCK_V2_DEF, author: "form" });
-    expect(d.version).toBe("stock-v3");
+    expect(d.version).toBe("stock-v4"); // v3 went to the draft in the text test
     sd.setStatus(d.id, "discarded");
     expect(sd.getById(d.id)?.status).toBe("discarded");
     expect(sd.getActive("stock").version).toBe("stock-v2");

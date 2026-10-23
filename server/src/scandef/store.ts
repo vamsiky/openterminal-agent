@@ -64,7 +64,11 @@ const meta = (r: Row): DefMeta => ({
   id: r.id, kind: r.kind, version: r.version, status: r.status, parentId: r.parent_id, author: r.author,
   sourceText: r.source_text, notes: r.notes ? JSON.parse(r.notes) : null, createdAt: r.created_at, promotedAt: r.promoted_at,
 });
-const record = (r: Row): DefRecord => ({ ...meta(r), definition: JSON.parse(r.definition) as Definition, text: r.text });
+/** The text is always rendered from the definition at read time; the stored `text` column is only a record of what was shown when the row was written. */
+const record = (r: Row): DefRecord => {
+  const definition = JSON.parse(r.definition) as Definition;
+  return { ...meta(r), definition, text: render(definition) };
+};
 
 export class DefinitionError extends Error {
   constructor(public errors: string[]) {
@@ -177,7 +181,7 @@ export function createDraft(input: DraftInput): DefRecord {
 
 /**
  * Moves a version to a new status. Allowed: draft to active (promote: the old active becomes previous, the old
- * previous retired), previous to active (roll back: the active one is retired), draft to discarded, previous to
+ * previous retired), previous to active (roll back: the two swap, so the active one becomes previous), draft to discarded, previous to
  * retired. Anything else throws.
  */
 export function setStatus(id: number, status: DefStatus): DefRecord {
@@ -191,8 +195,13 @@ export function setStatus(id: number, status: DefStatus): DefRecord {
       if (cur.status === "draft") {
         db.prepare("UPDATE scan_definitions SET status = 'retired' WHERE kind = ? AND status = 'previous'").run(cur.kind);
         if (active) set.run("previous", active.id);
-      } else if (active) set.run("retired", active.id);
-      db.prepare("UPDATE scan_definitions SET status = 'active', promoted_at = ? WHERE id = ?").run(now, id);
+        db.prepare("UPDATE scan_definitions SET status = 'active', promoted_at = ? WHERE id = ?").run(now, id);
+      } else {
+        // Roll back is a swap: the active one becomes previous, so it can be switched back to.
+        if (active) set.run("retired", active.id); // parked while both indexes are rewritten
+        db.prepare("UPDATE scan_definitions SET status = 'active', promoted_at = ? WHERE id = ?").run(now, id);
+        if (active) set.run("previous", active.id);
+      }
     })();
     changed({ kind: cur.kind, event: "activated", id });
   } else if (status === "discarded" && cur.status === "draft") {
