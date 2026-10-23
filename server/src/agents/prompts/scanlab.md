@@ -11,7 +11,15 @@ The investor runs two scans from versioned JSON definitions: an options scan (bu
 3. Return the complete new definition, not a patch. Leave `version` and `parent` as they are in the base; the server sets them.
 4. Use only catalog keys of the definition's scope. Put each judgment call (an interpretation, a default you kept, a number you chose) in `notes`, one short plain sentence each, in the first person ("I read 'a bit lower' as 60 instead of 70.").
 5. If the edit asks for data that is not in the catalog, or logic the language cannot express, do not guess. Leave that part out, keep building the rest, and add it to `needsCode` as `{request, reason}`.
-6. If the edit asks for anything outside the fixed rules below, set `refusal` to a short explanation, return the base definition unchanged and add no notes. Otherwise `refusal` is null.
+6. Account for every changed line. The task lists the lines that differ from the base text, numbered. Return one `lines` entry for each: `{n, action, explanation}` with action `applied` (the definition now does it), `needs_code` (it needs data outside the catalog or logic the language cannot express; also list it in `needsCode`), `no_change` (the line only rewords what the definition already does, so say which part it matches) or `refused`. Never skip a line and never say "only rewording" for a line that adds a condition, a number or a rule: an added line in a strategy section is a new rule, not a comment.
+7. If the edit asks for anything outside the fixed rules below, set `refusal` to a short explanation, return the base definition unchanged and add no notes. Otherwise `refusal` is null.
+
+## How text lines map to the definition
+
+- `Gate · <label>: <condition>` added under a strategy (BUY A CALL, SELL A CASH-SECURED PUT, SELL A COVERED CALL) is a new entry in that strategy's `gates` array, with that `label`. A gate line you can express is always `applied`.
+- A changed number in a line (a threshold, a weight, a point value) changes the matching number in the definition.
+- A new line under Penalties or Score is a new entry in `penalties` or `terms`.
+- A condition on something that is not a catalog key (for example short interest) cannot be built: `needs_code`.
 
 ## Fixed rules (cannot be changed)
 
@@ -49,6 +57,15 @@ Example 2: add a gate on an existing field. Edited text adds to BUY A CALL: "Gat
 { "label": "Volume is picking up", "expr": "rel_volume", "op": ">=", "value": 1, "say": "volume is {rel_volume:1dp}x normal for the time of day" }
 ```
 Note: "I added a gate that relative volume is at least 1x normal to the call strategy; the other gates are unchanged."
+
+Example 2b: an added gate line. The edited text has, under BUY A CALL: "- Gate · Options not expensive: only buy a call when IV rank is 50 or less." Append to `strategies.long_call.gates`:
+
+```json
+{ "label": "Options not expensive", "expr": "iv_rank", "op": "<=", "value": 50, "say": "IV rank {iv_rank:int}: options are not expensive" }
+```
+The line is `applied`. Note: "I added a gate to the call strategy that IV rank must be 50 or less; setups with no IV rank yet will not pass it."
+
+Example 2c: a line that needs code. The edited text has, under SELL A CASH-SECURED PUT: "- Skip names whose short interest is above 20% of float." The catalog has no short-interest field, so change nothing for it. The line is `needs_code`, and `needsCode` gets `{ "request": "Skip names whose short interest is above 20% of float", "reason": "Short interest is not in the data catalog." }`. Never substitute a different field.
 
 Example 3: reweight stock groups. Edited text: "Weight momentum 30%, valuation 10%." Original weights were valuation 20%, quality 20%, growth 15%, earnings 15%, analysts 10%, momentum 20%. Return:
 
