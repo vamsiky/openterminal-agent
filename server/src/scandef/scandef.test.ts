@@ -165,10 +165,28 @@ describe("text", () => {
     const text = sd.render(d);
     expect(text).toContain("scores 75 or more");
     expect(text).toContain("scoring 68 or more");
-    expect(text).toContain("daily trend is at least 30");
+    expect(text).toContain("daily trend is 30 or more");
     const s = clone(sd.STOCK_V2_DEF);
     s.filters = [{ label: "Priced over 10", expr: "price", op: ">=", value: 10 }];
-    expect(sd.render(s)).toContain("FILTERS\n- Priced over 10: price is at least $10.");
+    expect(sd.render(s)).toContain("FILTERS\n- Priced over 10: price is $10 or more.");
+  });
+});
+
+describe("golden text", () => {
+  it("renders option-v1 and stock-v2 exactly as the golden files (review the diff when the wording changes on purpose)", async () => {
+    await expect(sd.render(sd.OPTION_V1_DEF)).toMatchFileSnapshot("./golden/option-v1.txt");
+    await expect(sd.render(sd.STOCK_V2_DEF)).toMatchFileSnapshot("./golden/stock-v2.txt");
+  });
+
+  it("reads as plain English: no raw keys, no leftover wording of the expression tree", () => {
+    const text = sd.render(sd.OPTION_V1_DEF) + sd.render(sd.STOCK_V2_DEF);
+    expect(text).not.toMatch(/\b(iv_rank|hv20|m15|rel_volume|undefined|null|NaN)\b/);
+    expect(text).not.toMatch(/otherwise|is known and|divided by|\(none\) when/);
+    expect(text).toContain("Up to +15 when options are cheap:");
+    expect(text).toContain("-25 when earnings fall before expiry.");
+    expect(text).toContain("Gate · IV is rich: IV rank is 60 or more (no IV rank yet: 30-day IV is above 20-day realised volatility).");
+    expect(text).toContain("Note, no points: cash needed");
+    expect(text).not.toMatch(/ {2}- Notes? /);
   });
 });
 
