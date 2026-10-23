@@ -54,6 +54,8 @@ export function stockCtx(c: StockCandidate): Ctx {
 export type StockScreen = {
   /** The listed stocks, best composite first. */
   picked: StockCandidate[];
+  /** Everything that passed the coverage bar and the filters, best first, before the top-N cut. */
+  pool: StockCandidate[];
   /** Scored, then coverage, then each filter, then the final list. */
   funnel: Array<{ step: string; count: number }>;
 };
@@ -76,5 +78,5 @@ export function screenStocks(def: StockDefinition, candidates: StockCandidate[],
   pool.sort((a, b) => b.card.composite! - a.card.composite! || (a.card.symbol < b.card.symbol ? -1 : a.card.symbol > b.card.symbol ? 1 : 0));
   const picked = dedupe(pool.slice(0, top * 3)).slice(0, top);
   funnel.push({ step: `Top ${top}`, count: picked.length });
-  return { picked, funnel };
+  return { picked, pool, funnel };
 }

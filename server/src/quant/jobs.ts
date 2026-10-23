@@ -11,6 +11,7 @@ import { optionScores, runOptionScan } from "./option-score.js";
 import { heldSymbols } from "./positions.js";
 import { compositeMap, latestScorecardDay, runIntradayStockScan, runNightlyScorecards } from "./stock-score.js";
 import { resolveUniverse } from "./universe.js";
+import { captureOptionPass, captureStockPass, pruneTestData } from "../scantest/capture.js";
 
 // Scheduling for the scans, inside the API process:
 //   stock-nightly    07:00 and 16:30 ET on weekdays: scorecards for every US stock
@@ -217,6 +218,7 @@ export function runJob(job: JobName, now = new Date()): boolean {
           const r = runNightlyScorecards(now);
           return { symbols: r.scored };
         });
+        pruneTestData(now);
         break;
       case "ideas-screen":
         if (
@@ -232,6 +234,7 @@ export function runJob(job: JobName, now = new Date()): boolean {
           const universe = resolveUniverse();
           const r = runIntradayStockScan(universe, now);
           refreshStockIdeas(now);
+          captureStockPass(r, now);
           return { symbols: r.scored };
         });
         break;
@@ -241,6 +244,7 @@ export function runJob(job: JobName, now = new Date()): boolean {
             const universe = universeByPriority();
             const r = runOptionScan(universe, deps!.optionMetrics, now);
             updateOptionIdeas(now);
+            captureOptionPass(r);
             return { symbols: r.scored };
           })
         ) notifyIdeas(now);
