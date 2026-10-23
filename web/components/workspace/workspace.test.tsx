@@ -45,6 +45,22 @@ describe("Workspace", () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
+  it("shows a scroll button only on the side where the strip is clipped", () => {
+    const { container } = wrap(<Workspace />);
+    const strip = container.querySelector('[data-pane="p-research"] .tab-strip') as HTMLElement;
+    const set = (k: string, v: number) => Object.defineProperty(strip, k, { value: v, configurable: true });
+    set("scrollLeft", 0);
+    set("clientWidth", 100);
+    set("scrollWidth", 300);
+    fireEvent.scroll(strip);
+    expect(screen.queryByLabelText("Scroll tabs left")).toBeNull();
+    expect(screen.getAllByLabelText("Scroll tabs right").length).toBeGreaterThan(0);
+    set("scrollLeft", 200);
+    fireEvent.scroll(strip);
+    expect(screen.getAllByLabelText("Scroll tabs left").length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText("Scroll tabs right")).toBeNull();
+  });
+
   it("closing a tab removes it, and the tab strip shows each tab as its own control", () => {
     const { container } = wrap(<Workspace />);
     // Only the pane strips: widgets (details) have their own tab rows.
