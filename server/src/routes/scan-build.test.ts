@@ -65,9 +65,18 @@ const unknownKey = () => {
   def.strategies.long_call.gates.push({ label: "Nope", expr: "not_a_field", op: ">", value: 1 });
   return def;
 };
-const answer = (definition: unknown, over: object = {}) => ({ definition, notes: ["I lowered the bar from 70 to 65."], needsCode: [], refusal: null, ...over });
+const optionText = (from: string, to: string) => sd.render(sd.getActive("option").definition).replace(from, to);
+const LOWER = () => optionText("scores 70 or more", "scores 65 or more");
+const answer = (definition: unknown, over: object = {}, text = LOWER()) => ({
+  definition,
+  notes: ["I lowered the bar from 70 to 65."],
+  needsCode: [],
+  refusal: null,
+  lines: build.changedLines(sd.render(sd.getActive("option").definition), text).map((l) => ({ n: l.n, action: "applied", explanation: "done" })),
+  ...over,
+});
 
-const start = async (text: string, kind = "option") => {
+const start = async (text = LOWER(), kind = "option") => {
   const r = await call("POST", "/scan/defs/build", { kind, text });
   if (r.status === 202) await build.jobDone(r.body.jobId);
   return r;
@@ -80,23 +89,23 @@ describe("build with Claude", () => {
     def.version = "option-v99";
     def.parent = "option-v50";
     runAgent.mockResolvedValueOnce(ok(answer(def, { needsCode: [{ request: "short interest", reason: "not in the catalog" }] })));
-    const r = await start("List a setup when it scores 65 or more.");
+    const r = await start();
     expect(r.status).toBe(202);
     const j = await job(r.body.jobId);
     expect(j).toMatchObject({ status: "done", error: null, notes: ["I lowered the bar from 70 to 65."], needsCode: [{ request: "short interest", reason: "not in the catalog" }] });
     const draft = sd.getDraft("option")!;
     expect(j.draftId).toBe(draft.id);
-    expect(draft).toMatchObject({ author: "claude", sourceText: "List a setup when it scores 65 or more.", version: "option-v2" });
+    expect(draft).toMatchObject({ author: "claude", sourceText: LOWER(), version: "option-v2" });
     expect((draft.definition as any).parent).toBe("option-v1");
     expect((draft.definition as any).listing.minScore).toBe(65);
-    expect(draft.notes).toEqual({ notes: ["I lowered the bar from 70 to 65."], needsCode: [{ request: "short interest", reason: "not in the catalog" }] });
+    expect(draft.notes).toMatchObject({ notes: ["I lowered the bar from 70 to 65."], needsCode: [{ request: "short interest", reason: "not in the catalog" }] });
     const spec = runAgent.mock.calls[0][0];
     expect(spec).toMatchObject({ agent: "scanlab", tools: [], maxTurns: 2, maxBudgetUsd: 0.2 });
   });
 
   it("retries once with the validation errors, then succeeds", async () => {
     runAgent.mockResolvedValueOnce(ok(answer(unknownKey()))).mockResolvedValueOnce(ok(answer(lowered())));
-    const r = await start("Add a gate on not_a_field.");
+    const r = await start();
     expect((await job(r.body.jobId)).status).toBe("done");
     expect(runAgent).toHaveBeenCalledTimes(2);
     expect(runAgent.mock.calls[1][0].prompt).toContain('"not_a_field" is not a option field in the catalog');
@@ -105,7 +114,7 @@ describe("build with Claude", () => {
 
   it("fails after a second invalid answer and stores no draft", async () => {
     runAgent.mockResolvedValue(ok(answer(unknownKey())));
-    const r = await start("Add a gate on not_a_field.");
+    const r = await start();
     const j = await job(r.body.jobId);
     expect(j.status).toBe("error");
     expect(j.error).toMatch(/did not pass validation.*not_a_field/);
@@ -118,8 +127,9 @@ describe("build with Claude", () => {
     for (const kind of ["option", "stock"] as const) {
       const def = structuredClone(kind === "option" ? sd.OPTION_V1_DEF : sd.STOCK_V2_DEF) as any;
       def.listing[kind === "option" ? "minScore" : "top"] = 5;
-      runAgent.mockResolvedValueOnce(ok(answer(def)));
-      const r = await start(`${sd.render(sd.getActive(kind).definition)}\nList at 65.`, kind);
+      const text = `${sd.render(sd.getActive(kind).definition)}\nList at 65.`;
+      runAgent.mockResolvedValueOnce(ok(answer(def, { lines: [{ n: 1, action: "applied", explanation: "done" }] })));
+      const r = await start(text, kind);
       expect(r.status).toBe(202);
       expect(runAgent).toHaveBeenCalledTimes(1);
       expect(runAgent.mock.calls[0][0].prompt).not.toContain("Check: the lines the investor added");
@@ -159,44 +169,44 @@ describe("build with Claude", () => {
   });
 
   it("errors when the text changes nothing", async () => {
-    runAgent.mockResolvedValueOnce(ok(answer(structuredClone(sd.OPTION_V1_DEF), { notes: [] })));
-    const r = await start("Leave it as it is.");
+    runAgent.mockResolvedValueOnce(ok(answer(structuredClone(sd.OPTION_V1_DEF), { notes: [] }, optionText("", ""))));
+    const r = await start(optionText("", ""));
     expect(await job(r.body.jobId)).toMatchObject({ status: "error", draftId: null, error: "Claude found nothing to change in your text." });
   });
 
   it("reports an agent failure", async () => {
     runAgent.mockResolvedValueOnce(failed("run timed out"));
-    const r = await start("List at 65.");
+    const r = await start();
     expect(await job(r.body.jobId)).toMatchObject({ status: "error", error: "Claude could not build a draft: run timed out" });
   });
 
   it("answers budget when the daily budget is spent, also mid-job", async () => {
     process.env.AGENTS_DAILY_BUDGET_USD = "0";
-    expect((await call("POST", "/scan/defs/build", { kind: "option", text: "List at 65." })).status).toBe(402);
+    expect((await call("POST", "/scan/defs/build", { kind: "option", text: LOWER() })).status).toBe(402);
     delete process.env.AGENTS_DAILY_BUDGET_USD;
 
     runAgent.mockResolvedValueOnce(failed("budget_exhausted", "skipped"));
-    const r = await start("List at 65.");
+    const r = await start();
     expect(await job(r.body.jobId)).toMatchObject({ status: "error", error: "daily AI budget reached" });
   });
 
   it("answers disabled when agents are off", async () => {
     process.env.AGENTS_ENABLED = "0";
-    expect((await call("POST", "/scan/defs/build", { kind: "option", text: "List at 65." })).status).toBe(503);
+    expect((await call("POST", "/scan/defs/build", { kind: "option", text: LOWER() })).status).toBe(503);
   });
 
   it("allows one running build per kind", async () => {
     let release!: (v: unknown) => void;
     runAgent.mockReturnValueOnce(new Promise((r) => (release = r)));
-    const first = await call("POST", "/scan/defs/build", { kind: "option", text: "List at 65." });
+    const first = await call("POST", "/scan/defs/build", { kind: "option", text: LOWER() });
     expect(first.status).toBe(202);
     expect((await job(first.body.jobId)).status).toBe("running");
-    expect((await call("POST", "/scan/defs/build", { kind: "option", text: "List at 60." })).status).toBe(409);
+    expect((await call("POST", "/scan/defs/build", { kind: "option", text: LOWER() })).status).toBe(409);
     release(ok(answer(lowered())));
     await build.jobDone(first.body.jobId);
     expect((await job(first.body.jobId)).status).toBe("done");
     runAgent.mockResolvedValueOnce(ok(answer(lowered())));
-    expect((await start("List at 65.")).status).toBe(202);
+    expect((await start()).status).toBe(202);
   });
 
   it("validates the request and the job id", async () => {
@@ -226,13 +236,81 @@ describe("build with Claude", () => {
 
   it("builds the system prompt from scanlab.md and counts toward the budget", async () => {
     runAgent.mockResolvedValueOnce(ok(answer(lowered())));
-    await start("List at 65.");
+    await start();
     const spec = runAgent.mock.calls[0][0];
     expect(spec.system).toContain("Scan Lab");
     expect(spec.system).toContain("Never propose buying puts");
     const { CAP_ENV, capUsd } = await import("../agents/config.js");
     expect(CAP_ENV.scanlab).toEqual(["AGENTS_CAP_SCANLAB_USD", 0.2]);
     expect(capUsd("scanlab")).toBe(0.2);
+  });
+});
+
+const GATE = "- Gate · Options not expensive: only buy a call when IV rank is 50 or less.";
+const SI = "- Skip names whose short interest is above 20% of float.";
+const edited = () => optionText("- Gate · Daily uptrend", `${GATE}\n- Gate · Daily uptrend`).replace("- Contract: the at-the-money put (set by the options sweep).", `- Contract: the at-the-money put (set by the options sweep).\n${SI}`);
+
+describe("changed lines", () => {
+  it("numbers added, changed and removed lines with their section", () => {
+    const base = sd.render(sd.getActive("option").definition);
+    const lines = build.changedLines(base, edited());
+    expect(lines).toEqual([
+      { n: 1, change: "added", section: "BUY A CALL", text: GATE },
+      { n: 2, change: "added", section: "SELL A CASH-SECURED PUT", text: SI },
+    ]);
+    expect(build.changedLines(base, LOWER())).toEqual([{ n: 1, change: "changed", section: "LISTING", text: "- List a setup when it scores 65 or more.", was: "- List a setup when it scores 70 or more." }]);
+    expect(build.changedLines(base, base)).toEqual([]);
+    expect(build.changedLines(base, base.replace("- Near misses: not shown.\n", ""))).toEqual([{ n: 1, change: "removed", section: "LISTING", text: "- Near misses: not shown." }]);
+  });
+
+  it("lists the numbered lines in the prompt", () => {
+    const p = build.buildPrompt(sd.getActive("option"), edited(), "n1");
+    expect(p).toContain(`1. [BUY A CALL] ADDED: ${GATE}`);
+    expect(p).toContain(`2. [SELL A CASH-SECURED PUT] ADDED: ${SI}`);
+    expect(p).toContain("<<<UNTRUSTED_CHANGED_LINES n1");
+  });
+});
+
+describe("per-line outcomes", () => {
+  const gated = () => {
+    const def = structuredClone(sd.OPTION_V1_DEF) as any;
+    def.strategies.long_call.gates.push({ label: "Options not expensive", expr: "iv_rank", op: "<=", value: 50 });
+    return def;
+  };
+  const both = [{ n: 1, action: "applied", explanation: "new gate" }, { n: 2, action: "needs_code", explanation: "no short interest field" }];
+
+  it("stores and returns the outcomes with the draft", async () => {
+    runAgent.mockResolvedValueOnce(ok(answer(gated(), { lines: both, needsCode: [{ request: "short interest", reason: "not in the catalog" }] })));
+    const r = await start(edited());
+    const j = await job(r.body.jobId);
+    expect(j).toMatchObject({ status: "done", lines: both });
+    expect((sd.getDraft("option")!.notes as any).lines).toEqual(both);
+  });
+
+  it("retries with the missing line numbers", async () => {
+    runAgent
+      .mockResolvedValueOnce(ok(answer(gated(), { lines: [both[0]], needsCode: [{ request: "x", reason: "y" }] })))
+      .mockResolvedValueOnce(ok(answer(gated(), { lines: both, needsCode: [{ request: "short interest", reason: "n" }] })));
+    const r = await start(edited());
+    expect((await job(r.body.jobId)).status).toBe("done");
+    expect(runAgent.mock.calls[1][0].prompt).toContain("no entry for changed line 2");
+  });
+
+  it("rejects an applied line that changed nothing, then errors after the retry", async () => {
+    const dropped = structuredClone(sd.OPTION_V1_DEF);
+    runAgent.mockResolvedValue(ok(answer(dropped, { lines: both, needsCode: [{ request: "short interest", reason: "n" }], notes: ["All other edited lines only reword the base text."] })));
+    const r = await start(edited());
+    const j = await job(r.body.jobId);
+    expect(j.status).toBe("error");
+    expect(j.error).toMatch(/marked applied but the definition is identical/);
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(sd.getDraft("option")).toBeNull();
+  });
+
+  it("rejects needs_code without a needsCode entry", async () => {
+    runAgent.mockResolvedValue(ok(answer(gated(), { lines: both })));
+    const r = await start(edited());
+    expect((await job(r.body.jobId)).error).toMatch(/needs_code but needsCode is empty/);
   });
 });
 

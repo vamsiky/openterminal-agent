@@ -27,7 +27,7 @@ scanBuildRouter.post("/defs/build", (req, res) => {
 scanBuildRouter.get("/defs/build/:jobId", (req, res) => {
   const j = getJob(req.params.jobId);
   if (!j) return res.status(404).json({ error: "no such build" });
-  res.json({ status: j.status, draftId: j.draftId, notes: j.notes, needsCode: j.needsCode, error: j.error, refused: j.refused });
+  res.json({ status: j.status, draftId: j.draftId, notes: j.notes, needsCode: j.needsCode, error: j.error, refused: j.refused, lines: j.lines });
 });
 
 const codeBody = z.object({ kind, draftId: z.number().int().positive().nullish(), request: z.string().trim().min(1).max(2000), reason: z.string().trim().max(2000).default("") });
