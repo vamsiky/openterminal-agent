@@ -49,7 +49,7 @@ export type FormEdit = { path: string; value: LeafValue };
 export type NeedsCode = { request: string; reason: string };
 export type LineAction = "applied" | "needs_code" | "no_change" | "refused";
 /** What Claude did with one changed line of the text; `text` is shown when the server sends it. */
-export type LineOutcome = { n: number; action: LineAction; explanation: string; text?: string; change?: "added" | "removed" | "changed"; was?: string };
+export type LineOutcome = { n: number; action: LineAction; explanation: string; kind?: "added" | "removed" | "changed"; section?: string; text?: string; before?: string };
 export type DraftNotes = { notes: string[]; needsCode: NeedsCode[]; lines: LineOutcome[] };
 
 /** What one scored pass looks like: replay, each shadow pass and live all use it. */

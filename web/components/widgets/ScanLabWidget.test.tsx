@@ -154,10 +154,10 @@ describe("Your edits", () => {
     notes: ["Set the bar to 65."],
     needsCode: [{ request: "Short-interest filter", reason: "Needs new data." }],
     lines: [
-      { n: 1, action: "applied", explanation: "Bar is now 65.", text: "- List a setup when it scores 65 or more." },
-      { n: 2, action: "needs_code", explanation: "Short interest isn't in the catalog.", text: "- Skip names with short interest above 20%." },
+      { n: 1, kind: "changed", section: "LISTING", before: "- List a setup when it scores 70 or more.", action: "applied", explanation: "Bar is now 65.", text: "- List a setup when it scores 65 or more." },
+      { n: 2, kind: "added", section: "LISTING", action: "needs_code", explanation: "Short interest isn't in the catalog.", text: "- Skip names with short interest above 20%." },
       { n: 3, action: "no_change", explanation: "Already how it works." },
-      { n: 4, action: "refused", explanation: "Spreads aren't allowed.", text: "- Add a spread." },
+      { n: 4, kind: "added", section: "", action: "refused", explanation: "Spreads aren't allowed.", text: "- Add a spread." },
     ],
   };
 
@@ -171,6 +171,8 @@ describe("Your edits", () => {
     expect(rows).toHaveLength(4);
     expect(within(rows[0]).getByText("applied")).toBeTruthy();
     expect(within(rows[0]).getByText("- List a setup when it scores 65 or more.")).toBeTruthy();
+    expect(within(rows[0]).getByText("- List a setup when it scores 70 or more.")).toBeTruthy();
+    expect(within(rows[0]).getByText("LISTING")).toBeTruthy();
     expect(within(rows[1]).getByText("needs code")).toBeTruthy();
     expect(within(rows[2]).getByText("Line 3")).toBeTruthy();
     expect(rows[2].className).toMatch(/opacity-60/);

@@ -165,7 +165,9 @@ export default function DraftCard({
                       <div key={l.n} role="listitem" className={`flex gap-2.5 items-start flex-wrap ${l.action === "no_change" ? "opacity-60" : ""}`}>
                         <Tag tone={LINE_TAG[l.action].tone}>{LINE_TAG[l.action].text}</Tag>
                         <div className="flex-1 basis-[240px] min-w-0">
-                          <div className="font-[family-name:var(--font-mono)] text-[11.5px] break-words">{l.text ?? `Line ${l.n}`}</div>
+                          {l.section && <div className={`${H} !text-[9.5px]`}>{l.section}</div>}
+                          {l.kind === "changed" && l.before && <div className="dim font-[family-name:var(--font-mono)] text-[11px] break-words line-through">{l.before}</div>}
+                          <div className={`font-[family-name:var(--font-mono)] text-[11.5px] break-words ${l.kind === "removed" ? "line-through dim" : ""}`}>{l.text || `Line ${l.n}`}</div>
                           {l.explanation && <div className={`${NOTE} dim`}>{l.explanation}</div>}
                         </div>
                         {req && idx !== undefined && <RequestButton n={req} i={idx} />}
